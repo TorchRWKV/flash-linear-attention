@@ -12,7 +12,9 @@ import triton
 import triton.language as tl
 from einops import rearrange
 from packaging import version
-from torch.cuda.amp import custom_bwd, custom_fwd
+from torch.amp import custom_bwd, custom_fwd
+from fla.utils import get_available_device
+device = get_available_device()
 
 from fla.ops.gla.chunk_util import (bwd_decay_global_cumsum, fwd_decay_cumsum,
                                     prepare_qg_kg)
@@ -68,7 +70,7 @@ def fused_chunk_gla_fwd_kernel(
     if USE_INITIAL_STATE:
         p_h = tl.make_block_ptr(initial_state + i_bh * DK * DV, (DK, DV), (DV, 1), (i_k * BK, i_v * BV), (BK, BV), (1, 0))
         b_h += tl.load(p_h, boundary_check=(0, 1)).to(tl.float32)
-    
+
     mask = (i_k * BK + tl.arange(0, BK)) < DK
 
     for i in range(0, tl.cdiv(T, BT)):
@@ -138,8 +140,8 @@ def fused_chunk_gla_bwd_kernel(
     if USE_INITIAL_STATE:
         p_h = tl.make_block_ptr(initial_state + i_bh * DK * DV, (DV, DK), (1, DV), (i_v * BV, i_k * BK), (BV, BK), (0, 1))
         b_h += tl.load(p_h, boundary_check=(0, 1)).to(tl.float32)
-    
-    mask = (i_k * BK + tl.arange(0, BK)) < DK    
+
+    mask = (i_k * BK + tl.arange(0, BK)) < DK
     for i in range(0, tl.cdiv(T, BT)):
         p_k = tl.make_block_ptr(k + i_bh * s_qk_h, (T, DK), (s_qk_t, s_qk_d), (i * BT, i_k * BK), (BT, BK), (1, 0))
         p_db = g + i_bh * s_qk_h + ((i+1) * BT - 1) * s_qk_t + i_k * BK + tl.arange(0, BK)
@@ -311,7 +313,7 @@ class FusedChunkGLAFunction(torch.autograd.Function):
 
     @staticmethod
     @contiguous
-    @custom_fwd
+    @custom_fwd(device_type=device)
     def forward(ctx, q, k, v, g, scale, initial_state, output_final_state):
         ctx.g_dtype = g.dtype
         g_original = g
@@ -405,7 +407,7 @@ class FusedChunkGLAFunction(torch.autograd.Function):
 
     @staticmethod
     @contiguous
-    @custom_bwd
+    @custom_bwd(device_type=device)
     def backward(ctx, do, d_final_state=None):
         q, k, v, g_origin, A, initial_state = ctx.saved_tensors
         batch_size, n_heads, seq_len, d_head_qk = q.shape
@@ -519,7 +521,7 @@ def pad(x, chunk_size=16):
     padded_seq_len = ceildiv(seq_len, chunk_size) * chunk_size
     if x.shape[-2] % chunk_size != 0:
         x = F.pad(x, (0, 0, 0, padded_seq_len - seq_len))
-    
+
     return x
 
 

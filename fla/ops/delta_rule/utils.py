@@ -4,7 +4,9 @@ import torch
 import triton
 import triton.language as tl
 from einops import rearrange
-from torch.cuda.amp import custom_bwd, custom_fwd
+from torch.amp import custom_bwd, custom_fwd
+from fla.utils import get_available_device
+device = get_available_device()
 
 from fla.utils import contiguous
 from fla.ops.delta_rule.wy_fast import prepare_wy_repr as prepare_wy_repr2
@@ -192,7 +194,7 @@ def bwd_prepare_wy_repr(k, v, beta, o_cumdecay, v_new, do, do2, chunk_size):
 class WYRepresentationPrepration(torch.autograd.Function):
     @staticmethod
     @contiguous
-    @custom_fwd
+    @custom_fwd(device_type=device)
     def forward(ctx, k, v, beta, chunk_size):
         o_cumdecay, v_new = fwd_prepare_wy_repr(k, v, beta, chunk_size)
         ctx.chunk_size = chunk_size
@@ -201,7 +203,7 @@ class WYRepresentationPrepration(torch.autograd.Function):
 
     @staticmethod
     @contiguous
-    @custom_bwd
+    @custom_bwd(device_type=device)
     def backward(ctx, do, do2):
         k, v, beta, o_cumdecay, v_new = ctx.saved_tensors
         dk, dv, dbeta = bwd_prepare_wy_repr(k, v, beta, o_cumdecay, v_new, do, do2, ctx.chunk_size)
@@ -247,7 +249,7 @@ if __name__ == "__main__":
     b = 4
     h = 8
     k = torch.nn.functional.normalize(torch.randn(b, h, seq_len, 256), dim=-1, p=2)
-    v = torch.randn(b, h, seq_len, 256) 
+    v = torch.randn(b, h, seq_len, 256)
     beta = torch.rand(b, h, seq_len).sigmoid()
     require_grad = True
     k, v, beta = map(lambda x: x.cuda().requires_grad_(require_grad), (k, v, beta))
@@ -271,7 +273,7 @@ if __name__ == "__main__":
 
     print("Done warmup.")
 
-    import time 
+    import time
     torch.cuda.synchronize()
     start = time.time()
 
@@ -294,4 +296,3 @@ if __name__ == "__main__":
     print(time.time() - start)
 
 
-    

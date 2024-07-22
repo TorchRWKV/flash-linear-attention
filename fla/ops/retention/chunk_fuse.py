@@ -7,7 +7,9 @@ import torch
 import triton
 import triton.language as tl
 from packaging import version
-from torch.cuda.amp import custom_bwd, custom_fwd
+from torch.amp import custom_bwd, custom_fwd
+from fla.utils import get_available_device
+device = get_available_device()
 
 from fla.utils import contiguous
 
@@ -70,7 +72,7 @@ def fused_chunk_retention_fwd_kernel(
     if USE_INITIAL_STATE:
         p_h = tl.make_block_ptr(initial_state + i_bh * DK * DV, (DK, DV), (DV, 1), (i_k * BK, i_v * BV), (BK, BV), (1, 0))
         b_h = tl.load(p_h, boundary_check=(0, 1)).to(tl.float32)
-    
+
     NT = tl.cdiv(T, BT)
     for i in range(0, NT):
         # [BK, BT]
@@ -233,7 +235,7 @@ class FusedChunkRetentionFunction(torch.autograd.Function):
 
     @staticmethod
     @contiguous
-    @custom_fwd
+    @custom_fwd(device_type=device)
     def forward(ctx, q, k, v, initial_state, output_final_state):
         batch_size, n_heads, seq_len, d_head_qk = q.shape
         d_head_v = v.shape[-1]
@@ -285,7 +287,7 @@ class FusedChunkRetentionFunction(torch.autograd.Function):
         return o.to(q.dtype), final_state
 
     @staticmethod
-    @custom_bwd
+    @custom_bwd(device_type=device)
     @contiguous
     def backward(ctx, do, d_final_state=None):
         q, k, v, initial_state = ctx.saved_tensors

@@ -6,7 +6,9 @@ from typing import Tuple
 import torch
 import triton
 import triton.language as tl
-from torch.cuda.amp import custom_bwd, custom_fwd
+from torch.amp import custom_bwd, custom_fwd
+from fla.utils import get_available_device
+device = get_available_device()
 
 from fla.utils import contiguous
 
@@ -260,7 +262,7 @@ def chunk_retention_bwd_kernel_dqkv(
 class ChunkRetentionFunction(torch.autograd.Function):
 
     @staticmethod
-    @custom_fwd
+    @custom_fwd(device_type=device)
     @contiguous
     def forward(ctx, q, k, v, initial_state, output_final_state):
         B, H, T, K, V = *q.shape, v.shape[-1]
@@ -305,7 +307,7 @@ class ChunkRetentionFunction(torch.autograd.Function):
         return o.to(q.dtype), final_state
 
     @staticmethod
-    @custom_bwd
+    @custom_bwd(device_type=device)
     @contiguous
     def backward(ctx, do, d_ht=None):
         q, k, v, h = ctx.saved_tensors

@@ -49,19 +49,20 @@ def naive_chunk_rwkv6(
 
 
 if __name__ == "__main__":
+    from fla.utils import get_available_device
+    device = get_available_device()
     B = 4
     H = 4
     L = 4096
     D = 100
     dtype = torch.bfloat16
     require_grad = True
-    q = (torch.randn(B, H, L, D).cuda().to(dtype)).requires_grad_(require_grad)
-    k = (torch.randn(B, H, L, D).cuda().to(dtype)).requires_grad_(require_grad)
-    v = torch.randn(B, H, L, 2*D).cuda().to(dtype).requires_grad_(require_grad)
-    w = torch.nn.functional.logsigmoid(torch.randn(B, H, L, D)).cuda().to(dtype).requires_grad_(require_grad)
-    u = (torch.randn(H, D).cuda().to(dtype)).requires_grad_(require_grad)
-    h = (torch.randn(B, H, D, 2*D).cuda().to(dtype)).requires_grad_(require_grad)
-    do = torch.rand_like(v).cuda()
+    q = (torch.randn(B, H, L, D).to(device).to(dtype)).requires_grad_(require_grad)
+    k = (torch.randn(B, H, L, D).to(device).to(dtype)).requires_grad_(require_grad)
+    v = torch.randn(B, H, L, 2*D).to(device).to(dtype).requires_grad_(require_grad)
+    w = torch.nn.functional.logsigmoid(torch.randn(B, H, L, D)).to(device).to(dtype).requires_grad_(require_grad)
+    u = (torch.randn(H, D).to(device).to(dtype)).requires_grad_(require_grad)
+    do = torch.rand_like(v).to(device)
     o2, _ = chunk_rwkv6(q, k, v, w.clone(), u)
     o, _ = fused_recurrent_rwkv6(q, k, v, w, u, scale=1.0)
     o.backward(do)

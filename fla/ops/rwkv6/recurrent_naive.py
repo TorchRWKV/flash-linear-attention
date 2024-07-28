@@ -1,8 +1,14 @@
 # -*- coding: utf-8 -*-
 
-from typing import Optional
+from typing import Optional, Tuple
 
 import torch
+from torch.amp import custom_bwd, custom_fwd
+from fla.utils import get_available_device
+device = get_available_device()
+
+from fla.ops.utils import chunk_reversed_cumsum_fwd
+from fla.utils import contiguous
 
 
 def naive_recurrent_rwkv6(
@@ -102,6 +108,61 @@ def naive_recurrent_rwkv6_bwd(
 
     return dq, dk, dv, dw, du, dh
 
+class NativeRecurrentRWKV6Function(torch.autograd.Function):
+    @staticmethod
+    @contiguous
+    @custom_fwd(device_type=device)
+    def forward(ctx, q, k, v, w, u, scale, initial_state, output_final_state):
+        o, ht = naive_recurrent_rwkv6(q, k, v, w, u, scale, initial_state, output_final_state)
+        ctx.save_for_backward(q, k, v, w, u, o, initial_state)
+        return o, ht
+
+    @staticmethod
+    @contiguous
+    @custom_bwd(device_type=device)
+    def backward(ctx, do, dht):
+        q, k, v, w, u, o, initial_state = ctx.saved_tensors
+        dq, dk, dv, dw, du, dh = naive_recurrent_rwkv6_bwd(q, k, v, w, u, o, do, initial_state)
+        return dq, dk, dv, dw, du, None, dh, None
+
+
+def native_recurrent_rwkv6(
+    r: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    w: torch.Tensor,
+    u: torch.Tensor,
+    scale: int = -1,
+    initial_state: torch.Tensor = None,
+    output_final_state: bool = False,
+    causal: bool = True
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    r"""
+    Args:
+        r (torch.Tensor):
+            reception of shape `(B, H, T, K)`. Alias: q, query in linear attention.
+        k (torch.Tensor):
+            keys of shape `(B, H, T, K)`
+        v (torch.Tensor):
+            values of shape `(B, H, T, V)`
+        w (torch.Tensor):
+            data-dependent decays of shape `(B, H, T, K)` in log space! Alias: g.
+        u (torch.Tensor):
+            bonus of shape `(H, K)`
+        scale (Optional[int]):
+            Scale factor for the RWKV6 attention scores.
+            If not provided, it will default to `1 / sqrt(K)`. Default: `None`.
+        initial_state (Optional[torch.Tensor]):
+            Initial state of shape `(B, H, K, V)`. Default: `None`.
+        output_final_state (Optional[bool]):
+            Whether to output the final state of shape `(B, H, K, V)`. Default: `False`.
+    """
+    if scale == -1:
+        scale = r.shape[-1] ** -0.5
+    o, final_state = NativeRecurrentRWKV6Function.apply(r, k, v, w, u, scale, initial_state, output_final_state)
+
+    return o, final_state
+
 if __name__ == "__main__":
     from fla.utils import get_available_device
     device = get_available_device()
@@ -127,11 +188,12 @@ if __name__ == "__main__":
     du, u.grad = u.grad.clone(), None
     dh, h.grad = h.grad.clone(), None
 
-    dq2, dk2, dv2, dw2, du2, dh2 = naive_recurrent_rwkv6_bwd(q, k, v, w, u, o, do, initial_state=h)
+    o2, _ = NativeRecurrentRWKV6Function.apply(q, k, v, w, u, 1.0, h)
+    o2.backward(do)
 
-    assert torch.allclose(dq, dq2, atol=1e-3)
-    assert torch.allclose(dk, dk2, atol=1e-3)
-    assert torch.allclose(dv, dv2, atol=1e-3)
-    assert torch.allclose(dw, dw2, atol=1e-3)
-    assert torch.allclose(du, du2, atol=1e-3)
-    assert torch.allclose(dh, dh2, atol=1e-3)
+    assert torch.allclose(dq, q.grad, atol=1e-3)
+    assert torch.allclose(dk, k.grad, atol=1e-3)
+    assert torch.allclose(dv, v.grad, atol=1e-3)
+    assert torch.allclose(dw, w.grad, atol=1e-3)
+    assert torch.allclose(du, u.grad, atol=1e-3)
+    assert torch.allclose(dh, h.grad, atol=1e-3)

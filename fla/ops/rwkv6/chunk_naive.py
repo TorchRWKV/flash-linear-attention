@@ -5,6 +5,7 @@ from einops import rearrange
 
 from fla.ops.rwkv6.chunk import chunk_rwkv6
 from fla.ops.rwkv6.recurrent_fuse import fused_recurrent_rwkv6
+from fla.ops.rwkv6.recurrent_naive import naive_recurrent_rwkv6, naive_recurrent_rwkv6_bwd
 
 
 def naive_chunk_rwkv6(
@@ -65,6 +66,9 @@ if __name__ == "__main__":
     do = torch.rand_like(v).to(device)
     o2, _ = chunk_rwkv6(q, k, v, w.clone(), u)
     o, _ = fused_recurrent_rwkv6(q, k, v, w, u, scale=1.0)
+    o3 = naive_chunk_rwkv6(q, k, v, w, u)
+    o4, _ = naive_recurrent_rwkv6(q, k, v, w, u,scale=1.0)
+
     o.backward(do)
     dq, q.grad = q.grad.clone(), None
     dk, k.grad = k.grad.clone(), None

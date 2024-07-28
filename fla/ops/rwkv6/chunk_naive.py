@@ -5,6 +5,7 @@ from einops import rearrange
 
 from fla.ops.rwkv6.chunk import chunk_rwkv6
 from fla.ops.rwkv6.recurrent_fuse import fused_recurrent_rwkv6
+from fla.ops.rwkv6.recurrent_naive import naive_recurrent_rwkv6, naive_recurrent_rwkv6_bwd
 
 
 def naive_chunk_rwkv6(
@@ -65,17 +66,22 @@ if __name__ == "__main__":
     do = torch.rand_like(v).to(device)
     o2, _ = chunk_rwkv6(q, k, v, w.clone(), u)
     o, _ = fused_recurrent_rwkv6(q, k, v, w, u, scale=1.0)
+    o3 = naive_chunk_rwkv6(q, k, v, w, u)
+    o4, _ = naive_recurrent_rwkv6(q, k, v, w, u,scale=1.0)
+
     o.backward(do)
     dq, q.grad = q.grad.clone(), None
     dk, k.grad = k.grad.clone(), None
     dv, v.grad = v.grad.clone(), None
     dw, w.grad = w.grad.clone(), None
     du, u.grad = u.grad.clone(), None
-    print((o - o2).abs().max())
+    print((o - o2).abs().mean())
     o2.backward(do)
-    print((o-o2).abs().max())
-    print((q.grad - dq).abs().max())
-    print((k.grad - dk).abs().max())
-    print((v.grad - dv).abs().max())
-    print((w.grad - dw).abs().max())
-    print((u.grad - du).abs().max())
+    print((o-o2).abs()/o.abs())
+    print((o-o3).abs()/o3.abs())
+
+    print((q.grad - dq).abs()/q.abs())
+    # print((k.grad - dk).abs().mean())
+    # print((v.grad - dv).abs().mean())
+    # print((w.grad - dw).abs().mean())
+    # print((u.grad - du).abs().mean())

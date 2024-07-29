@@ -10,7 +10,8 @@ device = get_available_device()
 from fla.ops.utils import chunk_reversed_cumsum_fwd
 from fla.utils import contiguous
 
-
+@torch.no_grad
+@torch.jit.script
 def naive_recurrent_rwkv6(
     q: torch.Tensor,
     k: torch.Tensor,
@@ -19,11 +20,11 @@ def naive_recurrent_rwkv6(
     u: torch.Tensor,
     scale: Optional[float] = None,
     initial_state: Optional[torch.Tensor] = None,
-    output_final_state: Optional[bool] = False
+    output_final_state: bool = False
 ):
     orig_dtype = q.dtype
-    B, H, T, K, V = *q.shape, v.shape[-1]
-    q, k, v, w, u = map(lambda x: x.float(), (q, k, v, w, u))
+    B, H, T, K, V = q.shape[0], q.shape[1], q.shape[2], q.shape[3], v.shape[-1]
+    q, k, v, w, u = (x.to(dtype=torch.float32) for x in (q, k, v, w, u))
     h = torch.zeros(B, H, K, V, dtype=torch.float32, device=q.device)
     o = torch.zeros_like(v)
 

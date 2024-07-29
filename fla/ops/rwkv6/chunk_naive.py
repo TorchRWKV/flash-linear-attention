@@ -51,6 +51,7 @@ def naive_chunk_rwkv6(
 
 if __name__ == "__main__":
     from fla.utils import get_available_device
+    from fla.ops.rwkv6 import native_recurrent_rwkv6
     device = get_available_device()
     B = 4
     H = 4
@@ -63,13 +64,13 @@ if __name__ == "__main__":
     v = torch.randn(B, H, L, 2*D).to(device).to(dtype).requires_grad_(require_grad)
     w = torch.nn.functional.logsigmoid(torch.randn(B, H, L, D)).to(device).to(dtype).requires_grad_(require_grad)
     u = (torch.randn(H, D).to(device).to(dtype)).requires_grad_(require_grad)
+    h = torch.randn(B, H, D, 2*D, device=device, dtype=dtype, requires_grad=True)
     do = torch.rand_like(v).to(device)
-    o2, _ = chunk_rwkv6(q, k, v, w.clone(), u)
-    o, _ = fused_recurrent_rwkv6(q, k, v, w, u, scale=1.0)
-    o3 = naive_chunk_rwkv6(q, k, v, w, u)
-    o4, _ = naive_recurrent_rwkv6(q, k, v, w, u,scale=1.0)
+    o2, _ = chunk_rwkv6(q, k, v, w.clone(), u,initial_state=h, scale=1.0)
+    # o2, _ = native_recurrent_rwkv6(q, k, v, w, u,initial_state=h, scale=1.0)
+    o, _ = fused_recurrent_rwkv6(q, k, v, w, u,initial_state=h, scale=1.0)
 
-    o.backward(do)
+    o.backward(do) #正确的算法
     dq, q.grad = q.grad.clone(), None
     dk, k.grad = k.grad.clone(), None
     dv, v.grad = v.grad.clone(), None

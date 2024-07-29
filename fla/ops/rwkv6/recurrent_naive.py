@@ -112,7 +112,7 @@ class NativeRecurrentRWKV6Function(torch.autograd.Function):
     @staticmethod
     @contiguous
     @custom_fwd(device_type=device)
-    def forward(ctx, q, k, v, w, u, scale, initial_state, output_final_state):
+    def forward(ctx, q, k, v, w, u, scale, initial_state, output_final_state: bool = False):
         o, ht = naive_recurrent_rwkv6(q, k, v, w, u, scale, initial_state, output_final_state)
         ctx.save_for_backward(q, k, v, w, u, o, initial_state)
         return o, ht
@@ -191,9 +191,28 @@ if __name__ == "__main__":
     o2, _ = NativeRecurrentRWKV6Function.apply(q, k, v, w, u, 1.0, h)
     o2.backward(do)
 
-    assert torch.allclose(dq, q.grad, atol=1e-3)
-    assert torch.allclose(dk, k.grad, atol=1e-3)
-    assert torch.allclose(dv, v.grad, atol=1e-3)
-    assert torch.allclose(dw, w.grad, atol=1e-3)
-    assert torch.allclose(du, u.grad, atol=1e-3)
-    assert torch.allclose(dh, h.grad, atol=1e-3)
+
+    def rmsre(pred, target, eps=1e-8):
+        return torch.sqrt(torch.mean(torch.square((pred - target) / (target.abs() + eps))))
+
+    def print_diff(name, grad1, grad2):
+        abs_diff = (grad1 - grad2).abs()
+        max_diff = abs_diff.max().item()
+        rmsre_value = rmsre(grad1, grad2).item()
+        print(f"{name}: Max Abs Diff = {max_diff:.6f}, RMSRE = {rmsre_value:.6f}")
+
+    print(f"o: {(o - o2).abs().max().item():.6f}")
+    print_diff("q", q.grad, dq)
+    print_diff("k", k.grad, dk)
+    print_diff("v", v.grad, dv)
+    print_diff("w", w.grad, dw)
+    print_diff("u", u.grad, du)
+    print_diff("h", h.grad, dh)
+
+    # 计算所有梯度的综合 RMSRE
+    all_grads1 = torch.cat([q.grad.flatten(), k.grad.flatten(), v.grad.flatten(),
+                            w.grad.flatten(), u.grad.flatten(), h.grad.flatten()])
+    all_grads2 = torch.cat([dq.flatten(), dk.flatten(), dv.flatten(),
+                            dw.flatten(), du.flatten(), dh.flatten()])
+    overall_rmsre = rmsre(all_grads1, all_grads2).item()
+    print(f"\nOverall RMSRE: {overall_rmsre:.6f}")

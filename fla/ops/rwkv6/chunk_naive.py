@@ -51,10 +51,11 @@ def naive_chunk_rwkv6(
 
 if __name__ == "__main__":
     from fla.utils import get_available_device
+    from fla.ops.rwkv6 import native_recurrent_rwkv6
     device = get_available_device()
     B = 4
     H = 4
-    L = 1024
+    L = 4096
     D = 100
     dtype = torch.bfloat16
     require_grad = True
@@ -63,25 +64,46 @@ if __name__ == "__main__":
     v = torch.randn(B, H, L, 2*D).to(device).to(dtype).requires_grad_(require_grad)
     w = torch.nn.functional.logsigmoid(torch.randn(B, H, L, D)).to(device).to(dtype).requires_grad_(require_grad)
     u = (torch.randn(H, D).to(device).to(dtype)).requires_grad_(require_grad)
+    h = torch.randn(B, H, D, 2*D, device=device, dtype=dtype, requires_grad=True)
     do = torch.rand_like(v).to(device)
-    o2, _ = chunk_rwkv6(q, k, v, w.clone(), u)
-    o, _ = fused_recurrent_rwkv6(q, k, v, w, u, scale=1.0)
-    o3 = naive_chunk_rwkv6(q, k, v, w, u)
-    o4, _ = naive_recurrent_rwkv6(q, k, v, w, u,scale=1.0)
+    o2, _ = chunk_rwkv6(q, k, v, w.clone(), u,initial_state=h, scale=1.0)
+    # o2, _ = native_recurrent_rwkv6(q, k, v, w, u,initial_state=h, scale=1.0)
+    o, _ = fused_recurrent_rwkv6(q, k, v, w, u,initial_state=h, scale=1.0)
 
-    o.backward(do)
+    o.backward(do) #正确的算法
     dq, q.grad = q.grad.clone(), None
     dk, k.grad = k.grad.clone(), None
     dv, v.grad = v.grad.clone(), None
     dw, w.grad = w.grad.clone(), None
     du, u.grad = u.grad.clone(), None
-    print((o - o2).abs().mean())
-    o2.backward(do)
-    print((o-o2).abs()/o.abs())
-    print((o-o3).abs()/o3.abs())
+    dh, h.grad = h.grad.clone(), None
 
-    print((q.grad - dq).abs()/q.abs())
-    # print((k.grad - dk).abs().mean())
-    # print((v.grad - dv).abs().mean())
-    # print((w.grad - dw).abs().mean())
-    # print((u.grad - du).abs().mean())
+    o2.backward(do)
+
+    def rmsre(pred, target, eps=1e-8):
+        return torch.sqrt(torch.mean(torch.square((pred - target) / (target.abs() + eps))))
+
+    def print_diff(name, grad1, grad2):
+        abs_diff = (grad1 - grad2).abs()
+        max_diff = abs_diff.max().item()
+        rmsre_value = rmsre(grad1, grad2).item()
+        print(f"{name}: Max Abs Diff = {max_diff:.6f}, RMSRE = {rmsre_value:.6f}")
+
+    print(f"o: {(o - o2).abs().max().item():.6f}")
+    print_diff("q", q.grad, dq)
+    print_diff("k", k.grad, dk)
+    print_diff("v", v.grad, dv)
+    print_diff("w", w.grad, dw)
+    print_diff("u", u.grad, du)
+    print_diff("h", h.grad, dh)
+
+    # 计算所有梯度的综合 RMSRE
+    all_grads1 = torch.cat([q.grad.flatten(), k.grad.flatten(), v.grad.flatten(),
+                            w.grad.flatten(), u.grad.flatten(), h.grad.flatten()])
+    all_grads2 = torch.cat([dq.flatten(), dk.flatten(), dv.flatten(),
+                            dw.flatten(), du.flatten(), dh.flatten()])
+    overall_rmsre = rmsre(all_grads1, all_grads2).item()
+    print(f"\nOverall RMSRE: {overall_rmsre:.6f}")
+
+
+

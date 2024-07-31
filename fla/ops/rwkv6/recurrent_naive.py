@@ -3,7 +3,7 @@
 from typing import Optional, Tuple
 
 import torch
-from torch.amp import custom_bwd, custom_fwd
+from fla.utils import custom_fwd_wrapper, custom_bwd_wrapper
 from fla.utils import get_available_device
 device = get_available_device()
 
@@ -112,7 +112,7 @@ def naive_recurrent_rwkv6_bwd(
 class NativeRecurrentRWKV6Function(torch.autograd.Function):
     @staticmethod
     @contiguous
-    @custom_fwd(device_type=device)
+    @custom_fwd_wrapper(device_type=device)
     def forward(ctx, q, k, v, w, u, scale, initial_state, output_final_state: bool = False):
         o, ht = naive_recurrent_rwkv6(q, k, v, w, u, scale, initial_state, output_final_state)
         ctx.save_for_backward(q, k, v, w, u, o, initial_state)
@@ -120,7 +120,7 @@ class NativeRecurrentRWKV6Function(torch.autograd.Function):
 
     @staticmethod
     @contiguous
-    @custom_bwd(device_type=device)
+    @custom_bwd_wrapper(device_type=device)
     def backward(ctx, do, dht):
         q, k, v, w, u, o, initial_state = ctx.saved_tensors
         dq, dk, dv, dw, du, dh = naive_recurrent_rwkv6_bwd(q, k, v, w, u, o, do, initial_state)

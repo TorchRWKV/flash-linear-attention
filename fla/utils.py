@@ -68,3 +68,38 @@ def get_available_device():
 
     # 如果没有找到可用的特殊设备，返回 'cpu'
     return 'cpu'
+
+
+import torch
+from packaging import version
+
+if version.parse(torch.__version__) > version.parse('2.4'):
+    from torch.amp import custom_fwd, custom_bwd
+    def custom_fwd_wrapper(**kwargs):
+        return custom_fwd(**kwargs)
+    def custom_bwd_wrapper(**kwargs):
+        return custom_bwd(**kwargs)
+
+else:
+    from torch.cuda.amp import custom_fwd,  custom_bwd
+    def custom_fwd_wrapper(**decorator_kwargs):
+        def decorator(func):
+            @functools.wraps(func)
+            def wrapper(*args, **func_kwargs):
+                all_kwargs = {**decorator_kwargs, **func_kwargs}
+                all_kwargs.pop('device_type', None)
+                return custom_fwd(func)(*args, **all_kwargs)
+            return wrapper
+        return decorator
+    def custom_bwd_wrapper(**decorator_kwargs):
+        def decorator(func):
+            @functools.wraps(func)
+            def wrapper(*args, **func_kwargs):
+                all_kwargs = {**decorator_kwargs, **func_kwargs}
+                all_kwargs.pop('device_type', None)
+                return custom_bwd(func)(*args, **all_kwargs)
+            return wrapper
+        return decorator
+
+
+

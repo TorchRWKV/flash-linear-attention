@@ -3,7 +3,7 @@
 import torch
 import triton
 import triton.language as tl
-from torch.amp import custom_bwd, custom_fwd
+from fla.utils import custom_fwd_wrapper, custom_bwd_wrapper
 from fla.utils import get_available_device
 device = get_available_device()
 
@@ -324,7 +324,7 @@ class FusedChunkBasedFunction(torch.autograd.Function):
 
     @staticmethod
     @contiguous
-    @custom_fwd(device_type=device)
+    @custom_fwd_wrapper(device_type=device)
     def forward(ctx, q, k, v, scale=1):
         batch_size, n_heads, seq_len, d_head_qk = q.shape
         # assert d_head_qk == 16, "currently we do not support feature dim other than 16"
@@ -360,7 +360,7 @@ class FusedChunkBasedFunction(torch.autograd.Function):
 
     @staticmethod
     @contiguous
-    @custom_bwd(device_type=device)
+    @custom_bwd_wrapper(device_type=device)
     def backward(ctx, do, dz):
         q, k, v = ctx.saved_tensors
         batch_size, n_heads, seq_len, d_head_qk = q.shape

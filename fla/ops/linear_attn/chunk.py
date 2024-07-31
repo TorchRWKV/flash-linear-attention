@@ -6,7 +6,7 @@ from typing import Tuple
 import torch
 import triton
 import triton.language as tl
-from torch.amp import custom_bwd, custom_fwd
+from fla.utils import custom_fwd_wrapper, custom_bwd_wrapper
 from fla.utils import get_available_device
 device = get_available_device()
 
@@ -249,7 +249,7 @@ def chunk_linear_attn_bwd_kernel_dqkv(
 class ChunkLinearAttentionFunction(torch.autograd.Function):
 
     @staticmethod
-    @custom_fwd(device_type=device)
+    @custom_fwd_wrapper(device_type=device)
     @contiguous
     def forward(ctx, q, k, v, scale, initial_state, output_final_state):
         B, H, T, K, V = *q.shape, v.shape[-1]
@@ -294,7 +294,7 @@ class ChunkLinearAttentionFunction(torch.autograd.Function):
         return o.to(q.dtype), final_state
 
     @staticmethod
-    @custom_bwd(device_type=device)
+    @custom_bwd_wrapper(device_type=device)
     @contiguous
     def backward(ctx, do, d_ht=None):
         q, k, v, h = ctx.saved_tensors

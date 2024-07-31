@@ -6,7 +6,7 @@ import torch
 import triton
 import triton.language as tl
 from packaging import version
-from torch.amp import custom_bwd, custom_fwd
+from fla.utils import custom_fwd_wrapper, custom_bwd_wrapper
 from fla.utils import get_available_device
 device = get_available_device()
 
@@ -329,7 +329,7 @@ def fused_chunk_delta_rule_bwd(q, k, v, d, do, BT, CHECK, initial_state):
 class FusedChunkDeltaRuleFunction(torch.autograd.Function):
     @staticmethod
     @contiguous
-    @custom_fwd(device_type=device)
+    @custom_fwd_wrapper(device_type=device)
     def forward(ctx, q, k, v, beta, BT, initial_state, output_final_state, checkpoint_level=0):
         # lvl=1 will recompute ``fwd_prepare_wy_repr`` for saving memory.
         assert checkpoint_level in [0, 1]
@@ -346,7 +346,7 @@ class FusedChunkDeltaRuleFunction(torch.autograd.Function):
         return o.to(q.dtype), final_state
 
     @staticmethod
-    @custom_bwd(device_type=device)
+    @custom_bwd_wrapper(device_type=device)
     @contiguous
     def backward(ctx, do, d_final_state=None):
         q, k_origin, v, v_new, v_new2, d, beta, initial_state = ctx.saved_tensors

@@ -242,7 +242,7 @@ class FusedRecurrentRWKV6Function(torch.autograd.Function):
     @staticmethod
     @contiguous
     @custom_fwd_wrapper(device_type=device)
-    def forward(ctx, r, k, v, w, u, scale=None, initial_state=None, output_final_state=False, reverse=False):
+    def forward(ctx, r, k, v, w, u, scale=None, initial_state=None, output_final_state=False, reverse=False, training=True):
         # alias
         q = r
         B, H, T, K, V = *q.shape, v.shape[-1]
@@ -273,9 +273,10 @@ class FusedRecurrentRWKV6Function(torch.autograd.Function):
         )
 
         o = o.sum(0)
-        ctx.save_for_backward(q, k, v, w, u, initial_state, o)
-        ctx.scale = scale
-        ctx.reverse = reverse
+        if training:
+            ctx.save_for_backward(q.clone(), k.clone(), v.clone(), w.clone(), u.clone(), initial_state.clone(), o.clone())
+            ctx.scale = scale
+            ctx.reverse = reverse
         # we do not need the gradient of the final state from the next chunk
         # similiar to Trunctated BPTT
         if final_state is not None:
@@ -340,7 +341,7 @@ class FusedRecurrentRWKV6Function(torch.autograd.Function):
         dw = chunk_reversed_cumsum_fwd(dw).to(w)
 
         du = ((do * v).sum(-1)[..., None] * k * q * scale).sum([0, -2]).to(u)
-        return dq, dk, dv, dw, du, None, dh0, None, None
+        return dq, dk, dv, dw, du, None, dh0, None, None, None
 
 
 def fused_recurrent_rwkv6(
@@ -352,6 +353,8 @@ def fused_recurrent_rwkv6(
     scale: int = -1,
     initial_state: torch.Tensor = None,
     output_final_state: bool = False,
+    reverse: bool = False,
+    training: bool = True,
     causal: bool = True
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     r"""
@@ -376,5 +379,5 @@ def fused_recurrent_rwkv6(
     """
     if scale == -1:
         scale = r.shape[-1] ** -0.5
-    o, final_state = FusedRecurrentRWKV6Function.apply(r, k, v, w, u, scale, initial_state, output_final_state)
+    o, final_state = FusedRecurrentRWKV6Function.apply(r, k, v, w, u, scale, initial_state, output_final_state, reverse, training)
     return o, final_state

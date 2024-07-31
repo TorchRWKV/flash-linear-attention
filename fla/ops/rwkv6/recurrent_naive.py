@@ -10,7 +10,7 @@ device = get_available_device()
 from fla.ops.utils import chunk_reversed_cumsum_fwd
 from fla.utils import contiguous
 
-@torch.no_grad
+
 @torch.jit.script
 def naive_recurrent_rwkv6(
     q: torch.Tensor,
@@ -116,7 +116,7 @@ class NativeRecurrentRWKV6Function(torch.autograd.Function):
     def forward(ctx, q, k, v, w, u, scale, initial_state, output_final_state: bool = False, training: bool = True):
         o, ht = naive_recurrent_rwkv6(q, k, v, w, u, scale, initial_state, output_final_state)
         if training:
-            ctx.save_for_backward(q.clone(), k.clone(), v.clone(), w.clone(), u.clone(), initial_state.clone(), o.clone())
+            ctx.save_for_backward(q.clone(), k.clone(), v.clone(), w.clone(), u.clone(), o.clone(), initial_state.clone())
         return o, ht
 
     @staticmethod
@@ -170,18 +170,18 @@ if __name__ == "__main__":
     from fla.utils import get_available_device
     device = get_available_device()
     B = 4
-    H = 4
+    H = 32
     L = 1024
-    D = 100
+    D = 64
     dtype = torch.float
     require_grad = True
     q = (torch.randn(B, H, L, D).to(device).to(dtype)).requires_grad_(require_grad)
     k = (torch.randn(B, H, L, D).to(device).to(dtype)).requires_grad_(require_grad)
-    v = torch.randn(B, H, L, 2*D).to(device).to(dtype).requires_grad_(require_grad)
+    v = torch.randn(B, H, L, D).to(device).to(dtype).requires_grad_(require_grad)
     w = torch.nn.functional.logsigmoid(torch.randn(B, H, L, D)).to(device).to(dtype).requires_grad_(require_grad)
     u = (torch.randn(H, D).to(device).to(dtype)).requires_grad_(require_grad)
     do = torch.rand_like(v).to(device)
-    h = torch.randn(B, H, D, 2*D, device=device, dtype=torch.float32, requires_grad=True)
+    h = torch.randn(B, H, D, D, device=device, dtype=torch.float32, requires_grad=True)
     o, _ = naive_recurrent_rwkv6(q, k, v, w, u, scale=1.0, initial_state=h)
     o.backward(do)
     dq, q.grad = q.grad.clone(), None

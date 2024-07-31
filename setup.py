@@ -132,6 +132,7 @@ setup(
         'einops',
         'ninja',
         'torch',
+        'packaging'
     ],
     extras_require={
     'triton': ['triton>=2.2'],

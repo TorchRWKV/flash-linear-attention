@@ -39,8 +39,7 @@ def get_available_device():
 
     # 检查 XPU
     try:
-        pytorch_version = tuple(map(int, torch.__version__.split('.')[:2]))
-        if pytorch_version > (2, 4):
+        if version.parse(torch.__version__) >= version.parse('2.4'):
             if torch.xpu.is_available():
                 return 'xpu'
         else:
@@ -73,7 +72,7 @@ def get_available_device():
 import torch
 from packaging import version
 
-if version.parse(torch.__version__) > version.parse('2.4'):
+if version.parse(torch.__version__) >= version.parse('2.4'):
     from torch.amp import custom_fwd, custom_bwd
     def custom_fwd_wrapper(**kwargs):
         return custom_fwd(**kwargs)

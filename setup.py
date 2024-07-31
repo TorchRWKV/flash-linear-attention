@@ -128,13 +128,15 @@ setup(
     ],
     python_requires='>=3.7',
     install_requires=[
-        'triton>=2.2',
         'transformers',
         'einops',
         'ninja',
-        'torch>=2.4.0',
+        'torch',
     ],
     extras_require={
-        'conv1d': ['causal-conv1d>=1.4.0']
-    }
+    'triton': ['triton>=2.2'],
+    'conv1d': ['causal-conv1d>=1.4.0'],
+    'flashattn': ['flash-attn'],
+    'all': ['triton>=2.2', 'causal-conv1d>=1.4.0', 'flash-attn'],
+    },
 )

@@ -113,9 +113,10 @@ class NativeRecurrentRWKV6Function(torch.autograd.Function):
     @staticmethod
     @contiguous
     @custom_fwd_wrapper(device_type=device)
-    def forward(ctx, q, k, v, w, u, scale, initial_state, output_final_state: bool = False):
+    def forward(ctx, q, k, v, w, u, scale, initial_state, output_final_state: bool = False, training: bool = True):
         o, ht = naive_recurrent_rwkv6(q, k, v, w, u, scale, initial_state, output_final_state)
-        ctx.save_for_backward(q, k, v, w, u, o, initial_state)
+        if training:
+            ctx.save_for_backward(q.clone(), k.clone(), v.clone(), w.clone(), u.clone(), initial_state.clone(), o.clone())
         return o, ht
 
     @staticmethod
@@ -124,7 +125,7 @@ class NativeRecurrentRWKV6Function(torch.autograd.Function):
     def backward(ctx, do, dht):
         q, k, v, w, u, o, initial_state = ctx.saved_tensors
         dq, dk, dv, dw, du, dh = naive_recurrent_rwkv6_bwd(q, k, v, w, u, o, do, initial_state)
-        return dq, dk, dv, dw, du, None, dh, None
+        return dq, dk, dv, dw, du, None, dh, None, None
 
 
 def native_recurrent_rwkv6(
@@ -136,6 +137,7 @@ def native_recurrent_rwkv6(
     scale: int = -1,
     initial_state: torch.Tensor = None,
     output_final_state: bool = False,
+    training: bool = True,
     causal: bool = True
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     r"""
@@ -160,7 +162,7 @@ def native_recurrent_rwkv6(
     """
     if scale == -1:
         scale = r.shape[-1] ** -0.5
-    o, final_state = NativeRecurrentRWKV6Function.apply(r, k, v, w, u, scale, initial_state, output_final_state)
+    o, final_state = NativeRecurrentRWKV6Function.apply(r, k, v, w, u, scale, initial_state, output_final_state, training)
 
     return o, final_state
 

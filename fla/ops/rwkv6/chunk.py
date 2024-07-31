@@ -588,7 +588,7 @@ class ChunkRWKV6Function(torch.autograd.Function):
 
     @staticmethod
     @contiguous
-    def forward(ctx, r, k, v, g, u, scale, initial_state, output_final_state, checkpoint_level):
+    def forward(ctx, r, k, v, g, u, scale, initial_state, output_final_state, checkpoint_level, training: bool = True):
         q = r  # alias
         B, H, T, K, V = *q.shape, v.shape[-1]
         BT, BC = 64, 16
@@ -667,11 +667,14 @@ class ChunkRWKV6Function(torch.autograd.Function):
         if checkpoint_level > 1:
             del h
             h, initial_state = None, None
+        else:
+            h_t = h.clone()
         del g, gs
-        ctx.save_for_backward(q, k, v, g_org, u, h, initial_state, A)
-        ctx.BT = BT
-        ctx.scale = scale
-        ctx.checkpoint_level = checkpoint_level
+        if training:
+            ctx.save_for_backward(q.clone(), k.clone(), v.clone(), g_org.clone(), u.clone(), h_t, initial_state.clone(), A.clone())
+            ctx.BT = BT
+            ctx.scale = scale
+            ctx.checkpoint_level = checkpoint_level
         return o, final_state
 
     @staticmethod
@@ -795,7 +798,7 @@ class ChunkRWKV6Function(torch.autograd.Function):
             num_warps=4
         )
         du = du.sum([0, 2])
-        return dq.to(q), dk.to(k), dv.to(v), dg.to(g), du.to(u), None, dh0, None, None
+        return dq.to(q), dk.to(k), dv.to(v), dg.to(g), du.to(u), None, dh0, None, None, None
 
 
 def chunk_rwkv6(
@@ -807,7 +810,8 @@ def chunk_rwkv6(
     scale: Optional[int] = None,
     initial_state: torch.Tensor = None,
     output_final_state: bool = False,
-    checkpoint_level: Optional[int] = 0
+    checkpoint_level: Optional[int] = 0,
+    training: bool = True
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     r"""
     Args:
@@ -837,7 +841,7 @@ def chunk_rwkv6(
     assert checkpoint_level in [0, 1]
     if scale is None:
         scale = r.shape[-1] ** -0.5
-    o, final_state = ChunkRWKV6Function.apply(r, k, v, g, u, scale, initial_state, output_final_state, checkpoint_level)
+    o, final_state = ChunkRWKV6Function.apply(r, k, v, g, u, scale, initial_state, output_final_state, checkpoint_level, training)
     return o, final_state
 
 

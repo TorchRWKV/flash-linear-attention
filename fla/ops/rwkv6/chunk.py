@@ -14,15 +14,24 @@ from fla.utils import contiguous
 
 @triton.autotune(
     configs=[
-        triton.Config({'BS': 16}, num_warps=2),
-        triton.Config({'BS': 16}, num_warps=4),
-        triton.Config({'BS': 16}, num_warps=8),
-        triton.Config({'BS': 32}, num_warps=2),
-        triton.Config({'BS': 32}, num_warps=4),
-        triton.Config({'BS': 32}, num_warps=8),
-        triton.Config({'BS': 64}, num_warps=2),
-        triton.Config({'BS': 64}, num_warps=4),
-        triton.Config({'BS': 64}, num_warps=8),
+        triton.Config({'BS': 16}, num_warps=2, num_stages=1),
+        triton.Config({'BS': 16}, num_warps=2, num_stages=2),
+        triton.Config({'BS': 16}, num_warps=4, num_stages=1),
+        triton.Config({'BS': 16}, num_warps=4, num_stages=2),
+        triton.Config({'BS': 16}, num_warps=8, num_stages=1),
+        triton.Config({'BS': 16}, num_warps=8, num_stages=2),
+        triton.Config({'BS': 32}, num_warps=2, num_stages=1),
+        triton.Config({'BS': 32}, num_warps=2, num_stages=2),
+        triton.Config({'BS': 32}, num_warps=4, num_stages=1),
+        triton.Config({'BS': 32}, num_warps=4, num_stages=2),
+        triton.Config({'BS': 32}, num_warps=8, num_stages=1),
+        triton.Config({'BS': 32}, num_warps=8, num_stages=2),
+        triton.Config({'BS': 64}, num_warps=2, num_stages=1),
+        triton.Config({'BS': 64}, num_warps=2, num_stages=2),
+        triton.Config({'BS': 64}, num_warps=4, num_stages=1),
+        triton.Config({'BS': 64}, num_warps=4, num_stages=2),
+        triton.Config({'BS': 64}, num_warps=8, num_stages=1),
+        triton.Config({'BS': 64}, num_warps=8, num_stages=2),
     ],
     key=['S']
 )
@@ -110,7 +119,17 @@ def post_process_grad(
 
     tl.store(p_du, b_du.to(p_du.dtype.element_ty), boundary_check=(0, 1))
 
-
+@triton.autotune(
+    configs=[
+        triton.Config({}, num_warps=2, num_stages=1),
+        triton.Config({}, num_warps=4, num_stages=1),
+        triton.Config({}, num_warps=8, num_stages=1),
+        triton.Config({}, num_warps=2, num_stages=2),
+        triton.Config({}, num_warps=4, num_stages=2),
+        triton.Config({}, num_warps=8, num_stages=2),
+    ],
+    key=['BK']
+)
 @triton.jit
 def chunk_rwkv6_fwd_kernel_h(
     k,
@@ -173,7 +192,17 @@ def chunk_rwkv6_fwd_kernel_h(
         p_h = tl.make_block_ptr(ht + i_bh * K * V, (K, V), (V, 1), (i_k * BK, i_v * BV), (BK, BV), (1, 0))
         tl.store(p_h, b_h.to(p_h.dtype.element_ty), boundary_check=(0, 1))
 
-
+@triton.autotune(
+    configs=[
+        triton.Config({}, num_warps=2, num_stages=1),
+        triton.Config({}, num_warps=4, num_stages=1),
+        triton.Config({}, num_warps=8, num_stages=1),
+        triton.Config({}, num_warps=2, num_stages=2),
+        triton.Config({}, num_warps=4, num_stages=2),
+        triton.Config({}, num_warps=8, num_stages=2),
+    ],
+    key=['BK', 'T']
+)
 @triton.jit
 def chunk_rwkv6_fwd_kernel_intra(
     q,
@@ -254,7 +283,17 @@ def chunk_rwkv6_fwd_kernel_intra(
             p_k = tl.advance(p_k, (K,))
             p_q_u = tl.advance(p_q_u, (K,))
 
-
+@triton.autotune(
+    configs=[
+        triton.Config({}, num_warps=2, num_stages=1),
+        triton.Config({}, num_warps=4, num_stages=1),
+        triton.Config({}, num_warps=8, num_stages=1),
+        triton.Config({}, num_warps=2, num_stages=2),
+        triton.Config({}, num_warps=4, num_stages=2),
+        triton.Config({}, num_warps=8, num_stages=2),
+    ],
+    key=['BK', 'T']
+)
 @triton.jit
 def chunk_rwkv6_fwd_kernel_inter(
     q,
@@ -592,13 +631,11 @@ class ChunkRWKV6Function(torch.autograd.Function):
         q = r  # alias
         B, H, T, K, V = *q.shape, v.shape[-1]
         BT, BC = 64, 16
-        BK = min(64, triton.next_power_of_2(K))
-        BV = min(64, triton.next_power_of_2(V))
+        BK = min(64, triton.next_power_of_2(K)) if q.dtype != torch.float else min(32, triton.next_power_of_2(K))
+        BV = min(64, triton.next_power_of_2(V)) if q.dtype != torch.float else min(32, triton.next_power_of_2(V))
         NT, NC = triton.cdiv(T, BT), triton.cdiv(BT, BC)
         NK = triton.cdiv(K, BK)
         NV = triton.cdiv(V, BV)
-        num_warps = 4 if BK == 64 else 2
-        num_stages = 1
 
         def fwd_inner(q, k, v, g, B, H, T, K, V, BT, BK, BV, NT, h0=None, ht=None):
             NK, NV = triton.cdiv(K, BK), triton.cdiv(V, BV)
@@ -612,8 +649,6 @@ class ChunkRWKV6Function(torch.autograd.Function):
                 T=T, K=K, V=V, BT=BT, BK=BK, BV=BV, NT=NT,
                 USE_INITIAL_STATE=h0 is not None,
                 STORE_FINAL_STATE=ht is not None,
-                num_warps=num_warps,
-                num_stages=num_stages
             )
             return h
 
@@ -646,8 +681,6 @@ class ChunkRWKV6Function(torch.autograd.Function):
             k.stride(1), k.stride(2), k.stride(3),
             scale,
             H=H, T=T, K=K, BT=BT, BC=BC, BK=BK, NC=NC, DK=K,
-            num_warps=num_warps,
-            num_stages=num_stages
         )
         A = A.sum(0, dtype=A.dtype)
         o = torch.empty_like(v)
@@ -660,8 +693,6 @@ class ChunkRWKV6Function(torch.autograd.Function):
             h.stride(1), h.stride(2), h.stride(3),
             scale,
             T=T, K=K, V=V, BT=BT, BK=BK, BV=BV,
-            num_warps=num_warps,
-            num_stages=num_stages
         )
 
         if checkpoint_level > 1:
@@ -683,8 +714,8 @@ class ChunkRWKV6Function(torch.autograd.Function):
         q, k, v, g, u, h, initial_state, A = ctx.saved_tensors
         B, H, T, K, V = *q.shape, v.shape[-1]
         BT, BC = ctx.BT, 16
-        BK = min(64, triton.next_power_of_2(K))
-        BV = min(64, triton.next_power_of_2(V))
+        BK = min(64, triton.next_power_of_2(K)) if q.dtype != torch.float else min(32, triton.next_power_of_2(K))
+        BV = min(64, triton.next_power_of_2(V)) if q.dtype != torch.float else min(32, triton.next_power_of_2(V))
         NT, NC = triton.cdiv(T, BT), triton.cdiv(BT, BC)
         NK = triton.cdiv(K, BK)
         num_warps = 4 if BK == 64 else 2
@@ -702,8 +733,6 @@ class ChunkRWKV6Function(torch.autograd.Function):
                 T=T, K=K, V=V, BT=BT, BK=BK, BV=BV, NT=NT,
                 USE_INITIAL_STATE=h0 is not None,
                 STORE_FINAL_STATE=ht is not None,
-                num_warps=num_warps,
-                num_stages=num_stages
             )
             return h
 

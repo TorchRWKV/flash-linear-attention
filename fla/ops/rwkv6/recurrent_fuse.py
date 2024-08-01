@@ -14,7 +14,19 @@ device = get_available_device()
 from fla.ops.utils import chunk_reversed_cumsum_fwd
 from fla.utils import contiguous
 
-
+@triton.autotune(
+    configs=[
+        triton.Config({}, num_warps=2, num_stages=1),
+        triton.Config({}, num_warps=4, num_stages=1),
+        triton.Config({}, num_warps=8, num_stages=1),
+        triton.Config({}, num_warps=16, num_stages=1),
+        triton.Config({}, num_warps=2, num_stages=2),
+        triton.Config({}, num_warps=4, num_stages=2),
+        triton.Config({}, num_warps=8, num_stages=2),
+        triton.Config({}, num_warps=16, num_stages=2),
+    ],
+    key=['K', 'V', 'T']
+)
 @triton.jit
 def fused_recurrent_rwkv6_fwd_kernel(
     q,  # query [B, H, T, K]
@@ -249,8 +261,7 @@ class FusedRecurrentRWKV6Function(torch.autograd.Function):
 
         BK, BV = min(triton.next_power_of_2(K), 32), min(triton.next_power_of_2(V), 32)
         NK, NV = triton.cdiv(K, BK), triton.cdiv(V, BV)
-        num_stages = 1
-        num_warps = 1
+
 
         if output_final_state:
             final_state = q.new_empty(B, H, K, V)
@@ -267,9 +278,7 @@ class FusedRecurrentRWKV6Function(torch.autograd.Function):
             B=B, H=H, T=T, K=K, V=V, BK=BK, BV=BV,
             USE_INITIAL_STATE=initial_state is not None,
             STORE_FINAL_STATE=final_state is not None,
-            REVERSE=reverse,
-            num_warps=num_warps,
-            num_stages=num_stages
+            REVERSE=reverse
         )
 
         o = o.sum(0)

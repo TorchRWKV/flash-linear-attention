@@ -269,7 +269,7 @@ class FusedRecurrentGLAFunction(torch.autograd.Function):
     @staticmethod
     @contiguous
     @custom_bwd_wrapper(device_type=device)
-    def backward(ctx, do, d_final_state=None):
+    def backward(ctx, do, dht=None):
         q, k, v, gk, gv, initial_state, o = ctx.saved_tensors
         batch_size, n_heads, seq_len, K = q.shape
         V = v.shape[-1]

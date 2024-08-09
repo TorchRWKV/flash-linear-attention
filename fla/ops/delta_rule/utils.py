@@ -251,6 +251,7 @@ if __name__ == "__main__":
     h = 8
     k = torch.nn.functional.normalize(torch.randn(b, h, seq_len, 256), dim=-1, p=2)
     v = torch.randn(b, h, seq_len, 256)
+    v = torch.randn(b, h, seq_len, 256)
     beta = torch.rand(b, h, seq_len).sigmoid()
     require_grad = True
     k, v, beta = map(lambda x: x.cuda().requires_grad_(require_grad), (k, v, beta))
@@ -273,6 +274,7 @@ if __name__ == "__main__":
 
     print("Done warmup.")
 
+    import time
     import time
     torch.cuda.synchronize()
     start = time.time()

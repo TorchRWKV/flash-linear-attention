@@ -92,6 +92,7 @@ def naive_recurrent_rwkv6_bwd(
         v_i = v[:, :, i]
         du_i = (d_kv_i * k_i[..., None] * v_i[..., None, :]).sum(-1)
         du += du_i.sum(0)
+        du += du_i.sum(0)
         dk_i = (dh * v_i[..., None, :]).sum(-1)
         dk_aux[:, :, i] = dk_i
         dk_i += (d_kv_i * u[None, ..., None] * v_i[..., None, :]).sum(-1)

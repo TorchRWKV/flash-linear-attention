@@ -22,6 +22,7 @@ from fla.utils import contiguous
 
 inv_ln2 = 1.44269504
 
+
 @triton.jit
 def fused_chunk_gla_fwd_kernel(
     # B: batch_size, H: n_heads, T: seq_len, D: d_head

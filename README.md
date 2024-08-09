@@ -44,15 +44,11 @@ The following requirements should be satisfied
 As `fla` is actively developed now, no released packages are provided at this time.
 If you do need to use `fla` ops/modules and contemplate further explorations, an alternative way is to install the package from source
 ```sh
-pip install -U git+https://github.com/TorchRWKV/flash-linear-attention
-```
-or
-```
-pip install -U git+https://gitee.com/uniartisan2018/flash-linear-attention
+pip install -U git+https://github.com/sustcsonglin/flash-linear-attention
 ```
 or manage `fla` with submodules
 ```sh
-git submodule add https://github.com/TorchRWKV/flash-linear-attention.git 3rdparty/flash-linear-attention
+git submodule add https://github.com/sustcsonglin/flash-linear-attention.git 3rdparty/flash-linear-attention
 ln -s 3rdparty/flash-linear-attention/fla fla
 ```
 

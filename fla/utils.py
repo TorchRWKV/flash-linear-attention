@@ -3,7 +3,11 @@
 import functools
 
 import torch
-
+import subprocess
+import re
+from functools import lru_cache
+import torch
+from packaging import version
 
 def contiguous(fn):
     @functools.wraps(fn)
@@ -69,8 +73,44 @@ def get_available_device():
     return 'cpu'
 
 
-import torch
-from packaging import version
+
+@lru_cache(maxsize=None)
+def check_compute_capacity(device):
+    if device == 'cuda':
+        if torch.cuda.is_available():
+            try:
+                nvidia_smi = subprocess.check_output("nvidia-smi --query-gpu=compute_cap --format=csv,noheader", shell=True)
+                compute_cap = nvidia_smi.decode('utf-8').strip()
+                compute_cap_major = int(compute_cap.split('.')[0])
+                return compute_cap_major >= 8
+            except:
+                return False
+        else:
+            return False
+
+    elif device == 'xpu':
+        try:
+            clinfo_output = subprocess.check_output("clinfo | grep 'Max size for global variable'", shell=True)
+            clinfo_output = clinfo_output.decode('utf-8').strip()
+            sizes = re.findall(r'(\d+) \((\d+)KiB\)', clinfo_output)
+            for size in sizes:
+                if int(size[1]) > 128:
+                    return True
+            return False
+        except:
+            return False
+
+    elif device == 'musa':
+        return False
+
+    elif device == 'npu':
+        return False
+
+    else:
+        return False
+
+device_capacity = check_compute_capacity(get_available_device())
+
 
 if version.parse(torch.__version__) >= version.parse('2.4'):
     from torch.amp import custom_fwd, custom_bwd

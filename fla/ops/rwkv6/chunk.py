@@ -9,7 +9,7 @@ import triton
 import triton.language as tl
 
 from fla.ops.utils import chunk_reversed_cumsum_fwd
-from fla.utils import contiguous
+from fla.utils import contiguous, device_capacity
 
 
 @triton.autotune(
@@ -717,8 +717,8 @@ class ChunkRWKV6Function(torch.autograd.Function):
         dtype = q.dtype
         B, H, T, K, V = *q.shape, v.shape[-1]
         BT, BC = ctx.BT, 16
-        BK = min(32, triton.next_power_of_2(K)) #if q.dtype != torch.float else min(32, triton.next_power_of_2(K))
-        BV = min(32, triton.next_power_of_2(V)) #if q.dtype != torch.float else min(32, triton.next_power_of_2(V))
+        BK = min(64, triton.next_power_of_2(K)) if device_capacity else min(32, triton.next_power_of_2(K))
+        BV = min(64, triton.next_power_of_2(V)) if device_capacity else min(32, triton.next_power_of_2(V))
         NT, NC = triton.cdiv(T, BT), triton.cdiv(BT, BC)
         NK = triton.cdiv(K, BK)
         num_warps = 4 if BK == 64 else 2

@@ -346,6 +346,7 @@ class FusedRecurrentRWKV6Function(torch.autograd.Function):
         dw = chunk_global_reversed_cumsum(dw).to(w)
 
         du = ((do * v).sum(-1)[..., None] * k * q * scale).sum(-2).to(u)
+        dh0 = (dh0.to(q) + (d_final_state if d_final_state is not None else 0)) if initial_state is not None else None
         return dq, dk, dv, dw, du, None, dh0, None, None, None
 
 

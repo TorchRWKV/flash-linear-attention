@@ -145,7 +145,6 @@ setup(
     install_requires=[
         'triton>=2.2',
         'transformers',
-        'torch>=2.0',
         'einops',
         'ninja'
     ],

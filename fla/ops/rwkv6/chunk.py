@@ -413,7 +413,9 @@ def chunk_rwkv6_bwd_kernel_dh(
 ):
     i_k, i_v, i_bh = tl.program_id(0), tl.program_id(1), tl.program_id(2)
 
-    b_dh = tl.zeros([BK, BV], dtype=tl.float32)
+    p_dh_last = tl.make_block_ptr(dh + i_bh * s_h_h + (NT-1) * K * V, (K, V),
+                                  (s_h_t, s_h_d), (i_k * BK, i_v * BV), (BK, BV), (1, 0))
+    b_dh = tl.load(p_dh_last, boundary_check=(0, 1)).to(tl.float32)
     for i_t in range(NT - 1, -1, -1):
         o_t = min(i_t * BT + BT, T)
 
@@ -433,7 +435,7 @@ def chunk_rwkv6_bwd_kernel_dh(
         tl.store(p_dh, b_dh.to(p_dh.dtype.element_ty), boundary_check=(0, 1))
 
         # [BK,]
-        b_gn = tl.load(p_gn, boundary_check=(0,))
+        b_gn = tl.load(p_gn, boundary_check=(0,)).to(tl.float32)
         # [BK, BV]
         b_dh *= tl.exp(b_gn)[:, None]
         # [BK, BT]
@@ -812,7 +814,8 @@ class ChunkRWKV6Function(torch.autograd.Function):
             torch.zeros(B, H, NT * K, V, dtype=torch.float, device=q.device), \
             torch.empty_like(initial_state) if initial_state is not None else None
 
-
+        if dht is not None:
+            dh[:, :, -K:, :] += dht.to(dh.dtype)
 
         # bwd_inner
         NV = triton.cdiv(V, BV)
@@ -869,7 +872,7 @@ class ChunkRWKV6Function(torch.autograd.Function):
             num_stages = num_stages
         )
         du = du.sum(2)
-        dh0 = (dh0.to(q) + (dht if dht is not None else 0)) if initial_state is not None else None
+        dh0 = dh0.to(q) if initial_state is not None else None
         return dq.to(dtype), dk.to(dtype), dv.to(dtype), dg.to(dtype), du.to(dtype), None, \
                 dh0, None, None, None
 

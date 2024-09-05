@@ -133,7 +133,7 @@ def test_chunk(
     do = torch.rand_like(v, device=device)
     h = torch.randn(B, H, D, 2*D, device=device, dtype=dtype, requires_grad=True)
 
-    ref_o, _ = fused_recurrent_rwkv6(q, k, v, w, u, scale=1.0, initial_state=h if use_h else None)
+    ref_o, _ = naive_recurrent_rwkv6(q, k, v, w, u, scale=1.0, initial_state=h if use_h else None)
     ref_o.backward(do)
     ref_dq, q.grad = q.grad.clone(), None
     ref_dk, k.grad = k.grad.clone(), None
@@ -162,6 +162,45 @@ def test_chunk(
     if use_h:
         assert ref_dh.allclose(tri_dh, atol=atol)
 
+def set_seed(seed):
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+
+def get_err_ratio(x, y):
+    err = (x-y).flatten().square().mean().sqrt().item()
+    base = (x).flatten().square().mean().sqrt().item()
+    return err / base
+
+def val(x):
+    return x.detach().float().cpu().numpy()
+
+def LOSS(y):
+    return ((y * y) - torch.tanh(y)).sum()
+
+def RUN_FLA_CHUNK(B, T, C, H, r, k, v, w, u, h):
+    r = r.view(B,T,H,-1).transpose(1,2)
+    k = k.view(B,T,H,-1).transpose(1,2)
+    v = v.view(B,T,H,-1).transpose(1,2)
+    w = -torch.exp(w.view(B,T,H,-1).transpose(1,2))
+    o, state = chunk_rwkv6(r, k, v, w, u=u, scale=1, initial_state=h, output_final_state=True)
+    return o.transpose(1,2).reshape(B,T,C), state
+
+def RUN_FLA_FUSED(B, T, C, H, r, k, v, w, u, h):
+    r = r.view(B,T,H,-1).transpose(1,2)
+    k = k.view(B,T,H,-1).transpose(1,2)
+    v = v.view(B,T,H,-1).transpose(1,2)
+    w = -torch.exp(w.view(B,T,H,-1).transpose(1,2))
+    o, state = fused_recurrent_rwkv6(r, k, v, w, u=u, scale=1, initial_state=h, output_final_state=True)
+    return o.transpose(1,2).reshape(B,T,C), state
+
+def RUN_FLA_NATIVE(B, T, C, H, r, k, v, w, u, h):
+    r = r.view(B,T,H,-1).transpose(1,2)
+    k = k.view(B,T,H,-1).transpose(1,2)
+    v = v.view(B,T,H,-1).transpose(1,2)
+    w = -torch.exp(w.view(B,T,H,-1).transpose(1,2))
+    o, state = naive_recurrent_rwkv6(r, k, v, w, u=u, scale=1, initial_state=h, output_final_state=True)
+    return o.transpose(1,2).reshape(B,T,C), state
 
 @pytest.mark.parametrize("B", [4])
 @pytest.mark.parametrize("T", [512])
@@ -177,45 +216,6 @@ def test_chunk_error_ratio(
 ):
     atol = 1e-3 if dtype == torch.float else 1e-2
     H = C // HEAD_SIZE
-    def set_seed(seed):
-        np.random.seed(seed)
-        torch.manual_seed(seed)
-        torch.cuda.manual_seed_all(seed)
-
-    def get_err_ratio(x, y):
-        err = (x-y).flatten().square().mean().sqrt().item()
-        base = (x).flatten().square().mean().sqrt().item()
-        return err / base
-
-    def val(x):
-        return x.detach().float().cpu().numpy()
-
-    def LOSS(y):
-        return ((y * y) - torch.tanh(y)).sum()
-
-    def RUN_FLA_CHUNK(B, T, C, H, r, k, v, w, u, h):
-        r = r.view(B,T,H,-1).transpose(1,2)
-        k = k.view(B,T,H,-1).transpose(1,2)
-        v = v.view(B,T,H,-1).transpose(1,2)
-        w = -torch.exp(w.view(B,T,H,-1).transpose(1,2))
-        o, state = chunk_rwkv6(r, k, v, w, u=u, scale=1, initial_state=h, output_final_state=True)
-        return o.transpose(1,2).reshape(B,T,C), state
-
-    def RUN_FLA_FUSED(B, T, C, H, r, k, v, w, u, h):
-        r = r.view(B,T,H,-1).transpose(1,2)
-        k = k.view(B,T,H,-1).transpose(1,2)
-        v = v.view(B,T,H,-1).transpose(1,2)
-        w = -torch.exp(w.view(B,T,H,-1).transpose(1,2))
-        o, state = fused_recurrent_rwkv6(r, k, v, w, u=u, scale=1, initial_state=h, output_final_state=True)
-        return o.transpose(1,2).reshape(B,T,C), state
-
-    def RUN_FLA_NATIVE(B, T, C, H, r, k, v, w, u, h):
-        r = r.view(B,T,H,-1).transpose(1,2)
-        k = k.view(B,T,H,-1).transpose(1,2)
-        v = v.view(B,T,H,-1).transpose(1,2)
-        w = -torch.exp(w.view(B,T,H,-1).transpose(1,2))
-        o, state = native_recurrent_rwkv6(r, k, v, w, u=u, scale=1, initial_state=h, output_final_state=True)
-        return o.transpose(1,2).reshape(B,T,C), state
 
     set_seed(42)
     with torch.no_grad():
@@ -269,31 +269,119 @@ def test_chunk_error_ratio(
     assert get_err_ratio(gu_chunk, gu) < atol
     assert get_err_ratio(gh_chunk, gh) < atol
 
+
+
+@pytest.mark.parametrize("B", [4])
+@pytest.mark.parametrize("T", [512])
+@pytest.mark.parametrize("C", [4096])
+@pytest.mark.parametrize("HEAD_SIZE", [64])
+@pytest.mark.parametrize("dtype", [torch.float, torch.bfloat16])
+def test_chunk_error_ratio_multi_state(
+    B: int,
+    T: int,
+    C: int,
+    HEAD_SIZE: int,
+    dtype: torch.dtype
+):
+    atol = 1e-3 if dtype == torch.float else 1e-2
+    H = C // HEAD_SIZE
+    set_seed(42)
+    with torch.no_grad():
+        r = torch.empty(B, T, C, device=device).uniform_(-1, 1).to(dtype=dtype)
+        k = torch.empty(B, T, C, device=device).uniform_(-1, 1).to(dtype=dtype)
+        v = torch.empty(B, T, C, device=device).uniform_(-1, 1).to(dtype=dtype)
+        w = torch.empty(B, T, C, device=device).uniform_(-8, -6).to(dtype=dtype)
+        u = torch.empty(H, HEAD_SIZE, device=device).uniform_(-1, 1).to(dtype=dtype)
+        initial_state = torch.zeros(B, H, HEAD_SIZE, HEAD_SIZE, device=device).to(dtype=dtype)
+        r1 = torch.empty(B, T, C, device=device).uniform_(-1, 1).to(dtype=dtype)
+        k1 = torch.empty(B, T, C, device=device).uniform_(-1, 1).to(dtype=dtype)
+        v1 = torch.empty(B, T, C, device=device).uniform_(-1, 1).to(dtype=dtype)
+        w1 = torch.empty(B, T, C, device=device).uniform_(-8, -6).to(dtype=dtype)
+        u1 = torch.empty(H, HEAD_SIZE, device=device).uniform_(-1, 1).to(dtype=dtype)
+
+    def clear_grad():
+        r.requires_grad_()
+        k.requires_grad_()
+        v.requires_grad_()
+        w.requires_grad_()
+        u.requires_grad_()
+        r1.requires_grad_()
+        k1.requires_grad_()
+        v1.requires_grad_()
+        w1.requires_grad_()
+        u1.requires_grad_()
+        initial_state.requires_grad_()
+        if r.grad is not None: r.grad.data.zero_()
+        if k.grad is not None: k.grad.data.zero_()
+        if v.grad is not None: v.grad.data.zero_()
+        if w.grad is not None: w.grad.data.zero_()
+        if u.grad is not None: u.grad.data.zero_()
+        if r1.grad is not None: r1.grad.data.zero_()
+        if k1.grad is not None: k1.grad.data.zero_()
+        if v1.grad is not None: v1.grad.data.zero_()
+        if w1.grad is not None: w1.grad.data.zero_()
+        if u1.grad is not None: u1.grad.data.zero_()
+        if initial_state.grad is not None: initial_state.grad.data.zero_()
+
     # Check reuse the first state
     clear_grad()
-    y32, state = RUN_FLA_FUSED(B, T, C, H, r.float(), k.float(), v.float(), w.float(), u.float(), initial_state.float())
-    y32_1, _ = RUN_FLA_FUSED(B, T, C, H, r.float(), k.float(), v.float(), w.float(), u.float(), state.float())
+    y32, state = RUN_FLA_NATIVE(B, T, C, H, r.float(), k.float(), v.float(), w.float(), u.float(), initial_state.float())
+    y32_1, _ = RUN_FLA_NATIVE(B, T, C, H, r1.float(), k1.float(), v1.float(), w1.float(), u1.float(), state.float())
     LOSS(y32_1).backward()
-    gr = r.grad.data.clone()
-    gk = k.grad.data.clone()
-    gv = v.grad.data.clone()
-    gw = w.grad.data.clone()
-    gu = u.grad.data.clone()
+    gr = r1.grad.data.clone()
+    gk = k1.grad.data.clone()
+    gv = v1.grad.data.clone()
+    gw = w1.grad.data.clone()
+    gu = u1.grad.data.clone()
     gh = initial_state.grad.data.clone()
-    clear_grad()
 
+
+    clear_grad()
     yF16, state = RUN_FLA_CHUNK(B, T, C, H, r, k, v, w, u, initial_state)
-    yF16_1, _ = RUN_FLA_CHUNK(B, T, C, H, r, k, v, w, u, state)
+    yF16_1, _ = RUN_FLA_CHUNK(B, T, C, H, r1, k1, v1, w1, u1, state)
     LOSS(yF16_1).backward()
-    gr_chunk = r.grad.data.clone()
-    gk_chunk = k.grad.data.clone()
-    gv_chunk = v.grad.data.clone()
-    gw_chunk = w.grad.data.clone()
-    gu_chunk = u.grad.data.clone()
+    gr_chunk = r1.grad.data.clone()
+    gk_chunk = k1.grad.data.clone()
+    gv_chunk = v1.grad.data.clone()
+    gw_chunk = w1.grad.data.clone()
+    gu_chunk = u1.grad.data.clone()
     gh_chunk = initial_state.grad.data.clone()
     clear_grad()
 
-    assert get_err_ratio(yF16, y32) < atol
+    assert get_err_ratio(yF16_1, y32_1) < atol
+    assert get_err_ratio(gr_chunk, gr) < atol
+    assert get_err_ratio(gk_chunk, gk) < atol
+    assert get_err_ratio(gv_chunk, gv) < atol
+    assert get_err_ratio(gw_chunk, gw) < atol
+    assert get_err_ratio(gu_chunk, gu) < atol
+    assert get_err_ratio(gh_chunk, gh) < atol
+
+
+
+    clear_grad()
+    y32, state = RUN_FLA_NATIVE(B, T, C, H, r.float(), k.float(), v.float(), w.float(), u.float(), initial_state.float())
+    y32_1, _ = RUN_FLA_NATIVE(B, T, C, H, r1.float(), k1.float(), v1.float(), w1.float(), u1.float(), state.float())
+    LOSS(y32_1).backward()
+    gr = r1.grad.data.clone()
+    gk = k1.grad.data.clone()
+    gv = v1.grad.data.clone()
+    gw = w1.grad.data.clone()
+    gu = u1.grad.data.clone()
+    gh = initial_state.grad.data.clone()
+
+    clear_grad()
+    yF16, state = RUN_FLA_FUSED(B, T, C, H, r, k, v, w, u, initial_state)
+    yF16_1, _ = RUN_FLA_FUSED(B, T, C, H, r1, k1, v1, w1, u1, state)
+    LOSS(yF16_1).backward()
+    gr_chunk = r1.grad.data.clone()
+    gk_chunk = k1.grad.data.clone()
+    gv_chunk = v1.grad.data.clone()
+    gw_chunk = w1.grad.data.clone()
+    gu_chunk = u1.grad.data.clone()
+    gh_chunk = initial_state.grad.data.clone()
+    clear_grad()
+
+    assert get_err_ratio(yF16_1, y32_1) < atol
     assert get_err_ratio(gr_chunk, gr) < atol
     assert get_err_ratio(gk_chunk, gk) < atol
     assert get_err_ratio(gv_chunk, gv) < atol

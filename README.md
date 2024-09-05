@@ -9,7 +9,12 @@ This repo aims at providing Triton kernel for RWKV models. RWKV is a brand new n
 
 This project implements multi-level state chain differentiation for RWKV6, efficient differentiation of all input parameters, while maintaining high computational precision (both bf16 and fp32). Currently, it does not consider pure fp16 variants such as RWKV x060c.
 
-Some benchmarks (vs CUDA kernel)
+Some benchmarks (chunk_rwkv6(fla) vs CUDA kernel)
+
+>Since the project is under active development, the calculated times may differ.
+
+>fused_recurrent_rwkv6 will be much slower!
+
 | Test Case | Implementation | Forward Time | Backward Time |
 |-----------|----------------|--------------|---------------|
 | Test Case 1: B=8, T=4096, C=4096, HEAD_SIZE=64 | CUDA BF16 | 9.69 ms | 46.41 ms |
@@ -25,9 +30,10 @@ Some benchmarks (vs CUDA kernel)
 | Test Case 6: B=16, T=4096, C=4096, HEAD_SIZE=256 | CUDA BF16 | 61.54 ms | 344.85 ms |
 | | FLA BF16 | 38.24 ms | 144.12 ms |
 
->Since the project is under active development, the calculated times may differ.
 
 ```
+from fla.ops.rwkv6 import chunk_rwkv6, fused_recurrent_rwkv6, native_recurrent_rwkv6
+
 @torch.compile
 def run_fla_kernel(B, T, C, H, r, k, v, w, u, s):
     r = r.view(B,T,H,-1).transpose(1,2)
@@ -35,7 +41,7 @@ def run_fla_kernel(B, T, C, H, r, k, v, w, u, s):
     v = v.view(B,T,H,-1).transpose(1,2)
     w = -torch.exp(w.view(B,T,H,-1).transpose(1,2))
     u = u.view(1, H, 1, -1)
-    o, final_state = naive_recurrent_rwkv6_my(r, k, v, w, u=u, scale=1, initial_state=s, output_final_state=True)
+    o, final_state = chunk_rwkv6(r, k, v, w, u=u, scale=1, initial_state=s, output_final_state=True)
     return o.transpose(1,2).reshape(B,T,C), final_state
 ```
 >This repo aims at providing a collection of efficient Triton-based implementations for state-of-the-art linear attention models. **Any pull requests are welcome!**

@@ -112,15 +112,6 @@ def get_package_version():
     build_date = datetime.now().strftime("%Y%m%d")
     dev_suffix = f".dev{build_date}"
 
-    git_dir = Path(this_dir) / '.git'
-    if git_dir.is_dir():
-        try:
-            git_hash = subprocess.check_output(['git', 'rev-parse', '--short', 'HEAD'],
-                                               cwd=this_dir, universal_newlines=True).strip()
-            dev_suffix += f"+{git_hash}"
-        except subprocess.CalledProcessError:
-            pass
-
     return f"{version}{dev_suffix}"
 
 

@@ -109,7 +109,7 @@ def get_package_version():
         version_match = re.search(r"^__version__\s*=\s*(.*)$", f.read(), re.MULTILINE)
     version = ast.literal_eval(version_match.group(1))
 
-    build_date = datetime.now().strftime("%Y%m%d")
+    build_date = datetime.now().strftime("%Y%m%d%H%M")
     dev_suffix = f".dev{build_date}"
 
     return f"{version}{dev_suffix}"

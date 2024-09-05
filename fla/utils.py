@@ -3,6 +3,7 @@
 import functools
 
 import torch
+import triton
 import subprocess
 import re
 from functools import lru_cache
@@ -71,42 +72,15 @@ def get_available_device():
 
 
 @lru_cache(maxsize=None)
-def check_compute_capacity(device):
-    if device == 'cuda':
-        if torch.cuda.is_available():
-            try:
-                nvidia_smi = subprocess.check_output("nvidia-smi --query-gpu=compute_cap --format=csv,noheader", shell=True)
-                compute_cap = nvidia_smi.decode('utf-8').strip()
-                compute_cap_major = int(compute_cap.split('.')[0])
-                return compute_cap_major >= 8
-            except BaseException:
-                return False
-        else:
-            return False
-
-    elif device == 'xpu':
-        try:
-            clinfo_output = subprocess.check_output("clinfo | grep 'Max size for global variable'", shell=True)
-            clinfo_output = clinfo_output.decode('utf-8').strip()
-            sizes = re.findall(r'(\d+) \((\d+)KiB\)', clinfo_output)
-            for size in sizes:
-                if int(size[1]) > 128:
-                    return True
-            return False
-        except BaseException:
-            return False
-
-    elif device == 'musa':
+def check_compute_capacity():
+    max_shared_memory = triton.runtime.driver.active.utils.get_device_properties(0)['max_shared_mem']
+    if max_shared_memory < 102400:
         return False
-
-    elif device == 'npu':
-        return False
-
     else:
-        return False
+        return True
 
 device = get_available_device()
-device_capacity = check_compute_capacity(device)
+device_capacity = check_compute_capacity()
 
 
 if version.parse(torch.__version__) >= version.parse('2.4'):

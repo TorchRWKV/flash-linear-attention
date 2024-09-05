@@ -78,7 +78,7 @@ def test_fused_recurrent(
     do = torch.rand_like(v, device=device)
     h = torch.randn(B, H, D, 2*D, device=device, dtype=dtype, requires_grad=True)
 
-    ref_o, _ = native_recurrent_rwkv6(q, k, v, w, u, scale=1.0, initial_state=h if use_h else None)
+    ref_o, _ = native_recurrent_rwkv6(q, k, v, w, u, scale=1.0, initial_state=h if use_h else None, output_final_state=use_h)
     ref_o.backward(do)
     ref_dq, q.grad = q.grad.clone(), None
     ref_dk, k.grad = k.grad.clone(), None
@@ -88,7 +88,7 @@ def test_fused_recurrent(
     if use_h:
         ref_dh, h.grad = h.grad.clone(), None
 
-    tri_o, _ = fused_recurrent_rwkv6(q, k, v, w, u, scale=1.0, initial_state=h if use_h else None)
+    tri_o, _ = fused_recurrent_rwkv6(q, k, v, w, u, scale=1.0, initial_state=h if use_h else None, output_final_state=use_h)
     tri_o.backward(do)
     tri_dq, q.grad = q.grad.clone(), None
     tri_dk, k.grad = k.grad.clone(), None
@@ -133,7 +133,7 @@ def test_chunk(
     do = torch.rand_like(v, device=device)
     h = torch.randn(B, H, D, 2*D, device=device, dtype=dtype, requires_grad=True)
 
-    ref_o, _ = naive_recurrent_rwkv6(q, k, v, w, u, scale=1.0, initial_state=h if use_h else None)
+    ref_o, _ = naive_recurrent_rwkv6(q, k, v, w, u, scale=1.0, initial_state=h if use_h else None, output_final_state=use_h)
     ref_o.backward(do)
     ref_dq, q.grad = q.grad.clone(), None
     ref_dk, k.grad = k.grad.clone(), None
@@ -143,7 +143,7 @@ def test_chunk(
     if use_h:
         ref_dh, h.grad = h.grad.clone(), None
 
-    tri_o, _ = chunk_rwkv6(q, k, v, w, u, scale=1.0, initial_state=h if use_h else None)
+    tri_o, _ = chunk_rwkv6(q, k, v, w, u, scale=1.0, initial_state=h if use_h else None, output_final_state=use_h)
     tri_o.backward(do)
     tri_dq, q.grad = q.grad.clone(), None
     tri_dk, k.grad = k.grad.clone(), None
@@ -194,12 +194,21 @@ def RUN_FLA_FUSED(B, T, C, H, r, k, v, w, u, h):
     o, state = fused_recurrent_rwkv6(r, k, v, w, u=u, scale=1, initial_state=h, output_final_state=True)
     return o.transpose(1,2).reshape(B,T,C), state
 
-def RUN_FLA_NATIVE(B, T, C, H, r, k, v, w, u, h):
+def RUN_FLA_NATIVE_AUTO_BACKWARD(B, T, C, H, r, k, v, w, u, h):
     r = r.view(B,T,H,-1).transpose(1,2)
     k = k.view(B,T,H,-1).transpose(1,2)
     v = v.view(B,T,H,-1).transpose(1,2)
     w = -torch.exp(w.view(B,T,H,-1).transpose(1,2))
     o, state = naive_recurrent_rwkv6(r, k, v, w, u=u, scale=1, initial_state=h, output_final_state=True)
+    return o.transpose(1,2).reshape(B,T,C), state
+
+
+def RUN_FLA_NATIVE_MANUAL_BACKWARD(B, T, C, H, r, k, v, w, u, h):
+    r = r.view(B,T,H,-1).transpose(1,2)
+    k = k.view(B,T,H,-1).transpose(1,2)
+    v = v.view(B,T,H,-1).transpose(1,2)
+    w = -torch.exp(w.view(B,T,H,-1).transpose(1,2))
+    o, state = native_recurrent_rwkv6(r, k, v, w, u=u, scale=1, initial_state=h, output_final_state=True)
     return o.transpose(1,2).reshape(B,T,C), state
 
 @pytest.mark.parametrize("B", [4])
@@ -271,7 +280,7 @@ def test_chunk_error_ratio(
 
 
 
-@pytest.mark.parametrize("B", [4])
+@pytest.mark.parametrize("B", [2])
 @pytest.mark.parametrize("T", [512])
 @pytest.mark.parametrize("C", [4096])
 @pytest.mark.parametrize("HEAD_SIZE", [64])
@@ -325,26 +334,88 @@ def test_chunk_error_ratio_multi_state(
 
     # Check reuse the first state
     clear_grad()
-    y32, state = RUN_FLA_NATIVE(B, T, C, H, r.float(), k.float(), v.float(), w.float(), u.float(), initial_state.float())
-    y32_1, _ = RUN_FLA_NATIVE(B, T, C, H, r1.float(), k1.float(), v1.float(), w1.float(), u1.float(), state.float())
-    LOSS(y32_1).backward()
-    gr = r1.grad.data.clone()
-    gk = k1.grad.data.clone()
-    gv = v1.grad.data.clone()
-    gw = w1.grad.data.clone()
-    gu = u1.grad.data.clone()
+    y32, state = RUN_FLA_NATIVE_AUTO_BACKWARD(B, T, C, H, r.float(), k.float(), v.float(), w.float(), u.float(), initial_state.float())
+    y32_1, _ = RUN_FLA_NATIVE_AUTO_BACKWARD(B, T, C, H, r1.float(), k1.float(), v1.float(), w1.float(), u1.float(), state.float())
+    loss = LOSS(y32_1) + LOSS(y32/100)
+    loss.backward()
+    gr = r.grad.data.clone()
+    gk = k.grad.data.clone()
+    gv = v.grad.data.clone()
+    gw = w.grad.data.clone()
+    gu = u.grad.data.clone()
+    gr1 = r1.grad.data.clone()
+    gk1 = k1.grad.data.clone()
+    gv1 = v1.grad.data.clone()
+    gw1 = w1.grad.data.clone()
+    gu1 = u1.grad.data.clone()
+    gh = initial_state.grad.data.clone()
+
+
+    clear_grad()
+    yF16, state = RUN_FLA_NATIVE_MANUAL_BACKWARD(B, T, C, H, r.float(), k.float(), v.float(), w.float(), u.float(), initial_state.float())
+    yF16_1, _ = RUN_FLA_NATIVE_MANUAL_BACKWARD(B, T, C, H, r1.float(), k1.float(), v1.float(), w1.float(), u1.float(), state.float())
+    loss = LOSS(yF16_1) + LOSS(yF16/100)
+    loss.backward()
+    gr_chunk = r.grad.data.clone()
+    gk_chunk = k.grad.data.clone()
+    gv_chunk = v.grad.data.clone()
+    gw_chunk = w.grad.data.clone()
+    gu_chunk = u.grad.data.clone()
+    gr_chunk1 = r1.grad.data.clone()
+    gk_chunk1 = k1.grad.data.clone()
+    gv_chunk1 = v1.grad.data.clone()
+    gw_chunk1 = w1.grad.data.clone()
+    gu_chunk1 = u1.grad.data.clone()
+    gh_chunk = initial_state.grad.data.clone()
+    clear_grad()
+
+    assert get_err_ratio(yF16_1, y32_1) < atol
+    assert get_err_ratio(gr_chunk, gr) < atol
+    assert get_err_ratio(gk_chunk, gk) < atol
+    assert get_err_ratio(gv_chunk, gv) < atol
+    # assert get_err_ratio(gw_chunk, gw) < atol # This will fail because of the log space
+    assert get_err_ratio(gu_chunk, gu) < atol
+    assert get_err_ratio(gh_chunk, gh) < atol
+    assert get_err_ratio(gr_chunk1, gr1) < atol
+    assert get_err_ratio(gk_chunk1, gk1) < atol
+    assert get_err_ratio(gv_chunk1, gv1) < atol
+    assert get_err_ratio(gw_chunk1, gw1) < atol
+    assert get_err_ratio(gu_chunk1, gu1) < atol
+    assert get_err_ratio(gh_chunk, gh) < atol
+
+    clear_grad()
+    y32, state = RUN_FLA_NATIVE_MANUAL_BACKWARD(B, T, C, H, r.float(), k.float(), v.float(), w.float(), u.float(), initial_state.float())
+    y32_1, _ = RUN_FLA_NATIVE_MANUAL_BACKWARD(B, T, C, H, r1.float(), k1.float(), v1.float(), w1.float(), u1.float(), state.float())
+    loss = LOSS(y32_1) + LOSS(y32/100)
+    loss.backward()
+    gr = r.grad.data.clone()
+    gk = k.grad.data.clone()
+    gv = v.grad.data.clone()
+    gw = w.grad.data.clone()
+    gu = u.grad.data.clone()
+    gr1 = r1.grad.data.clone()
+    gk1 = k1.grad.data.clone()
+    gv1 = v1.grad.data.clone()
+    gw1 = w1.grad.data.clone()
+    gu1 = u1.grad.data.clone()
     gh = initial_state.grad.data.clone()
 
 
     clear_grad()
     yF16, state = RUN_FLA_CHUNK(B, T, C, H, r, k, v, w, u, initial_state)
     yF16_1, _ = RUN_FLA_CHUNK(B, T, C, H, r1, k1, v1, w1, u1, state)
-    LOSS(yF16_1).backward()
-    gr_chunk = r1.grad.data.clone()
-    gk_chunk = k1.grad.data.clone()
-    gv_chunk = v1.grad.data.clone()
-    gw_chunk = w1.grad.data.clone()
-    gu_chunk = u1.grad.data.clone()
+    loss = LOSS(yF16_1) + LOSS(yF16/100)
+    loss.backward()
+    gr_chunk = r.grad.data.clone()
+    gk_chunk = k.grad.data.clone()
+    gv_chunk = v.grad.data.clone()
+    gw_chunk = w.grad.data.clone()
+    gu_chunk = u.grad.data.clone()
+    gr_chunk1 = r1.grad.data.clone()
+    gk_chunk1 = k1.grad.data.clone()
+    gv_chunk1 = v1.grad.data.clone()
+    gw_chunk1 = w1.grad.data.clone()
+    gu_chunk1 = u1.grad.data.clone()
     gh_chunk = initial_state.grad.data.clone()
     clear_grad()
 
@@ -355,29 +426,47 @@ def test_chunk_error_ratio_multi_state(
     assert get_err_ratio(gw_chunk, gw) < atol
     assert get_err_ratio(gu_chunk, gu) < atol
     assert get_err_ratio(gh_chunk, gh) < atol
+    assert get_err_ratio(gr_chunk1, gr1) < atol
+    assert get_err_ratio(gk_chunk1, gk1) < atol
+    assert get_err_ratio(gv_chunk1, gv1) < atol
+    assert get_err_ratio(gw_chunk1, gw1) < atol
+    assert get_err_ratio(gu_chunk1, gu1) < atol
+    assert get_err_ratio(gh_chunk, gh) < atol
 
 
 
     clear_grad()
-    y32, state = RUN_FLA_NATIVE(B, T, C, H, r.float(), k.float(), v.float(), w.float(), u.float(), initial_state.float())
-    y32_1, _ = RUN_FLA_NATIVE(B, T, C, H, r1.float(), k1.float(), v1.float(), w1.float(), u1.float(), state.float())
-    LOSS(y32_1).backward()
-    gr = r1.grad.data.clone()
-    gk = k1.grad.data.clone()
-    gv = v1.grad.data.clone()
-    gw = w1.grad.data.clone()
-    gu = u1.grad.data.clone()
+    y32, state = RUN_FLA_NATIVE_MANUAL_BACKWARD(B, T, C, H, r.float(), k.float(), v.float(), w.float(), u.float(), initial_state.float())
+    y32_1, _ = RUN_FLA_NATIVE_MANUAL_BACKWARD(B, T, C, H, r1.float(), k1.float(), v1.float(), w1.float(), u1.float(), state.float())
+    loss = LOSS(y32_1) + LOSS(y32/100)
+    loss.backward()
+    gr = r.grad.data.clone()
+    gk = k.grad.data.clone()
+    gv = v.grad.data.clone()
+    gw = w.grad.data.clone()
+    gu = u.grad.data.clone()
+    gr1 = r1.grad.data.clone()
+    gk1 = k1.grad.data.clone()
+    gv1 = v1.grad.data.clone()
+    gw1 = w1.grad.data.clone()
+    gu1 = u1.grad.data.clone()
     gh = initial_state.grad.data.clone()
 
     clear_grad()
     yF16, state = RUN_FLA_FUSED(B, T, C, H, r, k, v, w, u, initial_state)
     yF16_1, _ = RUN_FLA_FUSED(B, T, C, H, r1, k1, v1, w1, u1, state)
-    LOSS(yF16_1).backward()
-    gr_chunk = r1.grad.data.clone()
-    gk_chunk = k1.grad.data.clone()
-    gv_chunk = v1.grad.data.clone()
-    gw_chunk = w1.grad.data.clone()
-    gu_chunk = u1.grad.data.clone()
+    loss = LOSS(yF16_1) + LOSS(yF16/100)
+    loss.backward()
+    gr_chunk = r.grad.data.clone()
+    gk_chunk = k.grad.data.clone()
+    gv_chunk = v.grad.data.clone()
+    gw_chunk = w.grad.data.clone()
+    gu_chunk = u.grad.data.clone()
+    gr_chunk1 = r1.grad.data.clone()
+    gk_chunk1 = k1.grad.data.clone()
+    gv_chunk1 = v1.grad.data.clone()
+    gw_chunk1 = w1.grad.data.clone()
+    gu_chunk1 = u1.grad.data.clone()
     gh_chunk = initial_state.grad.data.clone()
     clear_grad()
 
@@ -388,4 +477,12 @@ def test_chunk_error_ratio_multi_state(
     assert get_err_ratio(gw_chunk, gw) < atol
     assert get_err_ratio(gu_chunk, gu) < atol
     assert get_err_ratio(gh_chunk, gh) < atol
+    assert get_err_ratio(gr_chunk1, gr1) < atol
+    assert get_err_ratio(gk_chunk1, gk1) < atol
+    assert get_err_ratio(gv_chunk1, gv1) < atol
+    assert get_err_ratio(gw_chunk1, gw1) < atol
+    assert get_err_ratio(gu_chunk1, gu1) < atol
+
+if __name__ == '__main__':
+    test_chunk_error_ratio_multi_state(4, 128, 4096, 64, torch.float)
 

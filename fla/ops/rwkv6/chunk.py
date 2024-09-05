@@ -810,7 +810,7 @@ class ChunkRWKV6Function(torch.autograd.Function):
                 ht=None
             )
         dq, dk, dv, dA, dh, dh0 = torch.empty_like(q, dtype=torch.float), torch.empty_like(k, dtype=torch.float), \
-            v.new_empty(NK, *v.shape), torch.zeros(B, H, T, BT, dtype=torch.float, device=q.device), \
+            v.new_empty(NK, *v.shape), torch.empty(B, H, T, BT, dtype=torch.float, device=q.device), \
             torch.zeros(B, H, NT * K, V, dtype=torch.float, device=q.device), \
             torch.empty_like(initial_state) if initial_state is not None else None
 

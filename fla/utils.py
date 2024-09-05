@@ -73,11 +73,14 @@ def get_available_device():
 
 @lru_cache(maxsize=None)
 def check_compute_capacity():
-    max_shared_memory = triton.runtime.driver.active.utils.get_device_properties(0)['max_shared_mem']
-    if max_shared_memory < 102400:
+    try:
+        max_shared_memory = triton.runtime.driver.active.utils.get_device_properties(0)['max_shared_mem']
+        if max_shared_memory < 102400:
+            return False
+        else:
+            return True
+    except BaseException as e:
         return False
-    else:
-        return True
 
 device = get_available_device()
 device_capacity = check_compute_capacity()

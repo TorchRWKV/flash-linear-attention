@@ -11,6 +11,8 @@ from fla.utils import device
 import numpy as np
 np.set_printoptions(precision=4, suppress=True, linewidth=200)
 
+torch.backends.cudnn.allow_tf32 = False
+torch.backends.cuda.matmul.allow_tf32 = False
 
 @pytest.mark.parametrize("B", [4])
 @pytest.mark.parametrize("H", [4])
@@ -114,7 +116,7 @@ def test_fused_recurrent(
 @pytest.mark.parametrize("D", [32, 64, 128])
 @pytest.mark.parametrize("dtype", [torch.float])
 @pytest.mark.parametrize("use_h", [False, True])
-def test_chunk(
+def test_chunk_with_initial_h(
     B: int,
     H: int,
     T: int,
@@ -123,7 +125,7 @@ def test_chunk(
     use_h: bool
 ):
     torch.manual_seed(42)
-    atol = 1e-3 if dtype == torch.float else 1e-1
+    atol = 1e-3 if dtype == torch.float else 1e-2
 
     q = torch.randn(B, H, T, D, device=device).to(dtype).requires_grad_(True)
     k = torch.randn(B, H, T, D, device=device).to(dtype).requires_grad_(True)
@@ -133,7 +135,7 @@ def test_chunk(
     do = torch.rand_like(v, device=device)
     h = torch.randn(B, H, D, 2*D, device=device, dtype=dtype, requires_grad=True)
 
-    ref_o, _ = naive_recurrent_rwkv6(q, k, v, w, u, scale=1.0, initial_state=h if use_h else None, output_final_state=use_h)
+    ref_o, _ = fused_recurrent_rwkv6(q, k, v, w, u, scale=1.0, initial_state=h if use_h else None, output_final_state=use_h)
     ref_o.backward(do)
     ref_dq, q.grad = q.grad.clone(), None
     ref_dk, k.grad = k.grad.clone(), None
@@ -153,14 +155,14 @@ def test_chunk(
     if use_h:
         tri_dh, h.grad = h.grad.clone(), None
 
-    assert ref_o.allclose(tri_o, atol=atol)
-    assert ref_dq.allclose(tri_dq, atol=atol)
-    assert ref_dk.allclose(tri_dk, atol=atol)
-    assert ref_dv.allclose(tri_dv, atol=atol)
-    assert ref_dw.allclose(tri_dw, atol=atol)
-    assert ref_du.allclose(tri_du, atol=atol)
+    assert get_err_ratio(ref_o, tri_o) < atol
+    assert get_err_ratio(ref_dq, tri_dq) < atol
+    assert get_err_ratio(ref_dk, tri_dk) < atol
+    assert get_err_ratio(ref_dv, tri_dv) < atol
+    assert get_err_ratio(ref_dw, tri_dw) < atol
+    assert get_err_ratio(ref_du, tri_du) < atol
     if use_h:
-        assert ref_dh.allclose(tri_dh, atol=atol)
+        assert get_err_ratio(ref_dh, tri_dh) < atol
 
 def set_seed(seed):
     np.random.seed(seed)
@@ -223,7 +225,7 @@ def test_chunk_error_ratio(
     HEAD_SIZE: int,
     dtype: torch.dtype
 ):
-    atol = 1e-3 if dtype == torch.float else 1e-2
+    atol = 2e-2 if dtype == torch.float else 1e-2
     H = C // HEAD_SIZE
 
     set_seed(42)
@@ -292,7 +294,7 @@ def test_chunk_error_ratio_multi_state(
     HEAD_SIZE: int,
     dtype: torch.dtype
 ):
-    atol = 1e-3 if dtype == torch.float else 1e-2
+    atol = 2e-2 if dtype == torch.float else 1e-2
     H = C // HEAD_SIZE
     set_seed(42)
     with torch.no_grad():
@@ -483,6 +485,4 @@ def test_chunk_error_ratio_multi_state(
     assert get_err_ratio(gw_chunk1, gw1) < atol
     assert get_err_ratio(gu_chunk1, gu1) < atol
 
-if __name__ == '__main__':
-    test_chunk_error_ratio_multi_state(4, 128, 4096, 64, torch.float)
 

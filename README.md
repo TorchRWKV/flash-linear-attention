@@ -1,12 +1,43 @@
 <div align="center">
 
-# Flash Linear Attention
+# RWKV-FLA
 
 [![hf_model](https://img.shields.io/badge/🤗-Models-blue.svg)](https://huggingface.co/fla-hub) | [![Discord](https://img.shields.io/badge/Discord-%235865F2.svg?&logo=discord&logoColor=white)](https://discord.gg/vDaJTmKNcS)
 </div>
 
 This repo aims at providing Triton kernel for RWKV models. RWKV is a brand new network architecture that integrates the advantages of transformers and RNNs, and can be used for a variety of natural language processing tasks. Also, RWKV is the state-of-the-art RNN model.
 
+This project implements multi-level state chain differentiation for RWKV6, efficient differentiation of all input parameters, while maintaining high computational precision (both bf16 and fp32). Currently, it does not consider pure fp16 variants such as RWKV x060c.
+
+Some benchmarks (vs CUDA kernel)
+| Test Case | Implementation | Forward Time | Backward Time |
+|-----------|----------------|--------------|---------------|
+| Test Case 1: B=8, T=4096, C=4096, HEAD_SIZE=64 | CUDA BF16 | 9.69 ms | 46.41 ms |
+| | FLA BF16 | 13.06 ms | 40.79 ms |
+| Test Case 2: B=32, T=4096, C=4096, HEAD_SIZE=64 | CUDA BF16 | 32.80 ms | 148.05 ms |
+| | FLA BF16 | 50.17 ms | 162.42 ms |
+| Test Case 3: B=8, T=4096, C=4096, HEAD_SIZE=128 | CUDA BF16 | 12.01 ms | 65.68 ms |
+| | FLA BF16 | 14.18 ms | 51.36 ms |
+| Test Case 4: B=8, T=4096, C=4096, HEAD_SIZE=256 | CUDA BF16 | 40.82 ms | 225.59 ms |
+| | FLA BF16 | 19.34 ms | 72.03 ms |
+| Test Case 5: B=16, T=4096, C=4096, HEAD_SIZE=128 | CUDA BF16 | 20.56 ms | 109.76 ms |
+| | FLA BF16 | 27.72 ms | 102.35 ms |
+| Test Case 6: B=16, T=4096, C=4096, HEAD_SIZE=256 | CUDA BF16 | 61.54 ms | 344.85 ms |
+| | FLA BF16 | 38.24 ms | 144.12 ms |
+
+>Since the project is under active development, the calculated times may differ.
+
+```
+@torch.compile
+def run_fla_kernel(B, T, C, H, r, k, v, w, u, s):
+    r = r.view(B,T,H,-1).transpose(1,2)
+    k = k.view(B,T,H,-1).transpose(1,2)
+    v = v.view(B,T,H,-1).transpose(1,2)
+    w = -torch.exp(w.view(B,T,H,-1).transpose(1,2))
+    u = u.view(1, H, 1, -1)
+    o, final_state = naive_recurrent_rwkv6_my(r, k, v, w, u=u, scale=1, initial_state=s, output_final_state=True)
+    return o.transpose(1,2).reshape(B,T,C), final_state
+```
 >This repo aims at providing a collection of efficient Triton-based implementations for state-of-the-art linear attention models. **Any pull requests are welcome!**
 
 <div align="center">

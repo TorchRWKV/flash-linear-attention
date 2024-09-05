@@ -141,5 +141,8 @@ setup(
     ],
     extras_require={
         'conv1d': ['causal-conv1d>=1.4.0']
-    }
+    },
+    conflict=[
+        "fla"
+    ]
 )

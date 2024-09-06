@@ -50,6 +50,54 @@ def run_fla_kernel(B, T, C, H, r, k, v, w, u, s):
   <img width="400" alt="image" src="https://github.com/sustcsonglin/flash-linear-attention/assets/18402347/02ff2e26-1495-4088-b701-e72cd65ac6cf">
 </div>
 
+# Installation
+
+The following requirements should be satisfied
+- [PyTorch](https://pytorch.org/) >= 2.0
+- [Triton](https://github.com/openai/triton) >=2.2 (3.0 is the best choice)
+- [einops](https://einops.rocks/)
+
+As `fla` is actively developed now, you should alwayd check for latest version `pip install --upgrade rwkv-fla`
+
+If you do need to use `fla` ops/modules and contemplate further explorations, an alternative way is to install the package from source
+```sh
+pip install -U git+https://github.com/TorchRWKV/flash-linear-attention
+```
+or
+```sh
+pip install -U git+https://gitee.com/uniartisan2018/flash-linear-attention
+```
+or manage `fla` with submodules
+```sh
+git submodule add https://github.com/TorchRWKV/flash-linear-attention.git 3rdparty/rwkv-fla
+ln -s 3rdparty/rwkv-fla/fla fla
+```
+
+> [!CAUTION]
+> If you're not working with Triton v2.2 or its nightly release, it's important to be aware of potential issues with the `FusedChunk` implementation, detailed in this [issue](https://github.com/openai/triton/issues/2852).
+You can run the test `python tests/test_fused_chunk.py` to check if your version is affected by similar compiler problems.
+While we offer some fixes for Triton<=2.1, be aware that these may result in reduced performance.
+>
+> For both Triton 2.2 and earlier versions (up to 2.1), you can reliably use the `Chunk` version (with hidden states materialized into HBMs).
+> After careful optimization, this version generally delivers high performance in most scenarios.
+
+
+## Acknowledgments
+
+The rwkv-fla project is a fork of the fla project. We extend our sincere gratitude to the original maintainers for their tremendous efforts and contributions. This project builds upon the work described in:
+
+```
+@software{yang2024fla,
+  title  = {FLA: A Triton-Based Library for Hardware-Efficient Implementations of Linear Attention Mechanism},
+  author = {Yang, Songlin and Zhang, Yu},
+  url    = {https://github.com/sustcsonglin/flash-linear-attention},
+  month  = jan,
+  year   = {2024}
+}
+```
+
+Their innovative work and expertise laid the foundation for the development of rwkv-fla.
+
 # Models
 
 |  Date   |             Model              |                                           Title                                           |                                               Paper                                                |                                                                                         Code                                                                                         |                                                  FLA impl                                                   |
@@ -72,32 +120,6 @@ def run_fla_kernel(B, T, C, H, r, k, v, w, u, s):
 | 2024-06 |             Samba              | Samba: Simple Hybrid State Space Models for Efficient Unlimited Context Language Modeling |                             [arxiv](https://arxiv.org/abs/2406.07522)                              |                                                                   [[official]](https://github.com/microsoft/Samba)                                                                   |          [code](https://github.com/sustcsonglin/flash-linear-attention/blob/main/fla/models/samba)          |
 | 2024-05 |             Mamba2              | Transformers are SSMs: Generalized Models and Efficient Algorithms Through Structured State Space Duality  |                             [arxiv](https://arxiv.org/abs/2405.21060)                          |                                                                   [[official]](https://github.com/state-spaces/mamba)                                                                   |          [code](https://github.com/sustcsonglin/flash-linear-attention/blob/main/fla/models/mamba2)          |
 
-
-# Installation
-
-The following requirements should be satisfied
-- [PyTorch](https://pytorch.org/) >= 2.0
-- [Triton](https://github.com/openai/triton) >=2.2
-- [einops](https://einops.rocks/)
-
-As `fla` is actively developed now, no released packages are provided at this time.
-If you do need to use `fla` ops/modules and contemplate further explorations, an alternative way is to install the package from source
-```sh
-pip install -U git+https://github.com/sustcsonglin/flash-linear-attention
-```
-or manage `fla` with submodules
-```sh
-git submodule add https://github.com/sustcsonglin/flash-linear-attention.git 3rdparty/flash-linear-attention
-ln -s 3rdparty/flash-linear-attention/fla fla
-```
-
-> [!CAUTION]
-> If you're not working with Triton v2.2 or its nightly release, it's important to be aware of potential issues with the `FusedChunk` implementation, detailed in this [issue](https://github.com/openai/triton/issues/2852).
-You can run the test `python tests/test_fused_chunk.py` to check if your version is affected by similar compiler problems.
-While we offer some fixes for Triton<=2.1, be aware that these may result in reduced performance.
->
-> For both Triton 2.2 and earlier versions (up to 2.1), you can reliably use the `Chunk` version (with hidden states materialized into HBMs).
-> After careful optimization, this version generally delivers high performance in most scenarios.
 
 # Usage
 

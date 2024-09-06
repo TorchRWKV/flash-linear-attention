@@ -16,7 +16,8 @@ def naive_recurrent_rwkv6(
     u: torch.Tensor,
     scale: Optional[float] = None,
     initial_state: Optional[torch.Tensor] = None,
-    output_final_state: bool = False
+    output_final_state: bool = False,
+    u_2d: bool = False
 ):
     orig_dtype = q.dtype
     B, H, T, K, V = q.shape[0], q.shape[1], q.shape[2], q.shape[3], v.shape[-1]
@@ -30,21 +31,31 @@ def naive_recurrent_rwkv6(
     if initial_state is not None:
         h += initial_state
 
-    for i in range(T):
-        q_i = q[:, :, i, :] * scale
-        k_i = k[:, :, i]
-        v_i = v[:, :, i, :]
-        w_i = w[:, :, i].exp()
-        kv_i = k_i[..., None] * v_i[..., None, :]
-        o_i = (h + u[..., None] * kv_i) * q_i[..., None]
-        o[:, :, i] = o_i.sum(-2)
-        h = h * w_i[..., None] + kv_i
+    if u_2d:
+        for i in range(T):
+            q_i = q[:, :, i, :] * scale
+            k_i = k[:, :, i]
+            v_i = v[:, :, i, :]
+            w_i = w[:, :, i].exp()
+            kv_i = k_i[..., None] * v_i[..., None, :]
+            o_i = (h + u[None, ..., None] * kv_i) * q_i[..., None]
+            o[:, :, i] = o_i.sum(-2)
+            h = h * w_i[..., None] + kv_i
+    else:
+        for i in range(T):
+            q_i = q[:, :, i, :] * scale
+            k_i = k[:, :, i]
+            v_i = v[:, :, i, :]
+            w_i = w[:, :, i].exp()
+            kv_i = k_i[..., None] * v_i[..., None, :]
+            o_i = (h + u[..., None] * kv_i) * q_i[..., None]
+            o[:, :, i] = o_i.sum(-2)
+            h = h * w_i[..., None] + kv_i
     ht = h if output_final_state else None
     return o.to(orig_dtype), ht
 
 
 @torch.no_grad
-# @torch.jit.script
 def naive_recurrent_rwkv6_bwd(
     q: torch.Tensor,
     k: torch.Tensor,
@@ -55,6 +66,7 @@ def naive_recurrent_rwkv6_bwd(
     do: torch.Tensor,
     dh_t: Optional[torch.Tensor] = None,
     initial_state: Optional[torch.Tensor] = None,
+    u_2d: bool = False
 ):
     q, k, v, w, u, o, do = (x.to(dtype=torch.float32) for x in (q, k, v, w, u, o, do))
     B, H, T, K, V = q.shape[0], q.shape[1], q.shape[2], q.shape[3], v.shape[-1]
@@ -85,21 +97,38 @@ def naive_recurrent_rwkv6_bwd(
     dk_aux = torch.zeros_like(k)
     dv = torch.zeros_like(v)
 
-    for i in range(T - 1, -1, -1):
-        d_kv_i = do[:, :, i, None, :] * q[:, :, i, :, None]
-        k_i = k[:, :, i]
-        v_i = v[:, :, i]
-        du_i = (d_kv_i * k_i[..., None] * v_i[..., None, :]).sum(-1)
-        du += du_i
-        dk_i = (dh * v_i[..., None, :]).sum(-1)
-        dk_aux[:, :, i] = dk_i
-        dk_i += (d_kv_i * u[..., None] * v_i[..., None, :]).sum(-1)
-        dv_i = (d_kv_i * u[..., None] * k_i[..., None]).sum(-2)
-        dv_i += (dh * k_i[..., None]).sum(-2)
+    if u_2d:
+        for i in range(T - 1, -1, -1):
+            d_kv_i = do[:, :, i, None, :] * q[:, :, i, :, None]
+            k_i = k[:, :, i]
+            v_i = v[:, :, i]
+            du_i = (d_kv_i * k_i[..., None] * v_i[..., None, :]).sum(-1)
+            du += du_i.sum(0)
+            dk_i = (dh * v_i[..., None, :]).sum(-1)
+            dk_aux[:, :, i] = dk_i
+            dk_i += (d_kv_i * u[None, ..., None] * v_i[..., None, :]).sum(-1)
+            dv_i = (d_kv_i * u[None, ..., None] * k_i[..., None]).sum(-2)
+            dv_i += (dh * k_i[..., None]).sum(-2)
 
-        dk[:, :, i] = dk_i
-        dv[:, :, i] = dv_i
-        dh = dh * w[:, :, i, :, None].exp() + d_kv_i
+            dk[:, :, i] = dk_i
+            dv[:, :, i] = dv_i
+            dh = dh * w[:, :, i, :, None].exp() + d_kv_i
+    else:
+        for i in range(T - 1, -1, -1):
+            d_kv_i = do[:, :, i, None, :] * q[:, :, i, :, None]
+            k_i = k[:, :, i]
+            v_i = v[:, :, i]
+            du_i = (d_kv_i * k_i[..., None] * v_i[..., None, :]).sum(-1)
+            du += du_i
+            dk_i = (dh * v_i[..., None, :]).sum(-1)
+            dk_aux[:, :, i] = dk_i
+            dk_i += (d_kv_i * u[..., None] * v_i[..., None, :]).sum(-1)
+            dv_i = (d_kv_i * u[..., None] * k_i[..., None]).sum(-2)
+            dv_i += (dh * k_i[..., None]).sum(-2)
+
+            dk[:, :, i] = dk_i
+            dv[:, :, i] = dv_i
+            dh = dh * w[:, :, i, :, None].exp() + d_kv_i
 
     # dw = q * dq_aux - k * dk_aux
     dw = torch.zeros_like(w)
@@ -113,12 +142,13 @@ class NativeRecurrentRWKV6Function(torch.autograd.Function):
     @staticmethod
     @contiguous
     @autocast_custom_fwd
-    def forward(ctx, q, k, v, w, u, scale, initial_state, output_final_state: bool = False, training: bool = True):
-        o, ht = naive_recurrent_rwkv6(q, k, v, w, u, scale, initial_state, output_final_state)
+    def forward(ctx, q, k, v, w, u, scale, initial_state, output_final_state: bool = False, u_2d: bool = False, training: bool = True):
+        o, ht = naive_recurrent_rwkv6(q, k, v, w, u, scale, initial_state, output_final_state, u_2d)
         if initial_state is not None:
             initial_state = initial_state.clone()
         if training:
             ctx.save_for_backward(q, k, v, w, u, o, initial_state)
+            ctx.u_2d = u_2d
         return o, ht
 
     @staticmethod
@@ -126,9 +156,9 @@ class NativeRecurrentRWKV6Function(torch.autograd.Function):
     @autocast_custom_bwd
     def backward(ctx, do, dht):
         q, k, v, w, u, o, initial_state = ctx.saved_tensors
-        dq, dk, dv, dw, du, dh = naive_recurrent_rwkv6_bwd(q, k, v, w, u, o, do, dht, initial_state)
+        dq, dk, dv, dw, du, dh = naive_recurrent_rwkv6_bwd(q, k, v, w, u, o, do, dht, initial_state, ctx.u_2d)
         dh = dh if initial_state is not None else None
-        return dq, dk, dv, dw, du, None, dh, None, None
+        return dq, dk, dv, dw, du, None, dh, None, None, None
 
 
 def native_recurrent_rwkv6(
@@ -165,9 +195,8 @@ def native_recurrent_rwkv6(
     """
     if scale == -1:
         scale = r.shape[-1] ** -0.5
-    if u.dim() == 2:
-        u = torch.broadcast_to(u.unsqueeze(0), (r.shape[0], *u.shape))
-    o, final_state = NativeRecurrentRWKV6Function.apply(r, k, v, w, u, scale, initial_state, output_final_state, training)
+    u_2d = True if u.dim() == 2 else False
+    o, final_state = NativeRecurrentRWKV6Function.apply(r, k, v, w, u, scale, initial_state, output_final_state, u_2d, training)
 
     return o, final_state
 

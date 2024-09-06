@@ -39,9 +39,9 @@ def run_fla_kernel(B, T, C, H, r, k, v, w, u, s):
     r = r.view(B,T,H,-1).transpose(1,2)
     k = k.view(B,T,H,-1).transpose(1,2)
     v = v.view(B,T,H,-1).transpose(1,2)
+    # u can be 3d or 2d (B, H, -1) or just (H, -1) to save VRAM
     w = -torch.exp(w.view(B,T,H,-1).transpose(1,2))
-    u = u.view(1, H, 1, -1)
-    o, final_state = chunk_rwkv6(r, k, v, w, u=u, scale=1, initial_state=s, output_final_state=True)
+    o, final_state = chunk_rwkv6(r, k, v, w, u=u, scale=1.0, initial_state=s, output_final_state=True)
     return o.transpose(1,2).reshape(B,T,C), final_state
 ```
 >This repo aims at providing a collection of efficient Triton-based implementations for state-of-the-art linear attention models. **Any pull requests are welcome!**

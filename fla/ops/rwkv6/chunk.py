@@ -73,7 +73,7 @@ def post_process_grad(
     dk,
     dq,
     du,
-    scale,
+    scale: tl.constexpr,
     s_k_h,
     s_k_t,
     s_k_d,
@@ -87,9 +87,10 @@ def post_process_grad(
     V: tl.constexpr,
     BK: tl.constexpr,
     BV: tl.constexpr,
+    U_2D: tl.constexpr,
 ):
     i_t, i_bh = tl.program_id(0), tl.program_id(1)
-
+    i_u = i_bh if not U_2D else i_bh % H
     # Note that BK = tl.next_power_of_2(K), BV = tl.next_power_of_2(V)
     p_q = tl.make_block_ptr(q + i_bh * s_k_h, (T, K), (s_k_t, s_k_d), (i_t * BT, 0), (BT, BK), (1, 0))
     p_dq = tl.make_block_ptr(dq + i_bh * s_k_h, (T, K), (s_k_t, s_k_d), (i_t * BT, 0), (BT, BK), (1, 0))
@@ -98,7 +99,7 @@ def post_process_grad(
     p_du = tl.make_block_ptr(du + i_bh * s_k_h, (T, K), (s_k_t, s_k_d), (i_t * BT, 0), (BT, BK), (1, 0))
     p_v = tl.make_block_ptr(v + i_bh * s_v_h, (T, V), (s_v_t, s_v_d), (i_t * BT, 0), (BT, BV), (1, 0))
     p_do = tl.make_block_ptr(do + i_bh * s_v_h, (T, V), (s_v_t, s_v_d), (i_t * BT, 0), (BT, BV), (1, 0))
-    p_u = tl.make_block_ptr(u + i_bh * K, (K,), (1,), (0,), (BK,), (0,))
+    p_u = tl.make_block_ptr(u + i_u * K, (K,), (1,), (0,), (BK,), (0,))
 
     b_q = tl.load(p_q, boundary_check=(0, 1)).to(tl.float32)
     b_k = tl.load(p_k, boundary_check=(0, 1)).to(tl.float32)
@@ -225,7 +226,7 @@ def chunk_rwkv6_fwd_kernel_intra(
     s_k_h,
     s_k_t,
     s_k_d,
-    scale,
+    scale: tl.constexpr,
     H: tl.constexpr,
     T: tl.constexpr,
     K: tl.constexpr,
@@ -234,10 +235,11 @@ def chunk_rwkv6_fwd_kernel_intra(
     BK: tl.constexpr,
     NC: tl.constexpr,
     DK: tl.constexpr,
-    GROUP_SIZE: tl.constexpr
+    GROUP_SIZE: tl.constexpr,
+    U_2D: tl.constexpr,
 ):
     i_k, i_c, i_bh = tl.program_id(0), tl.program_id(1), tl.program_id(2)
-
+    i_u = i_bh if not U_2D else i_bh % H
     # Group ID and position within group
     group_id = i_c // GROUP_SIZE
     local_id = i_c % GROUP_SIZE
@@ -289,7 +291,7 @@ def chunk_rwkv6_fwd_kernel_intra(
         o_g = i_bh * T * K + (i_t * BT + i_j * BC) * K + o_k
         o_A = (i_bh + i_k * n_bh) * T * BT + (i_t * BT + i_i * BC + tl.arange(0, BC)) * BT + i_j * BC
         m_A = (i_t * BT + i_i * BC + tl.arange(0, BC)) < T
-        p_u = tl.make_block_ptr(u + i_bh * DK, (DK,), (1,), (i_k * BK), (BK,), (0,))
+        p_u = tl.make_block_ptr(u + i_u * DK, (DK,), (1,), (i_k * BK), (BK,), (0,))
         b_u = tl.load(p_u, boundary_check=(0,))
         for j in range(BC):
             # [BK,]
@@ -336,7 +338,7 @@ def chunk_rwkv6_fwd_kernel_inter(
     s_h_h,
     s_h_t,
     s_h_d,
-    scale,
+    scale: tl.constexpr,
     T: tl.constexpr,
     K: tl.constexpr,
     V: tl.constexpr,
@@ -401,7 +403,7 @@ def chunk_rwkv6_bwd_kernel_dh(
     s_h_h,
     s_h_t,
     s_h_d,
-    scale,
+    scale: tl.constexpr,
     T: tl.constexpr,
     K: tl.constexpr,
     V: tl.constexpr,
@@ -482,7 +484,7 @@ def chunk_rwkv6_bwd_kernel_inter(
     s_h_h,
     s_h_t,
     s_h_d,
-    scale,
+    scale: tl.constexpr,
     T: tl.constexpr,
     K: tl.constexpr,
     V: tl.constexpr,
@@ -683,7 +685,7 @@ class ChunkRWKV6Function(torch.autograd.Function):
 
     @staticmethod
     @contiguous
-    def forward(ctx, r, k, v, g, u, scale, initial_state, output_final_state, checkpoint_level, training: bool = True):
+    def forward(ctx, r, k, v, g, u, scale, initial_state, output_final_state, checkpoint_level, u_2d: bool = False, training: bool = True):
         q = r  # alias
         B, H, T, K, V = *q.shape, v.shape[-1]
         BT, BC = 32, 16
@@ -729,6 +731,7 @@ class ChunkRWKV6Function(torch.autograd.Function):
             k.stride(1), k.stride(2), k.stride(3),
             scale,
             H=H, T=T, K=K, BT=BT, BC=BC, BK=BK, NC=NC, DK=K,
+            U_2D=u_2d
         )
         A = A.sum(0, dtype=A.dtype)
 
@@ -753,13 +756,14 @@ class ChunkRWKV6Function(torch.autograd.Function):
             ctx.BT = BT
             ctx.scale = scale
             ctx.checkpoint_level = checkpoint_level
+            ctx.u_2d = u_2d
         return o, final_state
 
     @staticmethod
     @contiguous
     def backward(ctx, do, dht=None):
         q, k, v, g, u, h, initial_state, A = ctx.saved_tensors
-        scale = ctx.scale
+        scale, u_2d = ctx.scale, ctx.u_2d
         dtype = q.dtype
         B, H, T, K, V = *q.shape, v.shape[-1]
         BT, BC = ctx.BT, 16
@@ -867,14 +871,14 @@ class ChunkRWKV6Function(torch.autograd.Function):
             q, k, v, u, do, dk, dq, du, scale,
             q.stride(1), q.stride(2), q.stride(3),
             v.stride(1), v.stride(2), v.stride(3), H=H,
-            T=T, BT=BT, K=K, V=V, BK=next_pk_2, BV=next_pv_2,
+            T=T, BT=BT, K=K, V=V, BK=next_pk_2, BV=next_pv_2, U_2D=u_2d,
             num_warps = num_warps,
             num_stages = num_stages
         )
-        du = du.sum(2)
+        du = du.sum([0, 2]) if u_2d else du.sum(2)
         dh0 = dh0.to(q) if initial_state is not None else None
         return dq.to(dtype), dk.to(dtype), dv.to(dtype), dg.to(dtype), du.to(dtype), None, \
-                dh0, None, None, None
+                dh0, None, None, None, None
 
 
 def chunk_rwkv6(
@@ -883,7 +887,7 @@ def chunk_rwkv6(
     v: torch.Tensor,
     g: torch.Tensor,
     u: torch.Tensor,
-    scale: Optional[int] = None,
+    scale: float = -1,
     initial_state: torch.Tensor = None,
     output_final_state: bool = False,
     checkpoint_level: Optional[int] = 0,
@@ -915,12 +919,11 @@ def chunk_rwkv6(
             - Level `1`: recompute the forward hidden states during backward.
     """
     assert checkpoint_level in [0, 1]
-    if scale is None:
+    if scale == -1:
         scale = r.shape[-1] ** -0.5
-    if u.dim() == 2:
-        u = u.unsqueeze(0).repeat(r.shape[0], 1, 1)
+    u_2d = True if u.dim() == 2 else False
     o, final_state = ChunkRWKV6Function.apply(r, k, v, g, u, scale, initial_state,
-                                              output_final_state, checkpoint_level, training)
+                                              output_final_state, checkpoint_level, u_2d, training)
     return o, final_state
 
 

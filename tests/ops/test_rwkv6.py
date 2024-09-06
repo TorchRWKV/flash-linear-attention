@@ -19,12 +19,14 @@ torch.backends.cuda.matmul.allow_tf32 = False
 @pytest.mark.parametrize("T", [1024])
 @pytest.mark.parametrize("D", [100])
 @pytest.mark.parametrize("dtype", [torch.float])
+@pytest.mark.parametrize("u_2d", [True, False])
 def test_recurrent_naive(
     B: int,
     H: int,
     T: int,
     D: int,
-    dtype: torch.dtype
+    dtype: torch.dtype,
+    u_2d: bool
 ):
     torch.manual_seed(42)
 
@@ -32,7 +34,10 @@ def test_recurrent_naive(
     k = torch.randn(B, H, T, D, device=device).to(dtype).requires_grad_(True)
     v = torch.randn(B, H, T, 2*D, device=device).to(dtype).requires_grad_(True)
     w = F.logsigmoid(torch.randn(B, H, T, D, device=device)).to(dtype).requires_grad_(True)
-    u = torch.randn(B, H, D, device=device).to(dtype).requires_grad_(True)
+    if u_2d:
+        u = torch.randn(H, D, device=device).to(dtype).requires_grad_(True)
+    else:
+        u = torch.randn(B, H, D, device=device).to(dtype).requires_grad_(True)
     do = torch.rand_like(v, device=device)
     h = torch.randn(B, H, D, 2*D, device=device, dtype=dtype, requires_grad=True)
 
@@ -45,7 +50,7 @@ def test_recurrent_naive(
     du, u.grad = u.grad.clone(), None
     dh, h.grad = h.grad.clone(), None
 
-    dq2, dk2, dv2, dw2, du2, dh2 = naive_recurrent_rwkv6_bwd(q, k, v, w, u, o, do, initial_state=h)
+    dq2, dk2, dv2, dw2, du2, dh2 = naive_recurrent_rwkv6_bwd(q, k, v, w, u, o, do, initial_state=h, u_2d=u_2d)
 
     assert dq.allclose(dq2, atol=1e-3)
     assert dk.allclose(dk2, atol=1e-3)
@@ -61,13 +66,15 @@ def test_recurrent_naive(
 @pytest.mark.parametrize("D", [32, 64, 128])
 @pytest.mark.parametrize("dtype", [torch.float])
 @pytest.mark.parametrize("use_h", [False, True])
+@pytest.mark.parametrize("u_2d", [True, False])
 def test_fused_recurrent(
     B: int,
     H: int,
     T: int,
     D: int,
     dtype: torch.dtype,
-    use_h: bool
+    use_h: bool,
+    u_2d: bool
 ):
     torch.manual_seed(42)
     atol = 1e-3 if dtype == torch.float else 1e-1
@@ -76,7 +83,10 @@ def test_fused_recurrent(
     k = torch.randn(B, H, T, D, device=device).to(dtype).requires_grad_(True)
     v = torch.randn(B, H, T, 2*D, device=device).to(dtype).requires_grad_(True)
     w = F.logsigmoid(torch.randn(B, H, T, D, device=device)).to(dtype).requires_grad_(True)
-    u = torch.randn(H, D, device=device).to(dtype).requires_grad_(True)
+    if u_2d:
+        u = torch.randn(H, D, device=device).to(dtype).requires_grad_(True)
+    else:
+        u = (torch.randn(B, H, D).to(device).to(dtype)).requires_grad_(True)
     do = torch.rand_like(v, device=device)
     h = torch.randn(B, H, D, 2*D, device=device, dtype=dtype, requires_grad=True)
 
@@ -116,13 +126,15 @@ def test_fused_recurrent(
 @pytest.mark.parametrize("D", [32, 64, 128])
 @pytest.mark.parametrize("dtype", [torch.float])
 @pytest.mark.parametrize("use_h", [False, True])
+@pytest.mark.parametrize("u_2d", [True, False])
 def test_chunk_with_initial_h(
     B: int,
     H: int,
     T: int,
     D: int,
     dtype: torch.dtype,
-    use_h: bool
+    use_h: bool,
+    u_2d: bool
 ):
     torch.manual_seed(42)
     atol = 1e-3 if dtype == torch.float else 1e-2
@@ -131,7 +143,10 @@ def test_chunk_with_initial_h(
     k = torch.randn(B, H, T, D, device=device).to(dtype).requires_grad_(True)
     v = torch.randn(B, H, T, 2*D, device=device).to(dtype).requires_grad_(True)
     w = F.logsigmoid(torch.randn(B, H, T, D, device=device)).to(dtype).requires_grad_(True)
-    u = torch.randn(H, D, device=device).to(dtype).requires_grad_(True)
+    if u_2d:
+        u = torch.randn(H, D, device=device).to(dtype).requires_grad_(True)
+    else:
+        u = (torch.randn(B, H, D).to(device).to(dtype)).requires_grad_(True)
     do = torch.rand_like(v, device=device)
     h = torch.randn(B, H, D, 2*D, device=device, dtype=dtype, requires_grad=True)
 
@@ -272,13 +287,13 @@ def test_chunk_error_ratio(
     gh_chunk = initial_state.grad.data.clone()
     clear_grad()
 
-    assert get_err_ratio(yF16, y32) < atol, f"output, {get_err_ratio(yF16, y32)}"
-    assert get_err_ratio(gr_chunk, gr) < atol, f"r, {get_err_ratio(gr_chunk, gr)}"
-    assert get_err_ratio(gk_chunk, gk) < atol, f"k, {get_err_ratio(gk_chunk, gk)}"
-    assert get_err_ratio(gv_chunk, gv) < atol, f"v, {get_err_ratio(gv_chunk, gv)}"
-    assert get_err_ratio(gw_chunk, gw) < atol, f"w, {get_err_ratio(gw_chunk, gw)}"
-    assert get_err_ratio(gu_chunk, gu) < atol, f"u, {get_err_ratio(gu_chunk, gu)}"
-    assert get_err_ratio(gh_chunk, gh) < atol, f"h, {get_err_ratio(gh_chunk, gh)}"
+    assert get_err_ratio(yF16, y32) < atol, f"output, {get_err_ratio(yF16, y32)}, dtype = {dtype}"
+    assert get_err_ratio(gr_chunk, gr) < atol, f"r, {get_err_ratio(gr_chunk, gr)}, dtype = {dtype}"
+    assert get_err_ratio(gk_chunk, gk) < atol, f"k, {get_err_ratio(gk_chunk, gk)}, dtype = {dtype}"
+    assert get_err_ratio(gv_chunk, gv) < atol, f"v, {get_err_ratio(gv_chunk, gv)}, dtype = {dtype}"
+    assert get_err_ratio(gw_chunk, gw) < atol, f"w, {get_err_ratio(gw_chunk, gw)}, dtype = {dtype}"
+    assert get_err_ratio(gu_chunk, gu) < atol, f"u, {get_err_ratio(gu_chunk, gu)}, dtype = {dtype}"
+    assert get_err_ratio(gh_chunk, gh) < atol, f"h, {get_err_ratio(gh_chunk, gh)}, dtype = {dtype}"
 
 
 
@@ -371,19 +386,19 @@ def test_chunk_error_ratio_multi_state(
     gh_chunk = initial_state.grad.data.clone()
     clear_grad()
 
-    assert get_err_ratio(yF16_1, y32_1) < atol, f"output, {get_err_ratio(yF16_1, y32_1)}"
-    assert get_err_ratio(gr_chunk, gr) < atol, f"r, {get_err_ratio(gr_chunk, gr)}"
-    assert get_err_ratio(gk_chunk, gk) < atol, f"k, {get_err_ratio(gk_chunk, gk)}"
-    assert get_err_ratio(gv_chunk, gv) < atol, f"v, {get_err_ratio(gv_chunk, gv)}"
+    assert get_err_ratio(yF16_1, y32_1) < atol, f"output, {get_err_ratio(yF16_1, y32_1)}, dtype = {dtype}"
+    assert get_err_ratio(gr_chunk, gr) < atol, f"r, {get_err_ratio(gr_chunk, gr)}, dtype = {dtype}"
+    assert get_err_ratio(gk_chunk, gk) < atol, f"k, {get_err_ratio(gk_chunk, gk)}, dtype = {dtype}"
+    assert get_err_ratio(gv_chunk, gv) < atol, f"v, {get_err_ratio(gv_chunk, gv)}, dtype = {dtype}"
     # assert get_err_ratio(gw_chunk, gw) < atol # This will fail because of the log space
-    assert get_err_ratio(gu_chunk, gu) < atol, f"u, {get_err_ratio(gu_chunk, gu)}"
-    assert get_err_ratio(gh_chunk, gh) < atol, f"h, {get_err_ratio(gh_chunk, gh)}"
-    assert get_err_ratio(gr_chunk1, gr1) < atol, f"r1, {get_err_ratio(gr_chunk1, gr1)}"
-    assert get_err_ratio(gk_chunk1, gk1) < atol, f"k1, {get_err_ratio(gk_chunk1, gk1)}"
-    assert get_err_ratio(gv_chunk1, gv1) < atol, f"v1, {get_err_ratio(gv_chunk1, gv1)}"
-    assert get_err_ratio(gw_chunk1, gw1) < atol, f"w1, {get_err_ratio(gw_chunk1, gw1)}"
-    assert get_err_ratio(gu_chunk1, gu1) < atol, f"u1, {get_err_ratio(gu_chunk1, gu1)}"
-    assert get_err_ratio(gh_chunk, gh) < atol, f"h, {get_err_ratio(gh_chunk, gh)}"
+    assert get_err_ratio(gu_chunk, gu) < atol, f"u, {get_err_ratio(gu_chunk, gu)}, dtype = {dtype}"
+    assert get_err_ratio(gh_chunk, gh) < atol, f"h, {get_err_ratio(gh_chunk, gh)}, dtype = {dtype}"
+    assert get_err_ratio(gr_chunk1, gr1) < atol, f"r1, {get_err_ratio(gr_chunk1, gr1)}, dtype = {dtype}"
+    assert get_err_ratio(gk_chunk1, gk1) < atol, f"k1, {get_err_ratio(gk_chunk1, gk1)}, dtype = {dtype}"
+    assert get_err_ratio(gv_chunk1, gv1) < atol, f"v1, {get_err_ratio(gv_chunk1, gv1)}, dtype = {dtype}"
+    assert get_err_ratio(gw_chunk1, gw1) < atol, f"w1, {get_err_ratio(gw_chunk1, gw1)}, dtype = {dtype}"
+    assert get_err_ratio(gu_chunk1, gu1) < atol, f"u1, {get_err_ratio(gu_chunk1, gu1)}, dtype = {dtype}"
+    assert get_err_ratio(gh_chunk, gh) < atol, f"h, {get_err_ratio(gh_chunk, gh)}, dtype = {dtype}"
 
     clear_grad()
     y32, state = RUN_FLA_NATIVE_MANUAL_BACKWARD(B, T, C, H, r.float(), k.float(), v.float(), w.float(), u.float(), initial_state.float())
@@ -421,19 +436,19 @@ def test_chunk_error_ratio_multi_state(
     gh_chunk = initial_state.grad.data.clone()
     clear_grad()
 
-    assert get_err_ratio(yF16_1, y32_1) < atol, f"output, {get_err_ratio(yF16_1, y32_1)}"
-    assert get_err_ratio(gr_chunk, gr) < atol, f"r, {get_err_ratio(gr_chunk, gr)}"
-    assert get_err_ratio(gk_chunk, gk) < atol, f"k, {get_err_ratio(gk_chunk, gk)}"
-    assert get_err_ratio(gv_chunk, gv) < atol, f"v, {get_err_ratio(gv_chunk, gv)}"
-    assert get_err_ratio(gw_chunk, gw) < atol, f"w, {get_err_ratio(gw_chunk, gw)}"
-    assert get_err_ratio(gu_chunk, gu) < atol, f"u, {get_err_ratio(gu_chunk, gu)}"
-    assert get_err_ratio(gh_chunk, gh) < atol, f"h, {get_err_ratio(gh_chunk, gh)}"
-    assert get_err_ratio(gr_chunk1, gr1) < atol, f"r1, {get_err_ratio(gr_chunk1, gr1)}"
-    assert get_err_ratio(gk_chunk1, gk1) < atol, f"k1, {get_err_ratio(gk_chunk1, gk1)}"
-    assert get_err_ratio(gv_chunk1, gv1) < atol, f"v1, {get_err_ratio(gv_chunk1, gv1)}"
-    assert get_err_ratio(gw_chunk1, gw1) < atol, f"w1, {get_err_ratio(gw_chunk1, gw1)}"
-    assert get_err_ratio(gu_chunk1, gu1) < atol, f"u1, {get_err_ratio(gu_chunk1, gu1)}"
-    assert get_err_ratio(gh_chunk, gh) < atol, f"h, {get_err_ratio(gh_chunk, gh)}"
+    assert get_err_ratio(yF16_1, y32_1) < atol, f"output, {get_err_ratio(yF16_1, y32_1)}, dtype = {dtype}"
+    assert get_err_ratio(gr_chunk, gr) < atol, f"r, {get_err_ratio(gr_chunk, gr)}, dtype = {dtype}"
+    assert get_err_ratio(gk_chunk, gk) < atol, f"k, {get_err_ratio(gk_chunk, gk)}, dtype = {dtype}"
+    assert get_err_ratio(gv_chunk, gv) < atol, f"v, {get_err_ratio(gv_chunk, gv)}, dtype = {dtype}"
+    assert get_err_ratio(gw_chunk, gw) < atol, f"w, {get_err_ratio(gw_chunk, gw)}, dtype = {dtype}"
+    assert get_err_ratio(gu_chunk, gu) < atol, f"u, {get_err_ratio(gu_chunk, gu)}, dtype = {dtype}"
+    assert get_err_ratio(gh_chunk, gh) < atol, f"h, {get_err_ratio(gh_chunk, gh)}, dtype = {dtype}"
+    assert get_err_ratio(gr_chunk1, gr1) < atol, f"r1, {get_err_ratio(gr_chunk1, gr1)}, dtype = {dtype}"
+    assert get_err_ratio(gk_chunk1, gk1) < atol, f"k1, {get_err_ratio(gk_chunk1, gk1)}, dtype = {dtype}"
+    assert get_err_ratio(gv_chunk1, gv1) < atol, f"v1, {get_err_ratio(gv_chunk1, gv1)}, dtype = {dtype}"
+    assert get_err_ratio(gw_chunk1, gw1) < atol, f"w1, {get_err_ratio(gw_chunk1, gw1)}, dtype = {dtype}"
+    assert get_err_ratio(gu_chunk1, gu1) < atol, f"u1, {get_err_ratio(gu_chunk1, gu1)}, dtype = {dtype}"
+    assert get_err_ratio(gh_chunk, gh) < atol, f"h, {get_err_ratio(gh_chunk, gh)}, dtype = {dtype}"
 
 
 
@@ -472,18 +487,18 @@ def test_chunk_error_ratio_multi_state(
     gh_chunk = initial_state.grad.data.clone()
     clear_grad()
 
-    assert get_err_ratio(yF16_1, y32_1) < atol, f"output, {get_err_ratio(yF16_1, y32_1)}"
-    assert get_err_ratio(gr_chunk, gr) < atol, f"r, {get_err_ratio(gr_chunk, gr)}"
-    assert get_err_ratio(gk_chunk, gk) < atol, f"k, {get_err_ratio(gk_chunk, gk)}"
-    assert get_err_ratio(gv_chunk, gv) < atol, f"v, {get_err_ratio(gv_chunk, gv)}"
-    assert get_err_ratio(gw_chunk, gw) < atol, f"w, {get_err_ratio(gw_chunk, gw)}"
-    assert get_err_ratio(gu_chunk, gu) < atol, f"u, {get_err_ratio(gu_chunk, gu)}"
-    assert get_err_ratio(gh_chunk, gh) < atol, f"h, {get_err_ratio(gh_chunk, gh)}"
-    assert get_err_ratio(gr_chunk1, gr1) < atol, f"r1, {get_err_ratio(gr_chunk1, gr1)}"
-    assert get_err_ratio(gk_chunk1, gk1) < atol, f"k1, {get_err_ratio(gk_chunk1, gk1)}"
-    assert get_err_ratio(gv_chunk1, gv1) < atol, f"v1, {get_err_ratio(gv_chunk1, gv1)}"
-    assert get_err_ratio(gw_chunk1, gw1) < atol, f"w1, {get_err_ratio(gw_chunk1, gw1)}"
-    assert get_err_ratio(gu_chunk1, gu1) < atol, f"u1, {get_err_ratio(gu_chunk1, gu1)}"
+    assert get_err_ratio(yF16_1, y32_1) < atol, f"output, {get_err_ratio(yF16_1, y32_1)}, dtype = {dtype}"
+    assert get_err_ratio(gr_chunk, gr) < atol, f"r, {get_err_ratio(gr_chunk, gr)}, dtype = {dtype}"
+    assert get_err_ratio(gk_chunk, gk) < atol, f"k, {get_err_ratio(gk_chunk, gk)}, dtype = {dtype}"
+    assert get_err_ratio(gv_chunk, gv) < atol, f"v, {get_err_ratio(gv_chunk, gv)}, dtype = {dtype}"
+    assert get_err_ratio(gw_chunk, gw) < atol, f"w, {get_err_ratio(gw_chunk, gw)}, dtype = {dtype}"
+    assert get_err_ratio(gu_chunk, gu) < atol, f"u, {get_err_ratio(gu_chunk, gu)}, dtype = {dtype}"
+    assert get_err_ratio(gh_chunk, gh) < atol, f"h, {get_err_ratio(gh_chunk, gh)}, dtype = {dtype}"
+    assert get_err_ratio(gr_chunk1, gr1) < atol, f"r1, {get_err_ratio(gr_chunk1, gr1)}, dtype = {dtype}"
+    assert get_err_ratio(gk_chunk1, gk1) < atol, f"k1, {get_err_ratio(gk_chunk1, gk1)}, dtype = {dtype}"
+    assert get_err_ratio(gv_chunk1, gv1) < atol, f"v1, {get_err_ratio(gv_chunk1, gv1)}, dtype = {dtype}"
+    assert get_err_ratio(gw_chunk1, gw1) < atol, f"w1, {get_err_ratio(gw_chunk1, gw1)}, dtype = {dtype}"
+    assert get_err_ratio(gu_chunk1, gu1) < atol, f"u1, {get_err_ratio(gu_chunk1, gu1)}, dtype = {dtype}"
 
 @pytest.mark.parametrize("B", [2])
 @pytest.mark.parametrize("T", [512])
@@ -590,8 +605,6 @@ def test_multi_state_backworad_with_native(
     y_text, text_state = RUN_FLA_CHUNK(B, T, C, H, r_text, k_text, v_text, w_text, u, h=img_state)
 
     LOSS(y_text).backward()
-    assert get_err_ratio(gproj, gproj1) < atol, f"proj, {get_err_ratio(gproj, gproj1)}"
+    assert get_err_ratio(gproj, gproj1) < atol, f"proj, {get_err_ratio(gproj, gproj1)}, dtype = {dtype}"
     has_non_zero = torch.any(gproj1 != 0).item()
     assert has_non_zero, "gproj1 is all zeros!"
-
-

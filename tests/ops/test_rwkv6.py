@@ -272,13 +272,13 @@ def test_chunk_error_ratio(
     gh_chunk = initial_state.grad.data.clone()
     clear_grad()
 
-    assert get_err_ratio(yF16, y32) < atol
-    assert get_err_ratio(gr_chunk, gr) < atol
-    assert get_err_ratio(gk_chunk, gk) < atol
-    assert get_err_ratio(gv_chunk, gv) < atol
-    assert get_err_ratio(gw_chunk, gw) < atol
-    assert get_err_ratio(gu_chunk, gu) < atol
-    assert get_err_ratio(gh_chunk, gh) < atol
+    assert get_err_ratio(yF16, y32) < atol, f"output, {get_err_ratio(yF16, y32)}"
+    assert get_err_ratio(gr_chunk, gr) < atol, f"r, {get_err_ratio(gr_chunk, gr)}"
+    assert get_err_ratio(gk_chunk, gk) < atol, f"k, {get_err_ratio(gk_chunk, gk)}"
+    assert get_err_ratio(gv_chunk, gv) < atol, f"v, {get_err_ratio(gv_chunk, gv)}"
+    assert get_err_ratio(gw_chunk, gw) < atol, f"w, {get_err_ratio(gw_chunk, gw)}"
+    assert get_err_ratio(gu_chunk, gu) < atol, f"u, {get_err_ratio(gu_chunk, gu)}"
+    assert get_err_ratio(gh_chunk, gh) < atol, f"h, {get_err_ratio(gh_chunk, gh)}"
 
 
 
@@ -371,19 +371,19 @@ def test_chunk_error_ratio_multi_state(
     gh_chunk = initial_state.grad.data.clone()
     clear_grad()
 
-    assert get_err_ratio(yF16_1, y32_1) < atol
-    assert get_err_ratio(gr_chunk, gr) < atol
-    assert get_err_ratio(gk_chunk, gk) < atol
-    assert get_err_ratio(gv_chunk, gv) < atol
+    assert get_err_ratio(yF16_1, y32_1) < atol, f"output, {get_err_ratio(yF16_1, y32_1)}"
+    assert get_err_ratio(gr_chunk, gr) < atol, f"r, {get_err_ratio(gr_chunk, gr)}"
+    assert get_err_ratio(gk_chunk, gk) < atol, f"k, {get_err_ratio(gk_chunk, gk)}"
+    assert get_err_ratio(gv_chunk, gv) < atol, f"v, {get_err_ratio(gv_chunk, gv)}"
     # assert get_err_ratio(gw_chunk, gw) < atol # This will fail because of the log space
-    assert get_err_ratio(gu_chunk, gu) < atol
-    assert get_err_ratio(gh_chunk, gh) < atol
-    assert get_err_ratio(gr_chunk1, gr1) < atol
-    assert get_err_ratio(gk_chunk1, gk1) < atol
-    assert get_err_ratio(gv_chunk1, gv1) < atol
-    assert get_err_ratio(gw_chunk1, gw1) < atol
-    assert get_err_ratio(gu_chunk1, gu1) < atol
-    assert get_err_ratio(gh_chunk, gh) < atol
+    assert get_err_ratio(gu_chunk, gu) < atol, f"u, {get_err_ratio(gu_chunk, gu)}"
+    assert get_err_ratio(gh_chunk, gh) < atol, f"h, {get_err_ratio(gh_chunk, gh)}"
+    assert get_err_ratio(gr_chunk1, gr1) < atol, f"r1, {get_err_ratio(gr_chunk1, gr1)}"
+    assert get_err_ratio(gk_chunk1, gk1) < atol, f"k1, {get_err_ratio(gk_chunk1, gk1)}"
+    assert get_err_ratio(gv_chunk1, gv1) < atol, f"v1, {get_err_ratio(gv_chunk1, gv1)}"
+    assert get_err_ratio(gw_chunk1, gw1) < atol, f"w1, {get_err_ratio(gw_chunk1, gw1)}"
+    assert get_err_ratio(gu_chunk1, gu1) < atol, f"u1, {get_err_ratio(gu_chunk1, gu1)}"
+    assert get_err_ratio(gh_chunk, gh) < atol, f"h, {get_err_ratio(gh_chunk, gh)}"
 
     clear_grad()
     y32, state = RUN_FLA_NATIVE_MANUAL_BACKWARD(B, T, C, H, r.float(), k.float(), v.float(), w.float(), u.float(), initial_state.float())
@@ -421,19 +421,19 @@ def test_chunk_error_ratio_multi_state(
     gh_chunk = initial_state.grad.data.clone()
     clear_grad()
 
-    assert get_err_ratio(yF16_1, y32_1) < atol
-    assert get_err_ratio(gr_chunk, gr) < atol
-    assert get_err_ratio(gk_chunk, gk) < atol
-    assert get_err_ratio(gv_chunk, gv) < atol
-    assert get_err_ratio(gw_chunk, gw) < atol
-    assert get_err_ratio(gu_chunk, gu) < atol
-    assert get_err_ratio(gh_chunk, gh) < atol
-    assert get_err_ratio(gr_chunk1, gr1) < atol
-    assert get_err_ratio(gk_chunk1, gk1) < atol
-    assert get_err_ratio(gv_chunk1, gv1) < atol
-    assert get_err_ratio(gw_chunk1, gw1) < atol
-    assert get_err_ratio(gu_chunk1, gu1) < atol
-    assert get_err_ratio(gh_chunk, gh) < atol
+    assert get_err_ratio(yF16_1, y32_1) < atol, f"output, {get_err_ratio(yF16_1, y32_1)}"
+    assert get_err_ratio(gr_chunk, gr) < atol, f"r, {get_err_ratio(gr_chunk, gr)}"
+    assert get_err_ratio(gk_chunk, gk) < atol, f"k, {get_err_ratio(gk_chunk, gk)}"
+    assert get_err_ratio(gv_chunk, gv) < atol, f"v, {get_err_ratio(gv_chunk, gv)}"
+    assert get_err_ratio(gw_chunk, gw) < atol, f"w, {get_err_ratio(gw_chunk, gw)}"
+    assert get_err_ratio(gu_chunk, gu) < atol, f"u, {get_err_ratio(gu_chunk, gu)}"
+    assert get_err_ratio(gh_chunk, gh) < atol, f"h, {get_err_ratio(gh_chunk, gh)}"
+    assert get_err_ratio(gr_chunk1, gr1) < atol, f"r1, {get_err_ratio(gr_chunk1, gr1)}"
+    assert get_err_ratio(gk_chunk1, gk1) < atol, f"k1, {get_err_ratio(gk_chunk1, gk1)}"
+    assert get_err_ratio(gv_chunk1, gv1) < atol, f"v1, {get_err_ratio(gv_chunk1, gv1)}"
+    assert get_err_ratio(gw_chunk1, gw1) < atol, f"w1, {get_err_ratio(gw_chunk1, gw1)}"
+    assert get_err_ratio(gu_chunk1, gu1) < atol, f"u1, {get_err_ratio(gu_chunk1, gu1)}"
+    assert get_err_ratio(gh_chunk, gh) < atol, f"h, {get_err_ratio(gh_chunk, gh)}"
 
 
 
@@ -472,17 +472,126 @@ def test_chunk_error_ratio_multi_state(
     gh_chunk = initial_state.grad.data.clone()
     clear_grad()
 
-    assert get_err_ratio(yF16_1, y32_1) < atol
-    assert get_err_ratio(gr_chunk, gr) < atol
-    assert get_err_ratio(gk_chunk, gk) < atol
-    assert get_err_ratio(gv_chunk, gv) < atol
-    assert get_err_ratio(gw_chunk, gw) < atol
-    assert get_err_ratio(gu_chunk, gu) < atol
-    assert get_err_ratio(gh_chunk, gh) < atol
-    assert get_err_ratio(gr_chunk1, gr1) < atol
-    assert get_err_ratio(gk_chunk1, gk1) < atol
-    assert get_err_ratio(gv_chunk1, gv1) < atol
-    assert get_err_ratio(gw_chunk1, gw1) < atol
-    assert get_err_ratio(gu_chunk1, gu1) < atol
+    assert get_err_ratio(yF16_1, y32_1) < atol, f"output, {get_err_ratio(yF16_1, y32_1)}"
+    assert get_err_ratio(gr_chunk, gr) < atol, f"r, {get_err_ratio(gr_chunk, gr)}"
+    assert get_err_ratio(gk_chunk, gk) < atol, f"k, {get_err_ratio(gk_chunk, gk)}"
+    assert get_err_ratio(gv_chunk, gv) < atol, f"v, {get_err_ratio(gv_chunk, gv)}"
+    assert get_err_ratio(gw_chunk, gw) < atol, f"w, {get_err_ratio(gw_chunk, gw)}"
+    assert get_err_ratio(gu_chunk, gu) < atol, f"u, {get_err_ratio(gu_chunk, gu)}"
+    assert get_err_ratio(gh_chunk, gh) < atol, f"h, {get_err_ratio(gh_chunk, gh)}"
+    assert get_err_ratio(gr_chunk1, gr1) < atol, f"r1, {get_err_ratio(gr_chunk1, gr1)}"
+    assert get_err_ratio(gk_chunk1, gk1) < atol, f"k1, {get_err_ratio(gk_chunk1, gk1)}"
+    assert get_err_ratio(gv_chunk1, gv1) < atol, f"v1, {get_err_ratio(gv_chunk1, gv1)}"
+    assert get_err_ratio(gw_chunk1, gw1) < atol, f"w1, {get_err_ratio(gw_chunk1, gw1)}"
+    assert get_err_ratio(gu_chunk1, gu1) < atol, f"u1, {get_err_ratio(gu_chunk1, gu1)}"
+
+@pytest.mark.parametrize("B", [2])
+@pytest.mark.parametrize("T", [512])
+@pytest.mark.parametrize("C", [4096])
+@pytest.mark.parametrize("HEAD_SIZE", [64])
+@pytest.mark.parametrize("dtype", [torch.float, torch.bfloat16])
+def test_multi_state_backworad_with_native(
+    B: int,
+    T: int,
+    C: int,
+    HEAD_SIZE: int,
+    dtype: torch.dtype
+):
+    atol = 1e-3 if dtype == torch.float else 1e-2
+    import torch.nn as nn
+    H = C // HEAD_SIZE
+    with torch.no_grad():
+        u = torch.empty(H, HEAD_SIZE, device=device, dtype=dtype).uniform_(-1, 1).requires_grad_(True)
+        image_feature = torch.randn(B, T, C, device=device, dtype=dtype).requires_grad_(True)
+        text_emb = torch.randn(B, T, C, device=device, dtype=dtype).requires_grad_(True)
+
+    def clear_image_grad():
+        image_feature.requires_grad_()
+        u.requires_grad_()
+        text_emb.requires_grad_()
+        if image_feature.grad is not None: image_feature.grad.data.zero_()
+        if u.grad is not None: u.grad.data.zero_()
+        if text_emb.grad is not None: text_emb.grad.data.zero_()
+        if proj_layer.weight.grad is not None: proj_layer.weight.grad.data.zero_()
+    proj_layer = nn.Linear(C, C, bias=False, device=device, dtype=dtype)
+    linear_r = nn.Linear(C, C, bias=False, device=device, dtype=dtype)
+    linear_w = nn.Linear(C, C, bias=False, device=device, dtype=dtype)
+    linear_k = nn.Linear(C, C, bias=False, device=device, dtype=dtype)
+    linear_v = nn.Linear(C, C, bias=False, device=device, dtype=dtype)
+    linear_r.requires_grad_(False)
+    linear_w.requires_grad_(False)
+    linear_k.requires_grad_(False)
+    linear_v.requires_grad_(False)
+    img = proj_layer(image_feature)
+    r_img = linear_r(img)
+    w_img = linear_w(img)
+    k_img = linear_k(img)
+    v_img = linear_v(img)
+    y_img, img_state = RUN_FLA_NATIVE_MANUAL_BACKWARD(B, T, C, HEAD_SIZE, r_img.float(), k_img.float(), v_img.float(), w_img.float(), u.float(), h=None)
+
+    r_text = linear_r(text_emb)
+    w_text = linear_w(text_emb)
+    k_text = linear_k(text_emb)
+    v_text = linear_v(text_emb)
+    y_text, text_state = RUN_FLA_NATIVE_MANUAL_BACKWARD(B, T, C, H, r_text.float(), k_text.float(), v_text.float(), w_text.float(), u.float(), h=img_state.float())
+
+    LOSS(y_text).backward()
+    gproj = proj_layer.weight.grad.data.clone()
+    clear_image_grad()
+    img = proj_layer(image_feature)
+    r_img = linear_r(img)
+    w_img = linear_w(img)
+    k_img = linear_k(img)
+    v_img = linear_v(img)
+    y_img, img_state = RUN_FLA_FUSED(B, T, C, HEAD_SIZE, r_img, k_img, v_img, w_img, u, h=None)
+
+
+    r_text = linear_r(text_emb)
+    w_text = linear_w(text_emb)
+    k_text = linear_k(text_emb)
+    v_text = linear_v(text_emb)
+    y_text, text_state = RUN_FLA_FUSED(B, T, C, H, r_text, k_text, v_text, w_text, u, h=img_state)
+
+    LOSS(y_text).backward()
+    gproj1 = proj_layer.weight.grad.data.clone()
+    assert get_err_ratio(gproj, gproj1) < atol, f"proj, {get_err_ratio(gproj, gproj1)}"
+    has_non_zero = torch.any(gproj1 != 0).item()
+    assert has_non_zero, "gproj1 is all zeros!"
+
+    clear_image_grad()
+    img = proj_layer(image_feature)
+    r_img = linear_r(img)
+    w_img = linear_w(img)
+    k_img = linear_k(img)
+    v_img = linear_v(img)
+    y_img, img_state = RUN_FLA_NATIVE_MANUAL_BACKWARD(B, T, C, HEAD_SIZE, r_img.float(), k_img.float(), v_img.float(), w_img.float(), u.float(), h=None)
+
+    r_text = linear_r(text_emb)
+    w_text = linear_w(text_emb)
+    k_text = linear_k(text_emb)
+    v_text = linear_v(text_emb)
+    y_text, text_state = RUN_FLA_NATIVE_MANUAL_BACKWARD(B, T, C, H, r_text.float(), k_text.float(), v_text.float(), w_text.float(), u.float(), h=img_state.float())
+
+    LOSS(y_text).backward()
+    gproj = proj_layer.weight.grad.data.clone()
+    clear_image_grad()
+    img = proj_layer(image_feature)
+    r_img = linear_r(img)
+    w_img = linear_w(img)
+    k_img = linear_k(img)
+    v_img = linear_v(img)
+    y_img, img_state = RUN_FLA_CHUNK(B, T, C, HEAD_SIZE, r_img, k_img, v_img, w_img, u, h=None)
+
+
+    r_text = linear_r(text_emb)
+    w_text = linear_w(text_emb)
+    k_text = linear_k(text_emb)
+    v_text = linear_v(text_emb)
+    y_text, text_state = RUN_FLA_CHUNK(B, T, C, H, r_text, k_text, v_text, w_text, u, h=img_state)
+
+    LOSS(y_text).backward()
+    assert get_err_ratio(gproj, gproj1) < atol, f"proj, {get_err_ratio(gproj, gproj1)}"
+    has_non_zero = torch.any(gproj1 != 0).item()
+    assert has_non_zero, "gproj1 is all zeros!"
 
 

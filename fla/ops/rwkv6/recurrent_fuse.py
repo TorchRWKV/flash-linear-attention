@@ -338,7 +338,7 @@ class FusedRecurrentRWKV6Function(torch.autograd.Function):
             B=B, H=H, T=T, K=K, V=V, BK=BK, BV=BV,
             num_warps=num_warps,
             num_stages=num_stages,
-            USE_INITIAL_STATE=initial_state is not None,
+            USE_INITIAL_STATE=((initial_state is not None) or (dht is not None)),
             REVERSE=ctx.reverse,
         )
         dk = dk.sum(0).to(k)

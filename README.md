@@ -57,7 +57,9 @@ The following requirements should be satisfied
 - [Triton](https://github.com/openai/triton) >=2.2 (3.0 is the best choice)
 - [einops](https://einops.rocks/)
 
-As `fla` is actively developed now, you should alwayd check for latest version `pip install --upgrade rwkv-fla`
+As `fla` is actively developed now, you should alwayd check for latest version `pip install --upgrade rwkv-fla triton`
+
+Or you can install if with `pip install rwkv-fla[cuda]`, `pip install rwkv-fla[xpu]`, `pip install rwkv-fla[rocm]`
 
 If you do need to use `fla` ops/modules and contemplate further explorations, an alternative way is to install the package from source
 ```sh

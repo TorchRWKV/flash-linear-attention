@@ -134,13 +134,16 @@ setup(
     ],
     python_requires='>=3.7',
     install_requires=[
-        'triton>=2.2',
         'transformers',
         'einops',
         'ninja'
     ],
+    dependency_links=['https://download.pytorch.org/whl/nightly/'],
     extras_require={
-        'conv1d': ['causal-conv1d>=1.4.0']
+        'conv1d': ['causal-conv1d>=1.4.0'],
+        'cuda': ['pytorch-triton'],
+        'xpu': ['pytorch-triton-xpu'],
+        'rocm': ['pytorch-triton-rocm'],
     },
     conflict=[
         "fla"

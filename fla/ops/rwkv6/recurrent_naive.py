@@ -31,12 +31,14 @@ def naive_recurrent_rwkv6(
     if initial_state is not None:
         h += initial_state
 
+    w = w.exp()
+
     if u_2d:
         for i in range(T):
             q_i = q[:, :, i, :] * scale
             k_i = k[:, :, i]
             v_i = v[:, :, i, :]
-            w_i = w[:, :, i].exp()
+            w_i = w[:, :, i]
             kv_i = k_i[..., None] * v_i[..., None, :]
             o_i = (h + u[None, ..., None] * kv_i) * q_i[..., None]
             o[:, :, i] = o_i.sum(-2)
@@ -46,7 +48,7 @@ def naive_recurrent_rwkv6(
             q_i = q[:, :, i, :] * scale
             k_i = k[:, :, i]
             v_i = v[:, :, i, :]
-            w_i = w[:, :, i].exp()
+            w_i = w[:, :, i]
             kv_i = k_i[..., None] * v_i[..., None, :]
             o_i = (h + u[..., None] * kv_i) * q_i[..., None]
             o[:, :, i] = o_i.sum(-2)
@@ -77,10 +79,11 @@ def naive_recurrent_rwkv6_bwd(
     if initial_state is not None:
         h += initial_state
 
+    w = w.exp()
     for i in range(T):
         k_i = k[:, :, i]
         v_i = v[:, :, i]
-        w_i = w[:, :, i].exp()
+        w_i = w[:, :, i]
         kv_i = k_i[..., None] * v_i[..., None, :]
         h_i = (h + u[None, ..., None] * kv_i)
         dq_i = (do[:, :, i, None, :] * h_i).sum(-1)
@@ -112,7 +115,7 @@ def naive_recurrent_rwkv6_bwd(
 
             dk[:, :, i] = dk_i
             dv[:, :, i] = dv_i
-            dh = dh * w[:, :, i, :, None].exp() + d_kv_i
+            dh = dh * w[:, :, i, :, None] + d_kv_i
     else:
         for i in range(T - 1, -1, -1):
             d_kv_i = do[:, :, i, None, :] * q[:, :, i, :, None]
@@ -128,7 +131,7 @@ def naive_recurrent_rwkv6_bwd(
 
             dk[:, :, i] = dk_i
             dv[:, :, i] = dv_i
-            dh = dh * w[:, :, i, :, None].exp() + d_kv_i
+            dh = dh * w[:, :, i, :, None] + d_kv_i
 
     # dw = q * dq_aux - k * dk_aux
     dw = torch.zeros_like(w)

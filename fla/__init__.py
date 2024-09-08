@@ -1,5 +1,14 @@
 # -*- coding: utf-8 -*-
 
+try:
+    import triton
+except ImportError:
+    raise ImportError(
+        """Please install triton, you can install it with `pip install triton`
+Or you can install if with `pip install rwkv-fla[cuda]`, `pip install rwkv-fla[xpu]`, `pip install rwkv-fla[rocm]`
+For more information, please visit your Graphics Card's official website."""
+    )
+
 from fla.layers import (ABCAttention, Attention, BasedLinearAttention,
                         DeltaNet, GatedLinearAttention, HGRN2Attention,
                         LinearAttention, MultiScaleRetention,

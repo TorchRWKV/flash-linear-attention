@@ -887,7 +887,7 @@ def chunk_rwkv6(
     v: torch.Tensor,
     g: torch.Tensor,
     u: torch.Tensor,
-    scale: float = -1,
+    scale: float = -1.0,
     initial_state: torch.Tensor = None,
     output_final_state: bool = False,
     checkpoint_level: Optional[int] = 0,
@@ -919,7 +919,7 @@ def chunk_rwkv6(
             - Level `1`: recompute the forward hidden states during backward.
     """
     assert checkpoint_level in [0, 1]
-    if scale == -1:
+    if scale == -1.0:
         scale = r.shape[-1] ** -0.5
     u_2d = True if u.dim() == 2 else False
     o, final_state = ChunkRWKV6Function.apply(r, k, v, g, u, scale, initial_state,

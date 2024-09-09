@@ -369,7 +369,7 @@ def fused_recurrent_rwkv6(
     v: torch.Tensor,
     w: torch.Tensor,
     u: torch.Tensor,
-    scale: float = -1,
+    scale: float = -1.0,
     initial_state: torch.Tensor = None,
     output_final_state: bool = False,
     reverse: bool = False,
@@ -396,7 +396,7 @@ def fused_recurrent_rwkv6(
         output_final_state (Optional[bool]):
             Whether to output the final state of shape `(B, H, K, V)`. Default: `False`.
     """
-    if scale == -1:
+    if scale == -1.0:
         scale = r.shape[-1] ** -0.5
     u_2d = True if u.dim() == 2 else False
     o, final_state = FusedRecurrentRWKV6Function.apply(

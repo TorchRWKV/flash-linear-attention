@@ -20,13 +20,15 @@ torch.backends.cuda.matmul.allow_tf32 = False
 @pytest.mark.parametrize("D", [100])
 @pytest.mark.parametrize("dtype", [torch.float])
 @pytest.mark.parametrize("u_2d", [True, False])
+@pytest.mark.parametrize("scale", [-1.0, 1.0])
 def test_recurrent_naive(
     B: int,
     H: int,
     T: int,
     D: int,
     dtype: torch.dtype,
-    u_2d: bool
+    u_2d: bool,
+    scale: float
 ):
     torch.manual_seed(42)
 
@@ -41,7 +43,7 @@ def test_recurrent_naive(
     do = torch.rand_like(v, device=device)
     h = torch.randn(B, H, D, 2*D, device=device, dtype=dtype, requires_grad=True)
 
-    o, _ = naive_recurrent_rwkv6(q, k, v, w, u, scale=1.0, initial_state=h)
+    o, _ = naive_recurrent_rwkv6(q, k, v, w, u, scale=scale, initial_state=h)
     o.backward(do)
     dq, q.grad = q.grad.clone(), None
     dk, k.grad = k.grad.clone(), None
@@ -50,7 +52,7 @@ def test_recurrent_naive(
     du, u.grad = u.grad.clone(), None
     dh, h.grad = h.grad.clone(), None
 
-    dq2, dk2, dv2, dw2, du2, dh2 = naive_recurrent_rwkv6_bwd(q, k, v, w, u, o, do, initial_state=h, u_2d=u_2d)
+    dq2, dk2, dv2, dw2, du2, dh2 = naive_recurrent_rwkv6_bwd(q, k, v, w, u, o, do, initial_state=h, scale=scale, u_2d=u_2d)
 
     assert dq.allclose(dq2, atol=1e-3)
     assert dk.allclose(dk2, atol=1e-3)
@@ -67,6 +69,7 @@ def test_recurrent_naive(
 @pytest.mark.parametrize("dtype", [torch.float])
 @pytest.mark.parametrize("use_h", [False, True])
 @pytest.mark.parametrize("u_2d", [True, False])
+@pytest.mark.parametrize("scale", [-1.0, 1.0])
 def test_fused_recurrent(
     B: int,
     H: int,
@@ -74,7 +77,8 @@ def test_fused_recurrent(
     D: int,
     dtype: torch.dtype,
     use_h: bool,
-    u_2d: bool
+    u_2d: bool,
+    scale: float
 ):
     torch.manual_seed(42)
     atol = 1e-3 if dtype == torch.float else 1e-1
@@ -90,7 +94,7 @@ def test_fused_recurrent(
     do = torch.rand_like(v, device=device)
     h = torch.randn(B, H, D, 2*D, device=device, dtype=dtype, requires_grad=True)
 
-    ref_o, _ = native_recurrent_rwkv6(q, k, v, w, u, scale=1.0, initial_state=h if use_h else None, output_final_state=use_h)
+    ref_o, _ = native_recurrent_rwkv6(q, k, v, w, u, scale=scale, initial_state=h if use_h else None, output_final_state=use_h)
     ref_o.backward(do)
     ref_dq, q.grad = q.grad.clone(), None
     ref_dk, k.grad = k.grad.clone(), None
@@ -100,7 +104,7 @@ def test_fused_recurrent(
     if use_h:
         ref_dh, h.grad = h.grad.clone(), None
 
-    tri_o, _ = fused_recurrent_rwkv6(q, k, v, w, u, scale=1.0, initial_state=h if use_h else None, output_final_state=use_h)
+    tri_o, _ = fused_recurrent_rwkv6(q, k, v, w, u, scale=scale, initial_state=h if use_h else None, output_final_state=use_h)
     tri_o.backward(do)
     tri_dq, q.grad = q.grad.clone(), None
     tri_dk, k.grad = k.grad.clone(), None
@@ -127,6 +131,7 @@ def test_fused_recurrent(
 @pytest.mark.parametrize("dtype", [torch.float])
 @pytest.mark.parametrize("use_h", [False, True])
 @pytest.mark.parametrize("u_2d", [True, False])
+@pytest.mark.parametrize("scale", [-1.0, 1.0])
 def test_chunk_with_initial_h(
     B: int,
     H: int,
@@ -134,7 +139,8 @@ def test_chunk_with_initial_h(
     D: int,
     dtype: torch.dtype,
     use_h: bool,
-    u_2d: bool
+    u_2d: bool,
+    scale: float
 ):
     torch.manual_seed(42)
     atol = 1e-3 if dtype == torch.float else 1e-2
@@ -150,7 +156,7 @@ def test_chunk_with_initial_h(
     do = torch.rand_like(v, device=device)
     h = torch.randn(B, H, D, 2*D, device=device, dtype=dtype, requires_grad=True)
 
-    ref_o, _ = fused_recurrent_rwkv6(q, k, v, w, u, scale=1.0, initial_state=h if use_h else None, output_final_state=use_h)
+    ref_o, _ = fused_recurrent_rwkv6(q, k, v, w, u, scale=scale, initial_state=h if use_h else None, output_final_state=use_h)
     ref_o.backward(do)
     ref_dq, q.grad = q.grad.clone(), None
     ref_dk, k.grad = k.grad.clone(), None
@@ -160,7 +166,7 @@ def test_chunk_with_initial_h(
     if use_h:
         ref_dh, h.grad = h.grad.clone(), None
 
-    tri_o, _ = chunk_rwkv6(q, k, v, w, u, scale=1.0, initial_state=h if use_h else None, output_final_state=use_h)
+    tri_o, _ = chunk_rwkv6(q, k, v, w, u, scale=scale, initial_state=h if use_h else None, output_final_state=use_h)
     tri_o.backward(do)
     tri_dq, q.grad = q.grad.clone(), None
     tri_dk, k.grad = k.grad.clone(), None
@@ -200,7 +206,7 @@ def RUN_FLA_CHUNK(B, T, C, H, r, k, v, w, u, h):
     k = k.view(B,T,H,-1).transpose(1,2)
     v = v.view(B,T,H,-1).transpose(1,2)
     w = -torch.exp(w.view(B,T,H,-1).transpose(1,2))
-    o, state = chunk_rwkv6(r, k, v, w, u=u, scale=1, initial_state=h, output_final_state=True)
+    o, state = chunk_rwkv6(r, k, v, w, u=u, scale=1.0, initial_state=h, output_final_state=True)
     return o.transpose(1,2).reshape(B,T,C), state
 
 def RUN_FLA_FUSED(B, T, C, H, r, k, v, w, u, h):
@@ -208,7 +214,7 @@ def RUN_FLA_FUSED(B, T, C, H, r, k, v, w, u, h):
     k = k.view(B,T,H,-1).transpose(1,2)
     v = v.view(B,T,H,-1).transpose(1,2)
     w = -torch.exp(w.view(B,T,H,-1).transpose(1,2))
-    o, state = fused_recurrent_rwkv6(r, k, v, w, u=u, scale=1, initial_state=h, output_final_state=True)
+    o, state = fused_recurrent_rwkv6(r, k, v, w, u=u, scale=1.0, initial_state=h, output_final_state=True)
     return o.transpose(1,2).reshape(B,T,C), state
 
 def RUN_FLA_NATIVE_AUTO_BACKWARD(B, T, C, H, r, k, v, w, u, h):
@@ -216,7 +222,7 @@ def RUN_FLA_NATIVE_AUTO_BACKWARD(B, T, C, H, r, k, v, w, u, h):
     k = k.view(B,T,H,-1).transpose(1,2)
     v = v.view(B,T,H,-1).transpose(1,2)
     w = -torch.exp(w.view(B,T,H,-1).transpose(1,2))
-    o, state = naive_recurrent_rwkv6(r, k, v, w, u=u, scale=1, initial_state=h, output_final_state=True)
+    o, state = naive_recurrent_rwkv6(r, k, v, w, u=u, scale=1.0, initial_state=h, output_final_state=True)
     return o.transpose(1,2).reshape(B,T,C), state
 
 
@@ -225,7 +231,7 @@ def RUN_FLA_NATIVE_MANUAL_BACKWARD(B, T, C, H, r, k, v, w, u, h):
     k = k.view(B,T,H,-1).transpose(1,2)
     v = v.view(B,T,H,-1).transpose(1,2)
     w = -torch.exp(w.view(B,T,H,-1).transpose(1,2))
-    o, state = native_recurrent_rwkv6(r, k, v, w, u=u, scale=1, initial_state=h, output_final_state=True)
+    o, state = native_recurrent_rwkv6(r, k, v, w, u=u, scale=1.0, initial_state=h, output_final_state=True)
     return o.transpose(1,2).reshape(B,T,C), state
 
 @pytest.mark.parametrize("B", [4])

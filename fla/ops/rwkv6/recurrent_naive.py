@@ -19,10 +19,11 @@ def naive_recurrent_rwkv6(
     output_final_state: bool = False,
     u_2d: bool = False
 ):
+    torch_type = torch.float32 if q.dtype != torch.float16 else torch.float16
     orig_dtype = q.dtype
     B, H, T, K, V = q.shape[0], q.shape[1], q.shape[2], q.shape[3], v.shape[-1]
-    q, k, v, w, u = (x.to(dtype=torch.float32) for x in (q, k, v, w, u))
-    h = torch.zeros(B, H, K, V, dtype=torch.float32, device=q.device)
+    q, k, v, w, u = (x.to(dtype=torch_type) for x in (q, k, v, w, u))
+    h = torch.zeros(B, H, K, V, dtype=torch_type, device=q.device)
     o = torch.zeros_like(v)
 
     if scale == -1.0:
@@ -40,8 +41,8 @@ def naive_recurrent_rwkv6(
 
     for i in range(T):
         q_i = q[:, :, i, :] * scale
-        k_i = k[:, :, i]
-        v_i = v[:, :, i, :]
+        k_i = k[:, :, i] * scale
+        v_i = v[:, :, i, :] * scale
         w_i = w[:, :, i]
         kv_i = k_i[..., None] * v_i[..., None, :]
         o_i = (h + u_expand * kv_i) * q_i[..., None]
@@ -67,9 +68,10 @@ def naive_recurrent_rwkv6_bwd(
     scale: float = -1.0,
     u_2d: bool = False
 ):
-    q, k, v, w, u, o, do = (x.to(dtype=torch.float32) for x in (q, k, v, w, u, o, do))
+    torch_type = torch.float32 if q.dtype != torch.float16 else torch.float16
+    q, k, v, w, u, o, do = (x.to(dtype=torch_type) for x in (q, k, v, w, u, o, do))
     B, H, T, K, V = q.shape[0], q.shape[1], q.shape[2], q.shape[3], v.shape[-1]
-    h = torch.zeros(B, H, K, V, dtype=torch.float32, device=q.device)
+    h = torch.zeros(B, H, K, V, dtype=torch_type, device=q.device)
     dq = torch.zeros_like(q)
     dq_aux = torch.zeros_like(q)
 
@@ -88,8 +90,8 @@ def naive_recurrent_rwkv6_bwd(
         sum_dims = [-1]
 
     for i in range(T):
-        k_i = k[:, :, i]
-        v_i = v[:, :, i]
+        k_i = k[:, :, i] * scale
+        v_i = v[:, :, i] * scale
         w_i = w[:, :, i]
         kv_i = k_i[..., None] * v_i[..., None, :]
         h_i = (h + u_expand * kv_i)
@@ -110,25 +112,29 @@ def naive_recurrent_rwkv6_bwd(
 
 
     for i in range(T - 1, -1, -1):
-        d_kv_i = do[:, :, i, None, :] * q[:, :, i, :, None] * scale
-        k_i = k[:, :, i]
-        v_i = v[:, :, i]
+        q_i = q[:, :, i] * scale
+        k_i = k[:, :, i] * scale
+        v_i = v[:, :, i] * scale
+
+        d_kv_i = do[:, :, i, None, :] * q_i[..., None]
         du += (d_kv_i * k_i[..., None] * v_i[..., None, :]).sum(sum_dims)
+
         dk_i = (dh * v_i[..., None, :]).sum(-1)
         dk_aux[:, :, i] = dk_i
         dk_i += (d_kv_i * u_expand * v_i[..., None, :]).sum(-1)
+
         dv_i = (d_kv_i * u_expand * k_i[..., None]).sum(-2)
         dv_i += (dh * k_i[..., None]).sum(-2)
 
-        dk[:, :, i] = dk_i
-        dv[:, :, i] = dv_i
+        dk[:, :, i] = dk_i * scale
+        dv[:, :, i] = dv_i * scale
         dh = dh * w[:, :, i, :, None] + d_kv_i
 
 
     # dw = q * dq_aux - k * dk_aux
     dw = torch.zeros_like(w)
     for i in range(T - 2, -1, -1):
-        dw[:, :, i] = dw[:, :, i + 1] + dq_aux[:, :, i + 1] * q[:, :, i + 1] * scale - dk_aux[:, :, i] * k[:, :, i]
+        dw[:, :, i] = dw[:, :, i + 1] + dq_aux[:, :, i + 1] * q[:, :, i + 1] * scale - dk_aux[:, :, i] * k[:, :, i] * scale
 
     return dq, dk, dv, dw, du, dh
 
@@ -200,10 +206,10 @@ if __name__ == "__main__":
     from fla.utils import get_available_device
     device = get_available_device()
     B = 4
-    H = 32
+    H = 64
     L = 1024
     D = 64
-    dtype = torch.float
+    dtype = torch.float16
     require_grad = True
     torch.manual_seed(42)
     q = (torch.randn(B, H, L, D).to(device).to(dtype)).requires_grad_(require_grad)
@@ -213,7 +219,7 @@ if __name__ == "__main__":
     u = (torch.randn(B, H, D).to(device).to(dtype)).requires_grad_(require_grad)
     do = torch.rand_like(v).to(device)
     h = torch.randn(B, H, D, D, device=device, dtype=torch.float32, requires_grad=True)
-    o, _ = naive_recurrent_rwkv6(q, k, v, w, u, scale=1.0, initial_state=h)
+    o, _ = naive_recurrent_rwkv6(q, k, v, w, u, scale=-1.0, initial_state=h)
     o.backward(do)
     dq, q.grad = q.grad.clone(), None
     dk, k.grad = k.grad.clone(), None
@@ -222,16 +228,18 @@ if __name__ == "__main__":
     du, u.grad = u.grad.clone(), None
     dh, h.grad = h.grad.clone(), None
 
-    o2, _ = NativeRecurrentRWKV6Function.apply(q, k, v, w, u, 1.0, h)
+    o2, _ = NativeRecurrentRWKV6Function.apply(q.float(), k.float(), v.float(), w.float(), u.float(), -1.0, h.float())
     o2.backward(do)
 
-    def rmsre(pred, target, eps=1e-8):
-        return torch.sqrt(torch.mean(torch.square((pred - target) / (target.abs() + eps))))
+    def rmsre(x, y, eps=1e-11):
+        err = (x-y).flatten().square().mean().sqrt().item()
+        base = (x).flatten().square().mean().sqrt().item()
+        return err / (base+eps)
 
     def print_diff(name, grad1, grad2):
         abs_diff = (grad1 - grad2).abs()
         max_diff = abs_diff.max().item()
-        rmsre_value = rmsre(grad1, grad2).item()
+        rmsre_value = rmsre(grad1.float(), grad2.float())
         print(f"{name}: Max Abs Diff = {max_diff:.6f}, RMSRE = {rmsre_value:.6f}")
 
     print(f"o: {(o - o2).abs().max().item():.6f}")
@@ -246,5 +254,5 @@ if __name__ == "__main__":
                             w.grad.flatten(), u.grad.flatten(), h.grad.flatten()])
     all_grads2 = torch.cat([dq.flatten(), dk.flatten(), dv.flatten(),
                             dw.flatten(), du.flatten(), dh.flatten()])
-    overall_rmsre = rmsre(all_grads1, all_grads2).item()
+    overall_rmsre = rmsre(all_grads1, all_grads2)
     print(f"\nOverall RMSRE: {overall_rmsre:.6f}")

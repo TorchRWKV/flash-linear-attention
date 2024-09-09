@@ -7,11 +7,9 @@ import subprocess
 import warnings
 from pathlib import Path
 
-import torch
 from datetime import datetime
 from packaging.version import Version, parse
 from setuptools import find_packages, setup
-from torch.utils.cpp_extension import CUDA_HOME
 
 with open('README.md') as f:
     long_description = f.read()
@@ -56,6 +54,8 @@ def append_nvcc_threads(nvcc_extra_args):
 
 ext_modules = []
 if not SKIP_CUDA_BUILD:
+    import torch
+    from torch.utils.cpp_extension import CUDA_HOME
     print("\n\ntorch.__version__  = {}\n\n".format(torch.__version__))
     TORCH_MAJOR = int(torch.__version__.split(".")[0])
     TORCH_MINOR = int(torch.__version__.split(".")[1])

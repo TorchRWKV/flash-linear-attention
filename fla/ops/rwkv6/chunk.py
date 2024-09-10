@@ -47,6 +47,7 @@ def chunk_rwkv6_fwd_kernel_cum(
     S: tl.constexpr,
     BT: tl.constexpr,
     BS: tl.constexpr,
+    USE_TF32: tl.constexpr
 ):
     i_s, i_t, i_bh = tl.program_id(0), tl.program_id(1), tl.program_id(2)
     o_i = tl.arange(0, BT)
@@ -57,7 +58,7 @@ def chunk_rwkv6_fwd_kernel_cum(
     p_o_minus_s = tl.make_block_ptr(o_minus_s + i_bh * s_s_h, (T, S), (s_s_t, s_s_d), (i_t * BT, i_s * BS), (BT, BS), (1, 0))
     # [BT, BS]
     b_s = tl.load(p_s, boundary_check=(0, 1)).to(tl.float32)
-    b_o = tl.dot(m_s, b_s, allow_tf32=True)
+    b_o = tl.dot(m_s, b_s, allow_tf32=USE_TF32)
     tl.store(p_o, b_o.to(p_o.dtype.element_ty), boundary_check=(0, 1))
     tl.store(p_o_minus_s, (b_o - b_s).to(p_o_minus_s.dtype.element_ty), boundary_check=(0, 1))
 
@@ -240,7 +241,8 @@ def chunk_rwkv6_fwd_kernel_intra(
     DK: tl.constexpr,
     GROUP_SIZE: tl.constexpr,
     U_2D: tl.constexpr,
-    TLTYPE: tl.constexpr
+    TLTYPE: tl.constexpr,
+    USE_TF32: tl.constexpr
 ):
     i_k, i_c, i_bh = tl.program_id(0), tl.program_id(1), tl.program_id(2)
     i_u = i_bh if not U_2D else i_bh % H
@@ -280,7 +282,7 @@ def chunk_rwkv6_fwd_kernel_intra(
         b_gk = tl.load(p_gk, boundary_check=(0, 1))
         b_kg = (b_k * tl.exp((b_gn[:, None] - b_gk))).to(b_k.dtype)
         # [BC, BC]
-        b_A = tl.dot(b_qg, b_kg, allow_tf32=True)
+        b_A = tl.dot(b_qg, b_kg, allow_tf32=USE_TF32)
         tl.store(p_A, b_A.to(A.dtype.element_ty), boundary_check=(0, 1))
     elif i_i == i_j:
         p_q = tl.make_block_ptr(q + i_bh * s_k_h, (T, K), (s_k_t, s_k_d), (i_t * BT + i_i * BC, i_k * BK), (BC, BK), (1, 0))
@@ -349,7 +351,8 @@ def chunk_rwkv6_fwd_kernel_inter(
     BT: tl.constexpr,
     BK: tl.constexpr,
     BV: tl.constexpr,
-    TLTYPE: tl.constexpr
+    TLTYPE: tl.constexpr,
+    USE_TF32: tl.constexpr
 ):
     i_v, i_t, i_bh = tl.program_id(0), tl.program_id(1), tl.program_id(2)
 
@@ -371,7 +374,7 @@ def chunk_rwkv6_fwd_kernel_inter(
         # works but dkw, owing to divine benevolence
         # [BT, BV]
         # if i_k >= 0:
-        b_o += tl.dot(b_qg, b_h, allow_tf32=True).to(TLTYPE)
+        b_o += tl.dot(b_qg, b_h, allow_tf32=USE_TF32).to(TLTYPE)
     p_v = tl.make_block_ptr(v + i_bh * s_v_h, (T, V), (s_v_t, s_v_d), (i_t * BT, i_v * BV), (BT, BV), (1, 0))
     p_o = tl.make_block_ptr(o + i_bh * s_v_h, (T, V), (s_v_t, s_v_d), (i_t * BT, i_v * BV), (BT, BV), (1, 0))
     p_A = tl.make_block_ptr(A + i_bh * T * BT, (T, BT), (BT, 1), (i_t * BT, 0), (BT, BT), (1, 0))
@@ -379,7 +382,7 @@ def chunk_rwkv6_fwd_kernel_inter(
     b_v = (tl.load(p_v, boundary_check=(0, 1)) * scale).to(TLTYPE)
     # [BT, BT]
     b_A = tl.load(p_A, boundary_check=(0, 1)).to(TLTYPE)
-    b_o += tl.dot(b_A, b_v, allow_tf32=True).to(TLTYPE)
+    b_o += tl.dot(b_A, b_v, allow_tf32=USE_TF32).to(TLTYPE)
     tl.store(p_o, b_o.to(p_o.dtype.element_ty), boundary_check=(0, 1))
 
 
@@ -496,7 +499,8 @@ def chunk_rwkv6_bwd_kernel_inter(
     BT: tl.constexpr,
     BK: tl.constexpr,
     BV: tl.constexpr,
-    TLTYPE: tl.constexpr
+    TLTYPE: tl.constexpr,
+    USE_TF32: tl.constexpr
 ):
     i_k, i_t, i_bh = tl.program_id(0), tl.program_id(1), tl.program_id(2)
     n_bh = tl.num_programs(2)
@@ -543,15 +547,15 @@ def chunk_rwkv6_bwd_kernel_inter(
         b_dh = tl.load(p_dh, boundary_check=(0, 1))
 
         # [BT, BV]
-        b_dv = tl.dot(b_k, b_dh.to(b_k.dtype), allow_tf32=True)
+        b_dv = tl.dot(b_k, b_dh.to(b_k.dtype), allow_tf32=USE_TF32)
         if i_k == 0:
-            b_dv = tl.dot(b_A, b_do, acc=b_dv, allow_tf32=True)
+            b_dv = tl.dot(b_A, b_do, acc=b_dv, allow_tf32=USE_TF32)
         b_do = (b_do * scale).to(b_do.dtype)
         b_dv = (b_dv * scale).to(b_dv.dtype)
 
         tl.store(p_dv, b_dv.to(p_dv.dtype.element_ty), boundary_check=(0, 1))
         # [BT, BT]
-        b_dA += tl.dot(b_do, tl.trans(b_v), allow_tf32=True).to(TLTYPE)
+        b_dA += tl.dot(b_do, tl.trans(b_v), allow_tf32=USE_TF32).to(TLTYPE)
         # [BT, BK]
         b_dq += tl.dot(b_do.to(TLTYPE), b_h.to(TLTYPE), allow_tf32=False).to(TLTYPE)  # must be false
         # [BT, BK]
@@ -696,7 +700,7 @@ class ChunkRWKV6Function(torch.autograd.Function):
 
     @staticmethod
     @contiguous
-    def forward(ctx, r, k, v, g, u, scale, initial_state, output_final_state, checkpoint_level, u_2d: bool = False, training: bool = True):
+    def forward(ctx, r, k, v, g, u, scale, initial_state, output_final_state, checkpoint_level, u_2d: bool = False, training: bool = True, use_tf32: bool = False):
         q = r  # alias
         B, H, T, K, V = *q.shape, v.shape[-1]
         BT, BC = 32, 16
@@ -724,7 +728,8 @@ class ChunkRWKV6Function(torch.autograd.Function):
         chunk_rwkv6_fwd_kernel_cum[grid](
             g_org, g, gs,
             g.stride(1), g.stride(2), g.stride(3),
-            T=T, S=K, BT=BT
+            T=T, S=K, BT=BT,
+            USE_TF32=use_tf32
         )
 
         # grid = (NV, NK, BH)
@@ -746,7 +751,7 @@ class ChunkRWKV6Function(torch.autograd.Function):
             k.stride(1), k.stride(2), k.stride(3),
             scale,
             H=H, T=T, K=K, BT=BT, BC=BC, BK=BK, NC=NC, DK=K,
-            U_2D=u_2d, TLTYPE=tl_dtype
+            U_2D=u_2d, TLTYPE=tl_dtype, USE_TF32=use_tf32
         )
         A = A.sum(0, dtype=A.dtype)
 
@@ -758,7 +763,7 @@ class ChunkRWKV6Function(torch.autograd.Function):
             h.stride(1), h.stride(2), h.stride(3),
             scale,
             T=T, K=K, V=V, BT=BT, BK=BK, BV=BV,
-            TLTYPE=tl.float32
+            TLTYPE=tl.float32, USE_TF32=use_tf32
         )
 
         if checkpoint_level > 1:
@@ -769,17 +774,14 @@ class ChunkRWKV6Function(torch.autograd.Function):
         del g, gs
         if training:
             ctx.save_for_backward(q, k, v, g_org, u, h_t, initial_state, A)
-            ctx.BT = BT
-            ctx.scale = scale
-            ctx.checkpoint_level = checkpoint_level
-            ctx.u_2d = u_2d
+            ctx.BT, ctx.scale, ctx.checkpoint_level, ctx.u_2d, ctx.use_tf32 = BT, scale, checkpoint_level, u_2d, use_tf32
         return o, final_state
 
     @staticmethod
     @contiguous
     def backward(ctx, do, dht=None):
         q, k, v, g, u, h, initial_state, A = ctx.saved_tensors
-        scale, u_2d = ctx.scale, ctx.u_2d
+        scale, u_2d, use_tf32 = ctx.scale, ctx.u_2d, ctx.use_tf32
         dtype = q.dtype
         B, H, T, K, V = *q.shape, v.shape[-1]
         BT, BC = ctx.BT, 16
@@ -817,7 +819,8 @@ class ChunkRWKV6Function(torch.autograd.Function):
         chunk_rwkv6_fwd_kernel_cum[grid](
             s=g_org, o=g, o_minus_s=gs,
             s_s_h=g.stride(1), s_s_t=g.stride(2), s_s_d=g.stride(3),
-            T=T, S=K, BT=BT
+            T=T, S=K, BT=BT,
+            USE_TF32=use_tf32
         )
         del g_org
 
@@ -860,7 +863,7 @@ class ChunkRWKV6Function(torch.autograd.Function):
             h.stride(1), h.stride(2), h.stride(3),
             scale,
             T=T, K=K, V=V, BT=BT, BK=BK, BV=BV,
-            TLTYPE=tl_dtype
+            TLTYPE=tl_dtype, USE_TF32=use_tf32
         )
         dv = dv.sum(0, dtype=dv.dtype)
         # grid = (NK, NT * NC, BH)
@@ -900,7 +903,7 @@ class ChunkRWKV6Function(torch.autograd.Function):
         du = du.sum([0, 2]) if u_2d else du.sum(2)
         dh0 = dh0.to(q) if initial_state is not None else None
         return dq.to(dtype), dk.to(dtype), dv.to(dtype), dg.to(dtype), du.to(dtype), None, \
-                dh0, None, None, None, None
+                dh0, None, None, None, None, None
 
 
 def chunk_rwkv6(
@@ -913,7 +916,8 @@ def chunk_rwkv6(
     initial_state: torch.Tensor = None,
     output_final_state: bool = False,
     checkpoint_level: Optional[int] = 0,
-    training: bool = True
+    training: bool = True,
+    use_tf32: bool = False
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     r"""
     Args:
@@ -945,7 +949,7 @@ def chunk_rwkv6(
         scale = r.shape[-1] ** -0.5
     u_2d = True if u.dim() == 2 else False
     o, final_state = ChunkRWKV6Function.apply(r, k, v, g, u, scale, initial_state,
-                                              output_final_state, checkpoint_level, u_2d, training)
+                                              output_final_state, checkpoint_level, u_2d, training, use_tf32)
     return o, final_state
 
 

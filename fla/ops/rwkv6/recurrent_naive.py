@@ -7,7 +7,6 @@ from fla.utils import autocast_custom_bwd, autocast_custom_fwd, contiguous
 
 
 
-@torch.jit.script
 def naive_recurrent_rwkv6(
     q: torch.Tensor,
     k: torch.Tensor,
@@ -53,8 +52,6 @@ def naive_recurrent_rwkv6(
     return o.to(orig_dtype), ht
 
 
-@torch.no_grad
-@torch.jit.script
 def naive_recurrent_rwkv6_bwd(
     q: torch.Tensor,
     k: torch.Tensor,

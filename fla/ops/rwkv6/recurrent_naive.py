@@ -18,7 +18,10 @@ def naive_recurrent_rwkv6(
     output_final_state: bool = False,
     u_2d: bool = False
 ):
-    torch_type = torch.float32 if q.dtype != torch.float16 else torch.float16
+    if torch.is_autocast_enabled():
+        torch_type = torch.get_autocast_gpu_dtype()
+    else:
+        torch_type = torch.float32 if q.dtype != torch.float16 else torch.float16
     orig_dtype = q.dtype
     B, H, T, K, V = q.shape[0], q.shape[1], q.shape[2], q.shape[3], v.shape[-1]
     q, k, v, w, u = (x.to(dtype=torch_type) for x in (q, k, v, w, u))
@@ -29,7 +32,7 @@ def naive_recurrent_rwkv6(
         scale = K ** -0.5
 
     if initial_state is not None:
-        h += initial_state
+        h += initial_state.to(dtype=torch_type)
 
     w = w.exp()
 

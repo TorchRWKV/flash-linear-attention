@@ -710,7 +710,14 @@ class ChunkRWKV6Function(torch.autograd.Function):
         NK = triton.cdiv(K, BK)
         NV = triton.cdiv(V, BV)
         BH = B * H
-        torch_dtype = torch.float32 if q.dtype != torch.float16 else torch.float16
+
+        if torch.is_autocast_enabled():
+            torch_type = torch.get_autocast_gpu_dtype()
+            q, k, v, w, u = (x.to(dtype=torch_type) for x in (q, k, v, w, u))
+            initial_state = initial_state.to(dtype=torch_type) if initial_state is not None else initial_state
+        else:
+            torch_dtype = torch.float32 if q.dtype != torch.float16 else torch.float16
+
         tl_dtype = tl.float32 if q.dtype != torch.float16 else tl.float16
         g_org, g, gs, o, final_state, A, h = g, torch.empty_like(
             g, dtype=torch.float32), torch.empty_like(

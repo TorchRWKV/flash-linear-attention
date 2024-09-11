@@ -549,7 +549,7 @@ def chunk_rwkv6_bwd_kernel_inter(
         # [BT, BV]
         b_dv = tl.dot(b_k, b_dh.to(b_k.dtype), allow_tf32=USE_TF32)
         if i_k == 0:
-            b_dv = tl.dot(b_A, b_do, acc=b_dv, allow_tf32=USE_TF32)
+            b_dv += tl.dot(b_A, b_do, allow_tf32=USE_TF32)
         b_do = (b_do * scale).to(b_do.dtype)
         b_dv = (b_dv * scale).to(b_dv.dtype)
 

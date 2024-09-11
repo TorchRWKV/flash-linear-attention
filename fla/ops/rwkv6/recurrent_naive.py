@@ -4,6 +4,7 @@ from typing import Optional, Tuple
 
 import torch
 from fla.utils import autocast_custom_bwd, autocast_custom_fwd, contiguous
+from fla.utils import check_pytorch_version, device
 
 
 
@@ -18,21 +19,21 @@ def naive_recurrent_rwkv6(
     output_final_state: bool = False,
     u_2d: bool = False
 ):
-    if torch.is_autocast_enabled():
-        torch_type = torch.get_autocast_gpu_dtype()
+    if (torch.is_autocast_enabled(device) if check_pytorch_version('2.4') else torch.is_autocast_enabled()):
+        torch_dtype = torch.get_autocast_dtype(device) if check_pytorch_version('2.4') else torch.get_autocast_gpu_dtype()
     else:
-        torch_type = torch.float32 if q.dtype != torch.float16 else torch.float16
+        torch_dtype = torch.float32 if q.dtype != torch.float16 else torch.float16
     orig_dtype = q.dtype
     B, H, T, K, V = q.shape[0], q.shape[1], q.shape[2], q.shape[3], v.shape[-1]
-    q, k, v, w, u = (x.to(dtype=torch_type) for x in (q, k, v, w, u))
-    h = torch.zeros(B, H, K, V, dtype=torch_type, device=q.device)
+    q, k, v, w, u = (x.to(dtype=torch_dtype) for x in (q, k, v, w, u))
+    h = torch.zeros(B, H, K, V, dtype=torch_dtype, device=q.device)
     o = torch.zeros_like(v)
 
     if scale == -1.0:
         scale = K ** -0.5
 
     if initial_state is not None:
-        h += initial_state.to(dtype=torch_type)
+        h += initial_state.to(dtype=torch_dtype)
 
     w = w.exp()
 

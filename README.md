@@ -53,7 +53,7 @@ def run_fla_kernel(B, T, C, H, r, k, v, w, u, s):
 # Installation
 
 The following requirements should be satisfied
-- [PyTorch](https://pytorch.org/) >= 2.0
+- [PyTorch](https://pytorch.org/) >= 2.0 (>=2.4 is the best choice)
 - [Triton](https://github.com/openai/triton) >=2.2 (3.0 is the best choice)
 - [einops](https://einops.rocks/)
 

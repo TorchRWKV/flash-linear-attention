@@ -131,6 +131,123 @@ def test_fused_recurrent(
     if use_h:
         assert get_err_ratio(ref_dh, tri_dh) < atol
 
+@pytest.mark.parametrize("B", [4])
+@pytest.mark.parametrize("H", [4])
+@pytest.mark.parametrize("T", [1024])
+@pytest.mark.parametrize("D", [64])
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+@pytest.mark.parametrize("use_h", [False, True])
+@pytest.mark.parametrize("u_2d", [False])
+@pytest.mark.parametrize("scale", [1.0])
+def test_fla_autocast(
+    B: int,
+    H: int,
+    T: int,
+    D: int,
+    dtype: torch.dtype,
+    use_h: bool,
+    u_2d: bool,
+    scale: float
+):
+    # check for pytorch version
+    from fla.utils import check_pytorch_version
+    if not check_pytorch_version('2.4'):
+        pytest.skip("Skipping test for pytorch version < 2.4.0")
+    if dtype == torch.float16 and 'cuda' in device:
+        pytest.skip("Skipping test for float16(Nvidia), see https://github.com/triton-lang/triton/issues/4701")
+    torch.manual_seed(42)
+    atol = 1e-3 if dtype == torch.float else 1e-2
+
+    q = torch.randn(B, H, T, D, device=device).to(dtype).requires_grad_(True)
+    k = torch.randn(B, H, T, D, device=device).to(dtype).requires_grad_(True)
+    v = torch.randn(B, H, T, 2*D, device=device).to(dtype).requires_grad_(True)
+    w = F.logsigmoid(torch.randn(B, H, T, D, device=device)).to(dtype).requires_grad_(True)
+    if u_2d:
+        u = torch.randn(H, D, device=device).to(dtype).requires_grad_(True)
+    else:
+        u = (torch.randn(B, H, D).to(device).to(dtype)).requires_grad_(True)
+    do = torch.rand_like(v, device=device)
+    h = torch.randn(B, H, D, 2*D, device=device, dtype=dtype, requires_grad=True)
+
+    ref_o, _ = naive_recurrent_rwkv6(q, k, v, w, u, scale=scale, initial_state=h if use_h else None, output_final_state=use_h)
+    ref_o.backward(do)
+    ref_dq, q.grad = q.grad.clone(), None
+    ref_dk, k.grad = k.grad.clone(), None
+    ref_dv, v.grad = v.grad.clone(), None
+    ref_dw, w.grad = w.grad.clone(), None
+    ref_du, u.grad = u.grad.clone(), None
+    if use_h:
+        ref_dh, h.grad = h.grad.clone(), None
+
+    with torch.amp.autocast(device_type=device, dtype=dtype, enabled=True):
+        torch.set_autocast_dtype(device, torch.float32)
+        assert torch.is_autocast_enabled(device) == True
+        assert torch.get_autocast_dtype(device) == torch.float32
+        tri_o, _ = fused_recurrent_rwkv6(q, k, v, w, u, scale=scale, initial_state=h if use_h else None, output_final_state=use_h)
+        tri_o.backward(do)
+    tri_dq, q.grad = q.grad.clone(), None
+    tri_dk, k.grad = k.grad.clone(), None
+    tri_dv, v.grad = v.grad.clone(), None
+    tri_dw, w.grad = w.grad.clone(), None
+    tri_du, u.grad = u.grad.clone(), None
+    if use_h:
+        tri_dh, h.grad = h.grad.clone(), None
+
+    assert get_err_ratio(ref_o, tri_o) < atol, f"output, {get_err_ratio(ref_o, tri_o)}, dtype = {dtype}"
+    assert get_err_ratio(ref_dq, tri_dq) < atol, f"q, {get_err_ratio(ref_dq, tri_dq)}, dtype = {dtype}"
+    assert get_err_ratio(ref_dk, tri_dk) < atol, f"k, {get_err_ratio(ref_dk, tri_dk)}, dtype = {dtype}"
+    assert get_err_ratio(ref_dv, tri_dv) < atol, f"v, {get_err_ratio(ref_dv, tri_dv)}, dtype = {dtype}"
+    if get_err_ratio(ref_dw, tri_dw) > (atol * 5):
+        if D != 64:
+            import logging
+            logging.warning(f"w, {get_err_ratio(ref_dw, tri_dw)}, dtype = {dtype}, scale = {scale}, D = {D}")
+        else:
+            raise ValueError(f"w, {get_err_ratio(ref_dw, tri_dw)}, dtype = {dtype}, scale = {scale}, D = {D}")
+    assert get_err_ratio(ref_du, tri_du) < atol, f"u, {get_err_ratio(ref_du, tri_du)}, dtype = {dtype}"
+
+    if use_h:
+        assert get_err_ratio(ref_dh, tri_dh) < atol
+
+    # test for chunk
+    ref_o, _ = naive_recurrent_rwkv6(q, k, v, w, u, scale=scale, initial_state=h if use_h else None, output_final_state=use_h)
+    ref_o.backward(do)
+    ref_dq, q.grad = q.grad.clone(), None
+    ref_dk, k.grad = k.grad.clone(), None
+    ref_dv, v.grad = v.grad.clone(), None
+    ref_dw, w.grad = w.grad.clone(), None
+    ref_du, u.grad = u.grad.clone(), None
+    if use_h:
+        ref_dh, h.grad = h.grad.clone(), None
+
+    with torch.amp.autocast(device_type=device, dtype=dtype, enabled=True):
+        torch.set_autocast_dtype(device, torch.float32)
+        assert torch.is_autocast_enabled(device) == True
+        assert torch.get_autocast_dtype(device) == torch.float32
+        tri_o, _ = chunk_rwkv6(q, k, v, w, u, scale=scale, initial_state=h if use_h else None, output_final_state=use_h)
+        tri_o.backward(do)
+    tri_dq, q.grad = q.grad.clone(), None
+    tri_dk, k.grad = k.grad.clone(), None
+    tri_dv, v.grad = v.grad.clone(), None
+    tri_dw, w.grad = w.grad.clone(), None
+    tri_du, u.grad = u.grad.clone(), None
+    if use_h:
+        tri_dh, h.grad = h.grad.clone(), None
+
+    assert get_err_ratio(ref_o, tri_o) < atol, f"output, {get_err_ratio(ref_o, tri_o)}, dtype = {dtype}"
+    assert get_err_ratio(ref_dq, tri_dq) < atol, f"q, {get_err_ratio(ref_dq, tri_dq)}, dtype = {dtype}"
+    assert get_err_ratio(ref_dk, tri_dk) < atol, f"k, {get_err_ratio(ref_dk, tri_dk)}, dtype = {dtype}"
+    assert get_err_ratio(ref_dv, tri_dv) < atol, f"v, {get_err_ratio(ref_dv, tri_dv)}, dtype = {dtype}"
+    if get_err_ratio(ref_dw, tri_dw) > (atol * 5):
+        if D != 64:
+            import logging
+            logging.warning(f"w, {get_err_ratio(ref_dw, tri_dw)}, dtype = {dtype}, scale = {scale}, D = {D}")
+        else:
+            raise ValueError(f"w, {get_err_ratio(ref_dw, tri_dw)}, dtype = {dtype}, scale = {scale}, D = {D}")
+    assert get_err_ratio(ref_du, tri_du) < atol, f"u, {get_err_ratio(ref_du, tri_du)}, dtype = {dtype}"
+
+    if use_h:
+        assert get_err_ratio(ref_dh, tri_dh) < atol
+
 
 @pytest.mark.parametrize("B", [4])
 @pytest.mark.parametrize("H", [4])

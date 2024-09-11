@@ -82,11 +82,20 @@ def check_compute_capacity():
     except BaseException as e:
         return False
 
+
+@lru_cache(maxsize=None)
+def check_pytorch_version(version_s:str):
+    if version.parse(torch.__version__) >= version.parse(version_s):
+        return True
+    else:
+        return False
+
+
 device = get_available_device()
 device_capacity = check_compute_capacity()
 
 
-if version.parse(torch.__version__) >= version.parse('2.4'):
+if check_pytorch_version('2.4'):
     from torch.amp import custom_fwd, custom_bwd
 
     def autocast_custom_fwd(*args, **kwargs):

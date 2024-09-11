@@ -9,7 +9,7 @@ import triton
 import triton.language as tl
 
 from fla.ops.utils import chunk_global_reversed_cumsum
-from fla.utils import contiguous, device_capacity
+from fla.utils import contiguous, device_capacity, check_pytorch_version, device
 
 
 @triton.autotune(
@@ -711,10 +711,10 @@ class ChunkRWKV6Function(torch.autograd.Function):
         NV = triton.cdiv(V, BV)
         BH = B * H
 
-        if torch.is_autocast_enabled():
-            torch_type = torch.get_autocast_gpu_dtype()
-            q, k, v, w, u = (x.to(dtype=torch_type) for x in (q, k, v, w, u))
-            initial_state = initial_state.to(dtype=torch_type) if initial_state is not None else initial_state
+        if (torch.is_autocast_enabled(device) if check_pytorch_version('2.4') else torch.is_autocast_enabled()):
+            torch_dtype = torch.get_autocast_dtype(device) if check_pytorch_version('2.4') else torch.get_autocast_gpu_dtype()
+            q, k, v, g, u = (x.to(dtype=torch_dtype) for x in (q, k, v, g, u))
+            initial_state = initial_state.to(dtype=torch_dtype) if initial_state is not None else initial_state
         else:
             torch_dtype = torch.float32 if q.dtype != torch.float16 else torch.float16
 

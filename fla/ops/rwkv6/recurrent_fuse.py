@@ -12,6 +12,7 @@ import triton.language as tl
 
 from fla.ops.utils import chunk_global_reversed_cumsum
 from fla.utils import autocast_custom_bwd, autocast_custom_fwd, contiguous
+from fla.utils import check_pytorch_version, device
 
 
 
@@ -272,10 +273,10 @@ class FusedRecurrentRWKV6Function(torch.autograd.Function):
         BK, BV = min(triton.next_power_of_2(K), 32), min(triton.next_power_of_2(V), 32)
         NK, NV = triton.cdiv(K, BK), triton.cdiv(V, BV)
 
-        if torch.is_autocast_enabled():
-            torch_type = torch.get_autocast_gpu_dtype()
-            q, k, v, w, u = (x.to(dtype=torch_type) for x in (q, k, v, w, u))
-            initial_state = initial_state.to(dtype=torch_type) if initial_state is not None else initial_state
+        if (torch.is_autocast_enabled(device) if check_pytorch_version('2.4') else torch.is_autocast_enabled()):
+            torch_dtype = torch.get_autocast_dtype(device) if check_pytorch_version('2.4') else torch.get_autocast_gpu_dtype()
+            q, k, v, w, u = (x.to(dtype=torch_dtype) for x in (q, k, v, w, u))
+            initial_state = initial_state.to(dtype=torch_dtype) if initial_state is not None else initial_state
 
         final_state = q.new_empty(B, H, K, V) if output_final_state else None
 

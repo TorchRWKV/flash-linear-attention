@@ -141,7 +141,7 @@ setup(
     dependency_links=['https://download.pytorch.org/whl/nightly/'],
     extras_require={
         'conv1d': ['causal-conv1d>=1.4.0'],
-        'cuda': ['pytorch-triton'],
+        'cuda': ['triton'],
         'xpu': ['pytorch-triton-xpu'],
         'rocm': ['pytorch-triton-rocm'],
     },

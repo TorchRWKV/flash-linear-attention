@@ -80,8 +80,8 @@ def test_fused_recurrent(
     u_2d: bool,
     scale: float
 ):
-    if dtype == torch.float16 and scale == 1.0:
-        return
+    if dtype == torch.float16 and 'cuda' in device:
+        pytest.skip("Skipping test for float16(Nvidia), see https://github.com/triton-lang/triton/issues/4701")
     torch.manual_seed(42)
     atol = 1e-3 if dtype == torch.float else 1e-2
 

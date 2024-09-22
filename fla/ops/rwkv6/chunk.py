@@ -9,7 +9,7 @@ import triton
 import triton.language as tl
 
 from fla.ops.utils import chunk_global_reversed_cumsum
-from fla.utils import contiguous, device_capacity, check_pytorch_version, device
+from fla.utils import contiguous, device_capacity, check_pytorch_version, device, detect_tf32
 
 
 @triton.autotune(
@@ -913,6 +913,7 @@ class ChunkRWKV6Function(torch.autograd.Function):
                 dh0, None, None, None, None, None
 
 
+_detect_use_tf32 = None
 def chunk_rwkv6(
     r: torch.Tensor,
     k: torch.Tensor,
@@ -924,7 +925,7 @@ def chunk_rwkv6(
     output_final_state: bool = False,
     checkpoint_level: Optional[int] = 0,
     training: bool = True,
-    use_tf32: bool = False
+    use_tf32: Optional[bool] = None
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     r"""
     Args:
@@ -951,12 +952,19 @@ def chunk_rwkv6(
             - Level `0`: store forward hidden states for backprop.
             - Level `1`: recompute the forward hidden states during backward.
     """
+    global _detect_use_tf32
     assert checkpoint_level in [0, 1]
     if scale == -1.0:
         scale = r.shape[-1] ** -0.5
     u_2d = True if u.dim() == 2 else False
+    if use_tf32 is None:
+        if _detect_use_tf32 is None:
+            _detect_use_tf32 = detect_tf32()
+        use_tf32 = _detect_use_tf32
+    else:
+        _detect_use_tf32 = use_tf32
     o, final_state = ChunkRWKV6Function.apply(r, k, v, g, u, scale, initial_state,
-                                              output_final_state, checkpoint_level, u_2d, training, use_tf32)
+                                              output_final_state, checkpoint_level, u_2d, training, _detect_use_tf32)
     return o, final_state
 
 

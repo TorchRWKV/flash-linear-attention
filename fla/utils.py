@@ -4,8 +4,7 @@ import functools
 
 import torch
 import triton
-import subprocess
-import re
+import os
 from functools import lru_cache
 from packaging import version
 
@@ -113,3 +112,15 @@ if check_pytorch_version('2.4'):
 else:
     autocast_custom_fwd = torch.cuda.amp.custom_fwd
     autocast_custom_bwd = torch.cuda.amp.custom_bwd
+
+
+@lru_cache(maxsize=None)
+def detect_tf32():
+    env_tf32 = os.environ.get('USE_TF32', 'true').lower()
+    
+    if env_tf32 in ('1', 'true', 'yes', 'on'):
+        return True
+    elif env_tf32 in ('0', 'false', 'no', 'off'):
+        return False
+
+    return False

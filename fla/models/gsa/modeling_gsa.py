@@ -18,7 +18,8 @@ from transformers.utils import logging
 from fla.layers.gsa import GatedSlotAttention
 from fla.models.gsa.configuration_gsa import GSAConfig
 from fla.models.utils import Cache
-from fla.modules import FusedCrossEntropyLoss, RMSNorm, RMSNormLinear
+from fla.modules import (FusedCrossEntropyLoss, FusedLinearCrossEntropyLoss,
+                         RMSNorm, RMSNormLinear)
 from fla.modules.activations import swiglu_linear
 
 logger = logging.get_logger(__name__)
@@ -81,11 +82,9 @@ class GSABlock(nn.Module):
             use_short_conv=config.use_short_conv,
             conv_size=config.conv_size,
             feature_map=config.feature_map,
-            use_rope=config.use_rope,
             use_output_gate=config.use_output_gate,
             use_norm=config.use_norm,
             gate_fn=config.hidden_act,
-            gate_low_rank_dim=config.gate_low_rank_dim,
             gate_logit_normalizer=config.gate_logit_normalizer,
             elementwise_affine=config.elementwise_affine,
             norm_first=config.norm_first,
@@ -397,18 +396,28 @@ class GSAForCausalLM(GSAPreTrainedModel):
         )
 
         hidden_states = outputs[0]
-        logits = self.lm_head(hidden_states)
+        fuse_linear_and_cross_entropy = self.config.fuse_cross_entropy and self.training
+        logits = None if fuse_linear_and_cross_entropy else self.lm_head(hidden_states)
 
         loss = None
         if labels is not None:
             if self.config.fuse_cross_entropy:
-                loss_fct = FusedCrossEntropyLoss(inplace_backward=True)
+                if fuse_linear_and_cross_entropy:
+                    loss_fct = FusedLinearCrossEntropyLoss()
+                else:
+                    loss_fct = FusedCrossEntropyLoss(inplace_backward=True)
             else:
                 loss_fct = nn.CrossEntropyLoss()
             # Enable model parallelism
-            labels = labels.to(logits.device)
+            labels = labels.to(hidden_states.device)
             labels = torch.cat((labels[..., 1:], torch.full_like(labels[:, :1], loss_fct.ignore_index)), 1)
-            loss = loss_fct(logits.view(-1, self.config.vocab_size), labels.view(-1))
+            if fuse_linear_and_cross_entropy:
+                loss = loss_fct(hidden_states.view(-1, self.config.hidden_size),
+                                labels.view(-1),
+                                self.lm_head.weight,
+                                self.lm_head.bias)
+            else:
+                loss = loss_fct(logits.view(-1, self.config.vocab_size), labels.view(-1))
 
         if not return_dict:
             output = (logits,) + outputs[1:]

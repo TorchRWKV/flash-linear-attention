@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# Copyright (c) 2023, Yu Zhang, Songlin Yang
+# Copyright (c) 2024, Songlin Yang, Yu Zhang
 
 from typing import Tuple
 
@@ -46,7 +46,7 @@ def fused_chunk_retention_fwd_kernel(
 
     o_i = tl.arange(0, BT)
     # decay rate given the head index
-    b_b = tl.math.log2(1 - tl.math.pow(2, -5 - i_h * 1.0))
+    b_b = tl.math.log2(1 - tl.math.exp2(-5 - i_h * 1.0))
 
     # d_b: overall decay for the entire chunk
     # d_o: cumulative decay from the start of the chunk
@@ -140,7 +140,7 @@ def fused_chunk_retention_bwd_kernel(
     i_h = i_bh % H
 
     o_i = tl.arange(0, BT)
-    b_b = tl.math.log2(1 - tl.math.pow(2, -5 - i_h * 1.0))
+    b_b = tl.math.log2(1 - tl.math.exp2(-5 - i_h * 1.0))
     d_q, d_k = tl.math.exp2((o_i+1) * b_b) * scale, tl.math.exp2((BT - o_i - 1) * b_b)
     d_b = tl.math.exp2(BT * b_b)
 

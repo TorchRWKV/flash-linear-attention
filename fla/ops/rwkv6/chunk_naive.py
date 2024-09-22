@@ -3,19 +3,14 @@
 import torch
 from einops import rearrange
 
-from fla.ops.rwkv6.chunk import chunk_rwkv6
-from fla.ops.rwkv6.recurrent_fuse import fused_recurrent_rwkv6
-
 
 def naive_chunk_rwkv6(
-    q,
-    k,
-    v,
-    w,
-    u,
-    chunk_size=32,
-    initial_state=None,
-    output_final_state=True,
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    w: torch.Tensor,
+    u: torch.Tensor,
+    chunk_size: int = 32
 ):
     assert q.shape[-2] % chunk_size == 0
     orig_dtype = q.dtype

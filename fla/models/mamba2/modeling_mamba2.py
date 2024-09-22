@@ -25,7 +25,8 @@ from transformers.modeling_utils import PreTrainedModel
 from transformers.utils import ModelOutput, logging
 
 from fla.models.mamba2.configuration_mamba2 import Mamba2Config
-from fla.modules import FusedCrossEntropyLoss, FusedRMSNormSwishGate, RMSNorm
+from fla.modules import FusedCrossEntropyLoss
+from fla.modules.layernorm_gated import RMSNorm
 
 logger = logging.get_logger(__name__)
 
@@ -195,7 +196,6 @@ class Mamba2Mixer(nn.Module):
         self.activation = config.hidden_act
         self.act = ACT2FN[config.hidden_act]
 
-        self.norm_before_gate = config.norm_before_gate
         self.layer_norm_epsilon = config.layer_norm_epsilon
         self.rms_norm = config.rms_norm
 
@@ -235,8 +235,8 @@ class Mamba2Mixer(nn.Module):
         A = torch.arange(1, self.num_heads + 1)
         self.A_log = nn.Parameter(torch.log(A))
         self.A_log._no_weight_decay = True
-        self.norm = FusedRMSNormSwishGate(
-            self.intermediate_size, eps=self.layer_norm_epsilon
+        self.norm = RMSNorm(
+            self.intermediate_size, eps=self.layer_norm_epsilon, norm_before_gate=False
         )
 
         self.D = nn.Parameter(torch.ones(self.num_heads))
@@ -315,7 +315,7 @@ class Mamba2Mixer(nn.Module):
             hidden_states = hidden_states.view(
                 batch_size, self.num_heads * self.head_dim
             )
-            hidden_states = self.norm(hidden_states, o=gate)
+            hidden_states = self.norm(hidden_states, gate)
 
             out = self.out_proj(hidden_states)[:, None, ...]
         # if no cache is found, calling the kernel
@@ -352,7 +352,7 @@ class Mamba2Mixer(nn.Module):
                     outproj_bias=self.out_proj.bias,
                     headdim=self.head_dim,
                     ngroups=self.n_groups,
-                    norm_before_gate=self.norm_before_gate,
+                    norm_before_gate=False,
                     return_final_states=True,
                     **dt_limit_kwargs,
                 )
@@ -364,7 +364,6 @@ class Mamba2Mixer(nn.Module):
                     dim=-1,
                 )
 
-                time_step = nn.functional.softplus(time_step + self.dt_bias)
                 # 1D Convolution
                 if causal_conv1d_fn is None or self.activation not in ["silu", "swish"]:
                     hidden_states_B_C = self.act(
@@ -412,6 +411,8 @@ class Mamba2Mixer(nn.Module):
                     z=None,
                     seq_idx=None,
                     return_final_states=True,
+                    dt_bias=self.dt_bias,
+                    dt_softplus=True,
                     **dt_limit_kwargs,
                 )
                 if ssm_state is not None and cache_params is not None:
@@ -420,7 +421,7 @@ class Mamba2Mixer(nn.Module):
                     batch_size, seq_len, -1
                 )
                 # Multiply "gate" branch and apply extra normalization layer
-                scan_output = self.norm(scan_output, o=gate)
+                scan_output = self.norm(scan_output, gate)
                 out = self.out_proj(scan_output)
         return out
 
@@ -960,8 +961,8 @@ class Mamba2ForCausalLM(Mamba2PreTrainedModel):
         attention_mask: Optional[torch.Tensor] = None,
         **kwargs,
     ):
-        if input_ids.shape[1] == 0:
-            past_len = inputs_embeds.shape[1]
+        if inputs_embeds is not None:
+            past_len = inputs_embeds.shape[1] + input_ids.shape[1]
         else:
             past_len = input_ids.shape[1]
         if use_cache:

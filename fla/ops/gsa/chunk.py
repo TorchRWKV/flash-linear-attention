@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
-
-# Copyright (c) 2023-2024, Yu Zhang, Songlin Yang
+# Copyright (c) 2024, Songlin Yang, Yu Zhang
 
 from typing import Optional, Tuple
 
@@ -9,14 +8,13 @@ import triton
 import triton.language as tl
 from einops import reduce
 
-from fla.ops.utils import (chunk_global_reversed_cumsum, chunk_local_cumsum, softmax_bwd_kernel,
-                           softmax_fwd_kernel)
+from fla.ops.utils import (chunk_global_reversed_cumsum, chunk_local_cumsum,
+                           softmax_bwd_kernel, softmax_fwd_kernel)
 from fla.utils import contiguous
 
 
-
 @triton.jit
-def chunk_gated_abc_fwd_kernel_h(
+def chunk_gsa_fwd_kernel_h(
     k,
     v,
     g,
@@ -89,7 +87,7 @@ def chunk_gated_abc_fwd_kernel_h(
 
 
 @triton.jit
-def chunk_gated_abc_fwd_kernel_intra_K(
+def chunk_gsa_fwd_kernel_intra_K(
     v,
     g,
     o,
@@ -152,7 +150,7 @@ def chunk_gated_abc_fwd_kernel_intra_K(
 
 
 @triton.jit
-def chunk_gated_abc_fwd_kernel_K(
+def chunk_gsa_fwd_kernel_K(
     q,
     k,
     h,
@@ -216,7 +214,7 @@ def chunk_gated_abc_fwd_kernel_K(
 
 
 @triton.jit
-def chunk_gated_abc_fwd_kernel_intra_Vk(
+def chunk_gsa_fwd_kernel_intra_Vk(
     q,
     k,
     g,
@@ -297,7 +295,7 @@ def chunk_gated_abc_fwd_kernel_intra_Vk(
 
 
 @triton.jit
-def chunk_gated_abc_fwd_kernel_intra_V(
+def chunk_gsa_fwd_kernel_intra_V(
     q,
     k,
     g,
@@ -318,7 +316,7 @@ def chunk_gated_abc_fwd_kernel_intra_V(
     i_c, i_bh = tl.program_id(0), tl.program_id(1)
 
     for i_k in range(0, NK):
-        chunk_gated_abc_fwd_kernel_intra_Vk(
+        chunk_gsa_fwd_kernel_intra_Vk(
             q,
             k,
             g,
@@ -341,7 +339,7 @@ def chunk_gated_abc_fwd_kernel_intra_V(
 
 
 @triton.jit
-def chunk_gated_abc_fwd_kernel_V(
+def chunk_gsa_fwd_kernel_V(
     q,
     v,
     g,
@@ -400,7 +398,7 @@ def chunk_gated_abc_fwd_kernel_V(
 
 
 @triton.jit
-def chunk_gated_abc_bwd_kernel_dh(
+def chunk_gsa_bwd_kernel_dh(
     q,
     g,
     do,
@@ -467,7 +465,7 @@ def chunk_gated_abc_bwd_kernel_dh(
 
 
 @triton.jit
-def chunk_gated_abc_bwd_kernel_V(
+def chunk_gsa_bwd_kernel_V(
     k,
     v,
     h,
@@ -565,7 +563,7 @@ def chunk_gated_abc_bwd_kernel_V(
 
 
 @triton.jit
-def chunk_gated_abc_bwd_kernel_intra_V(
+def chunk_gsa_bwd_kernel_intra_V(
     q,
     k,
     g,
@@ -681,7 +679,7 @@ def chunk_gated_abc_bwd_kernel_intra_V(
 
 
 @triton.jit
-def chunk_gated_abc_bwd_kernel_intra_K(
+def chunk_gsa_bwd_kernel_intra_K(
     v,
     g,
     do,
@@ -752,7 +750,7 @@ def chunk_gated_abc_bwd_kernel_intra_K(
 
 
 @triton.jit
-def chunk_gated_abc_bwd_kernel_K(
+def chunk_gsa_bwd_kernel_K(
     q,
     k,
     v,
@@ -849,7 +847,7 @@ def chunk_gated_abc_bwd_kernel_K(
 
 
 @triton.jit
-def chunk_gated_abc_bwd_kernel_intra_KV(
+def chunk_gsa_bwd_kernel_intra_KV(
     v,
     g,
     o,
@@ -931,7 +929,7 @@ def fwd_inner(q, k, v, g, B, H, T, K, V, BT, BK, BV, gatek=False, h0=None, ht=No
 
     h = q.new_empty(B, H, NT * K, V)
     grid = (NV, NK, B * H)
-    chunk_gated_abc_fwd_kernel_h[grid](
+    chunk_gsa_fwd_kernel_h[grid](
         k, v, g, h, h0, ht,
         k.stride(1), k.stride(2), k.stride(3),
         v.stride(1), v.stride(2), v.stride(3),
@@ -964,7 +962,7 @@ def fwd_v(q, k, v, g, B, H, T, K, V, BT, BK, BV, BC, h0=None, ht=None, scale=1.)
     )
     A = q.new_empty(B, HQ, T, BT)
     grid = (NT * NC * NC, B * HQ)
-    chunk_gated_abc_fwd_kernel_intra_V[grid](
+    chunk_gsa_fwd_kernel_intra_V[grid](
         q, k, g, A,
         k.stride(1), k.stride(2), k.stride(3),
         scale,
@@ -974,7 +972,7 @@ def fwd_v(q, k, v, g, B, H, T, K, V, BT, BK, BV, BC, h0=None, ht=None, scale=1.)
     )
     o = v.new_empty(B, HQ, T, V)
     grid = (NV, NT, B * HQ)
-    chunk_gated_abc_fwd_kernel_V[grid](
+    chunk_gsa_fwd_kernel_V[grid](
         q, v, g, h, o, A,
         k.stride(1), k.stride(2), k.stride(3),
         v.stride(1), v.stride(2), v.stride(3),
@@ -1006,7 +1004,7 @@ def fwd_k(q, k, v, g, B, H, T, K, V, BT, BK, BV, BC, h0=None, ht=None, scale=1.)
     o = v.new_empty(B, HQ, T, V)
     A = q.new_empty(B, HQ, T, BT)
     grid = (NV, NT, B * HQ)
-    chunk_gated_abc_fwd_kernel_K[grid](
+    chunk_gsa_fwd_kernel_K[grid](
         q, k, h, g, o, A,
         k.stride(1), k.stride(2), k.stride(3),
         v.stride(1), v.stride(2), v.stride(3),
@@ -1017,7 +1015,7 @@ def fwd_k(q, k, v, g, B, H, T, K, V, BT, BK, BV, BC, h0=None, ht=None, scale=1.)
         num_stages=num_stages
     )
     grid = (NV, NT * NC, B * HQ)
-    chunk_gated_abc_fwd_kernel_intra_K[grid](
+    chunk_gsa_fwd_kernel_intra_K[grid](
         v, g, o, A,
         v.stride(1), v.stride(2), v.stride(3),
         T=T, V=V, BT=BT, BC=BC, BV=BV, NC=NC, NG=NG,
@@ -1037,7 +1035,7 @@ def bwd_inner(q, g, do, B, H, T, K, V, BT, BK, BV, scale, gatek=False):
 
     dh = q.new_empty(B, HQ, NT * K, V)
     grid = (NK, NV, B * HQ)
-    chunk_gated_abc_bwd_kernel_dh[grid](
+    chunk_gsa_bwd_kernel_dh[grid](
         q, g, do, dh,
         q.stride(1), q.stride(2), q.stride(3),
         do.stride(1), do.stride(2), do.stride(3),
@@ -1074,7 +1072,7 @@ def bwd_v(q, k, v, g, h, A, do, dg, B, H, T, K, V, BT, BK, BV, BC, scale=1.):
     dA = v.new_empty(B, HQ, T, BT)
 
     grid = (NK, NT, B * HQ)
-    chunk_gated_abc_bwd_kernel_V[grid](
+    chunk_gsa_bwd_kernel_V[grid](
         k, v, h, g, A, do, dh, dq, dk, dv, dA,
         k.stride(1), k.stride(2), k.stride(3),
         v.stride(1), v.stride(2), v.stride(3),
@@ -1086,7 +1084,7 @@ def bwd_v(q, k, v, g, h, A, do, dg, B, H, T, K, V, BT, BK, BV, BC, scale=1.):
     )
     dv = dv.sum(0, dtype=dv.dtype)
     grid = (NK, NT * NC, B * HQ)
-    chunk_gated_abc_bwd_kernel_intra_V[grid](
+    chunk_gsa_bwd_kernel_intra_V[grid](
         q, k, g, dA, dq, dk, dg,
         k.stride(1), k.stride(2), k.stride(3),
         T=T, K=K, BT=BT, BC=BC, BK=BK, NC=NC, NG=NG,
@@ -1115,7 +1113,7 @@ def bwd_k(q, k, v, g, h, o, do, dg, B, H, T, K, V, BT, BK, BV, BC, scale=1.):
     )
     dA = q.new_empty(NV, B, HQ, T, BT)
     grid = (NV, NT * NC * NC, B * HQ)
-    chunk_gated_abc_bwd_kernel_intra_K[grid](
+    chunk_gsa_bwd_kernel_intra_K[grid](
         v, g, do, dA,
         v.stride(1), v.stride(2), v.stride(3),
         scale,
@@ -1131,7 +1129,7 @@ def bwd_k(q, k, v, g, h, o, do, dg, B, H, T, K, V, BT, BK, BV, BC, scale=1.):
     dv = v.new_empty(NK, B, HQ, T, V)
     dg = g.new_empty(B, HQ, T, V, dtype=torch.float) if dg is None else dg
     grid = (NK, NT, B * HQ)
-    chunk_gated_abc_bwd_kernel_K[grid](
+    chunk_gsa_bwd_kernel_K[grid](
         q, k, v, h, g, A, do, dh, dq, dk, dv, dA,
         q.stride(1), q.stride(2), q.stride(3),
         v.stride(1), v.stride(2), v.stride(3),
@@ -1144,7 +1142,7 @@ def bwd_k(q, k, v, g, h, o, do, dg, B, H, T, K, V, BT, BK, BV, BC, scale=1.):
     A = A.sum(0, dtype=A.dtype)
     dv = dv.sum(0, dtype=dv.dtype)
     grid = (NV, NT * NC, B * HQ)
-    chunk_gated_abc_bwd_kernel_intra_KV[grid](
+    chunk_gsa_bwd_kernel_intra_KV[grid](
         v, g, o, A, do, dv, dg,
         v.stride(1), v.stride(2), v.stride(3),
         T=T, V=V, BT=BT, BC=BC, BV=BV, NC=NC, NG=NG,
@@ -1172,7 +1170,7 @@ class ChunkGatedABCFunction(torch.autograd.Function):
             hvt = q.new_empty(B, H, M, V, dtype=torch.float)
 
         g_cumsum = chunk_local_cumsum(g, BT)
-        g_org, g = g, g_cumsum 
+        g_org, g = g, g_cumsum
         ok, hk, _ = fwd_k(
             q=q, k=k, v=s, g=g,
             B=B, H=H, T=T, K=K, V=M, BT=BT, BK=BK, BV=BM, BC=BC,
@@ -1281,7 +1279,7 @@ class ChunkGatedABCFunction(torch.autograd.Function):
         return dq, dk, dv, ds, dg, None, None, None, None, None
 
 
-def chunk_gated_abc(
+def chunk_gsa(
     q: torch.Tensor,
     k: torch.Tensor,
     v: torch.Tensor,

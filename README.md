@@ -2,7 +2,7 @@
 
 # RWKV-FLA
 
-[![hf_model](https://img.shields.io/badge/🤗-Models-blue.svg)](https://huggingface.co/fla-hub) | [![Discord](https://img.shields.io/badge/Discord-%235865F2.svg?&logo=discord&logoColor=white)](https://discord.gg/vDaJTmKNcS)
+[![hf_model](https://img.shields.io/badge/🤗-Models-blue.svg)](https://huggingface.co/fla-hub)  [![Discord](https://img.shields.io/badge/Discord-%235865F2.svg?&logo=discord&logoColor=white)](https://discord.gg/vDaJTmKNcS)
 </div>
 
 This repo aims at providing Triton kernel for RWKV models. RWKV is a brand new network architecture that integrates the advantages of transformers and RNNs, and can be used for a variety of natural language processing tasks. Also, RWKV is the state-of-the-art RNN model.
@@ -121,6 +121,8 @@ Their innovative work and expertise laid the foundation for the development of r
 | 2024-04 |             RWKV6              |          Eagle and Finch: RWKV with Matrix-Valued States and Dynamic Recurrence           |                             [arxiv](https://arxiv.org/abs/2404.05892)                              |                                                                    [[official]](https://github.com/RWKV/RWKV-LM)                                                                     |        [code](https://github.com/sustcsonglin/flash-linear-attention/blob/main/fla/layers/rwkv6.py)         |
 | 2024-06 |             Samba              | Samba: Simple Hybrid State Space Models for Efficient Unlimited Context Language Modeling |                             [arxiv](https://arxiv.org/abs/2406.07522)                              |                                                                   [[official]](https://github.com/microsoft/Samba)                                                                   |          [code](https://github.com/sustcsonglin/flash-linear-attention/blob/main/fla/models/samba)          |
 | 2024-05 |             Mamba2              | Transformers are SSMs: Generalized Models and Efficient Algorithms Through Structured State Space Duality  |                             [arxiv](https://arxiv.org/abs/2405.21060)                          |                                                                   [[official]](https://github.com/state-spaces/mamba)                                                                   |          [code](https://github.com/sustcsonglin/flash-linear-attention/blob/main/fla/models/mamba2)          |
+
+
 
 
 # Usage
@@ -308,7 +310,7 @@ Please refer to Sectiton 2.3 of [GLA paper](https://arxiv.org/pdf/2312.06635.pdf
 
 * `Parallel`: Self-attention-styled computation in $O(L^2)$ time with sequence parallelism.
 * `FusedRecurrent`: Recurrent computation in $O(L)$ time. Hidden states are computed on-the-fly in shared memory without any materialization to global memory (see Algorithm1 of [this paper](https://arxiv.org/pdf/2006.16236.pdf) for more details!). This saves a lot of I/O cost and should be a strong baseline for speed comparison.
-* `FusedChunk`: Chunkwise computation in $O(LC)$ time where $C$ is the chunk size. Hidden states are computed on-the-fly without any materialization to global memory likewise **FusedRecurrent**. This version is usually better than FusedReuccurent because tensor cores can be used for sequence level "reduction", whilst FusedRecurrent cannot use tensor cores at all.  Note that there is no sequence level parallelism in this implementation, so this impl is not suitable for the very small batch size setting. Should be more memory efficient than ParallelChunk.
+* `FusedChunk`: Chunkwise computation in $O(LC)$ time where $C$ is the chunk size. Hidden states are computed on-the-fly without any materialization to global memory likewise **FusedRecurrent**. This version is usually better than FusedReuccurent because tensor cores can be used for sequence level "reduction", whilst FusedRecurrent cannot use tensor cores at all.  Note that there is no sequence level parallelism in this implementation, so this impl is not suitable for the very small batch size setting. Should be more memory efficient than ParallelChunk. 
 * `ParallelChunk`: Chunkwise computation with sequence parallelism. Need to materialize hidden states to global memory for each chunk. $C$ is needed to set properly to achieve good performance because when $C$ is small there are too many hidden states to load/store to global memory; and when $C$ is too large the FLOPs are high. Recommened $C$ is [64, 128, 256]
 
 
@@ -316,7 +318,7 @@ Please refer to Sectiton 2.3 of [GLA paper](https://arxiv.org/pdf/2312.06635.pdf
 If you find this repo useful, please consider citing our works:
 ```bib
 @article{yang2024delta,
-  title   = {Parallelizing Linear Transformers with the Delta Rule over Sequence Length},
+  title   = {Parallelizing Linear Transformers with the Delta Rule over Sequence Length}, 
   author  = {Songlin Yang and Bailin Wang and Yu Zhang and Yikang Shen and Yoon Kim},
   journal = {arXiv preprint arXiv:2406.06484},
   year    = {2024},
@@ -336,4 +338,19 @@ If you find this repo useful, please consider citing our works:
   month  = jan,
   year   = {2024}
 }
+
+@article{yang2024delta,
+  title   = {Parallelizing Linear Transformers with the Delta Rule over Sequence Length}, 
+  author  = {Songlin Yang and Bailin Wang and Yu Zhang and Yikang Shen and Yoon Kim},
+  journal = {arXiv preprint arXiv:2406.06484},
+  year    = {2024},
+}
+
+@article{zhang2024gsa,
+  title   = {Gated Slot Attention for Efficient Linear-Time Sequence Modeling}, 
+  author  = {Yu Zhang and Songlin Yang and Ruijie Zhu and Yue Zhang and Leyang Cui and Yiqiao Wang and Bolun Wang and Freda Shi and Bailin Wang and Wei Bi and Peng Zhou and Guohong Fu},
+  journal = {arXiv preprint arXiv:2409.07146},
+  year    = {2024},
+}
+
 ```

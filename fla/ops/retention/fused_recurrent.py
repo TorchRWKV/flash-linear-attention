@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# Copyright (c) 2023, Yu Zhang, Songlin Yang
+# Copyright (c) 2024, Songlin Yang, Yu Zhang
 
 from typing import Tuple
 
@@ -8,18 +8,16 @@ import triton
 import triton.language as tl
 
 from fla.utils import contiguous
-from fla.ops.utils import chunk_global_reversed_cumsum
 
 # on-the-fly computation without materializing hidden statets into HBMs
 
 
 @triton.jit
-def fused_recurrent_simple_gla_fwd_kernel(
+def fused_recurrent_retention_fwd_kernel(
     # B: batch_size, H: n_heads, T: seq_len, D: d_head
     q,  # query [B, H, L, D_head_K]
     k,  # key [B, H, L, D_head_V]
     v,  # value [B, H, L, D_head_V]
-    g, # gate [B, H, L]
     o,  # output [B, H, L, D_head_V]
     initial_state,
     final_state,  # final hidden state [B, H, D_head_K, D_head_V]
@@ -48,12 +46,12 @@ def fused_recurrent_simple_gla_fwd_kernel(
     i_h = i_bh % H
 
     # decay rate given the head index
+    b_b = (1 - tl.math.exp2(-5 - i_h * 1.0))
 
     p_q = q + i_bh * s_qk_h + i_k * BK + tl.arange(0, BK)
     p_k = k + i_bh * s_qk_h + i_k * BK + tl.arange(0, BK)
     p_v = v + i_bh * s_vo_h + i_v * BV + tl.arange(0, BV)
     p_o = o + (i_bh + i_k * B * H) * s_vo_h + i_v * BV + tl.arange(0, BV)
-    p_g = g + i_bh * T
 
     mask_bk = (i_k * BK + tl.arange(0, BK)) < DK
     mask_bv = (i_v * BV + tl.arange(0, BV)) < DV
@@ -71,9 +69,8 @@ def fused_recurrent_simple_gla_fwd_kernel(
         _k = tl.load(p_k, mask=mask_bk, other=0).to(tl.float32)
         _v = tl.load(p_v, mask=mask_bv, other=0).to(tl.float32)
         _q = tl.load(p_q, mask=mask_bk, other=0).to(tl.float32) * scale
-        _g = tl.load(p_g).to(tl.float32)
-        _g = tl.exp(_g)
-        h = _g * h + _k[None, :] * _v[:, None]
+
+        h = b_b * h + _k[None, :] * _v[:, None]
         _o = h * _q[None, :]
         _o = tl.sum(_o, axis=1)
         tl.store(p_o, _o.to(p_o.dtype.element_ty), mask=mask_bv)
@@ -82,7 +79,6 @@ def fused_recurrent_simple_gla_fwd_kernel(
         p_k += DK
         p_o += DV
         p_v += DV
-        p_g += 1
 
     if STORE_FINAL_STATE:
         p_final_s = final_state + i_bh * DK * DV + \
@@ -93,13 +89,12 @@ def fused_recurrent_simple_gla_fwd_kernel(
 
 # Similar to Algorithm1 of https://arxiv.org/abs/2006.16236
 @triton.jit
-def fused_recurrent_simple_gla_bwd_kernel(
+def fused_recurrent_retention_bwd_kernel(
     # B: batch_size, H: n_heads, T: seq_len, D: d_head
     # NV: number of split in the V dimension. NK: number of split in the K dimension
     q,  # query [B, H, L, D_head_K]
     k,  # key [B, H, L, D_head_V]
     v,  # value [B, H, L, D_head_V]
-    g, # gate [B, H, L]
 
     do,  # gradient of output [B, H, L, D_head_V]
     dq,  # gradient of query [NV, B, H, L, D_head_K]
@@ -130,12 +125,12 @@ def fused_recurrent_simple_gla_bwd_kernel(
     i_v, i_k, i_bh = tl.program_id(0), tl.program_id(1), tl.program_id(2)
     i_h = i_bh % H
 
+    b_b = 1 - tl.math.exp2(-5 - i_h * 1.0)
 
     p_q = q + i_bh * s_qk_h + i_k * BK + tl.arange(0, BK)
     p_k = k + i_bh * s_qk_h + i_k * BK + tl.arange(0, BK)
     p_v = v + i_bh * s_vo_h + i_v * BV + tl.arange(0, BV)
     p_do = do + i_bh * s_vo_h + i_v * BV + tl.arange(0, BV)
-    p_g = g + i_bh * T
 
     p_dq = dq + (i_bh + i_v * B * H) * s_qk_h + i_k * BK + tl.arange(0, BK)
     mask_bk = i_k * BK + tl.arange(0, BK) < DK
@@ -153,11 +148,9 @@ def fused_recurrent_simple_gla_bwd_kernel(
     for i in range(0, T):
         _k = tl.load(p_k, mask=mask_bk, other=0).to(tl.float32)
         _v = tl.load(p_v, mask=mask_bv, other=0).to(tl.float32)
-        _g = tl.load(p_g).to(tl.float32)
-        _g = tl.exp(_g)
         _do = tl.load(p_do, mask=mask_bv, other=0).to(tl.float32)
-        
-        h = _g * h + _k[:, None] * _v[None, :]
+
+        h = b_b * h + _k[:, None] * _v[None, :]
         _d_q = h * _do[None, :]
         d_q = tl.sum(_d_q, axis=1) * scale
         tl.store(p_dq, d_q.to(p_dq.dtype.element_ty), mask=mask_bk)
@@ -166,7 +159,6 @@ def fused_recurrent_simple_gla_bwd_kernel(
         p_do += DV
         p_v += DV
         p_dq += DK
-        p_g += 1
 
     # sync threads
     tl.debug_barrier()
@@ -175,7 +167,6 @@ def fused_recurrent_simple_gla_bwd_kernel(
     p_k = k + i_bh * s_qk_h + i_k * BK + tl.arange(0, BK) + (T - 1) * DK
     p_do = do + i_bh * s_vo_h + i_v * BV + tl.arange(0, BV) + (T - 1) * DV
     p_v = v + i_bh * s_vo_h + i_v * BV + tl.arange(0, BV) + (T - 1) * DV
-    p_g = g + i_bh * T + (T - 1)
     p_dk = dk + (i_bh + i_v * B * H) * s_qk_h + i_k * \
         BK + tl.arange(0, BK) + (T - 1) * DK
     p_dv = dv + (i_bh + i_k * B * H) * s_vo_h + i_v * \
@@ -187,16 +178,13 @@ def fused_recurrent_simple_gla_bwd_kernel(
         _q = tl.load(p_q, mask=mask_bk, other=0).to(tl.float32) * scale
         _k = tl.load(p_k, mask=mask_bk, other=0).to(tl.float32)
         _v = tl.load(p_v, mask=mask_bv, other=0).to(tl.float32)
-        _g = tl.load(p_g).to(tl.float32)
-        _g = tl.exp(_g)
         d_h += _q[:, None] * _do[None, :]
         d_k = tl.sum(d_h * _v[None, :], axis=1)
         d_v = tl.sum(d_h * _k[:, None], axis=0)
 
-        d_h *= _g
+        d_h *= b_b
         tl.store(p_dk, d_k.to(p_dk.dtype.element_ty), mask=mask_bk)
         tl.store(p_dv, d_v.to(p_dv.dtype.element_ty), mask=mask_bv)
-
 
         p_do -= DV
         p_q -= DK
@@ -204,16 +192,13 @@ def fused_recurrent_simple_gla_bwd_kernel(
         p_v -= DV
         p_dk -= DK
         p_dv -= DV
-        p_g -= 1
-
-        
 
 
-class FusedRecurrentSimpleGLAFunction(torch.autograd.Function):
+class FusedRecurrentRetentionFunction(torch.autograd.Function):
 
     @staticmethod
     @contiguous
-    def forward(ctx, q, k, v, g, initial_state=None, output_final_state=False):
+    def forward(ctx, q, k, v, initial_state=None, output_final_state=False):
         batch_size, n_heads, seq_len, d_head_qk = q.shape
         d_head_v = v.shape[-1]
 
@@ -231,8 +216,8 @@ class FusedRecurrentSimpleGLAFunction(torch.autograd.Function):
             final_state = None
 
         grid = (NV, NK, batch_size * n_heads)
-        fused_recurrent_simple_gla_fwd_kernel[grid](
-            q, k, v, g, o, initial_state, final_state,
+        fused_recurrent_retention_fwd_kernel[grid](
+            q, k, v, o, initial_state, final_state,
             q.stride(1), q.stride(2), q.stride(3),
             v.stride(1), v.stride(2), v.stride(3),
             batch_size, n_heads, seq_len, scale,
@@ -244,13 +229,13 @@ class FusedRecurrentSimpleGLAFunction(torch.autograd.Function):
         )
 
         o = o.sum(0)
-        ctx.save_for_backward(q, k, v, g, initial_state)
+        ctx.save_for_backward(q, k, v, initial_state)
         return o, final_state
 
     @staticmethod
     @contiguous
     def backward(ctx, do, d_final_state=None):
-        q, k, v, g, initial_state = ctx.saved_tensors
+        q, k, v, initial_state = ctx.saved_tensors
         batch_size, n_heads, seq_len, d_head_qk = q.shape
         d_head_v = v.shape[-1]
         scale = d_head_qk ** -0.5
@@ -260,13 +245,13 @@ class FusedRecurrentSimpleGLAFunction(torch.autograd.Function):
         num_stages = 1
         num_warps = 1
 
-        dq = q.new_empty(NV, batch_size, n_heads, seq_len, d_head_qk, dtype=torch.float32)
-        dk = q.new_empty(NV, batch_size, n_heads, seq_len, d_head_qk, dtype=torch.float32)
+        dq = q.new_empty(NV, batch_size, n_heads, seq_len, d_head_qk)
+        dk = q.new_empty(NV, batch_size, n_heads, seq_len, d_head_qk)
         dv = q.new_empty(NK, batch_size, n_heads, seq_len, d_head_v)
         grid = (NV, NK, batch_size * n_heads)
 
-        fused_recurrent_simple_gla_bwd_kernel[grid](
-            q, k, v, g, do, dq, dk, dv, initial_state,
+        fused_recurrent_retention_bwd_kernel[grid](
+            q, k, v, do, dq, dk, dv, initial_state,
             q.stride(1), q.stride(2), q.stride(3),
             v.stride(1), v.stride(2), v.stride(3),
             batch_size, n_heads, seq_len, scale,
@@ -276,23 +261,21 @@ class FusedRecurrentSimpleGLAFunction(torch.autograd.Function):
             USE_INITIAL_STATE=initial_state is not None
         )
         dq = dq.sum(0)
-        dk = dk.sum(0)  
+        dk = dk.sum(0)
         dv = dv.sum(0)
-
-        dg = chunk_global_reversed_cumsum((dq * q.float() - dk * k.float()).sum(-1))
-
-        return dq, dk, dv, dg, None, None
+        return dq, dk, dv, None, None
 
 
-def fused_recurrent_simple_gla(
+# fused_recurrent_retention = FusedRecurrentRetentionFunction.apply
+
+def fused_recurrent_retention(
     q: torch.Tensor,
     k: torch.Tensor,
     v: torch.Tensor,
-    g: torch.Tensor,
     initial_state: torch.Tensor = None,
     output_final_state: bool = False
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     if initial_state is not None:
         initial_state = initial_state.detach()
-    o, final_state = FusedRecurrentSimpleGLAFunction.apply(q, k, v, g, initial_state, output_final_state)
+    o, final_state = FusedRecurrentRetentionFunction.apply(q, k, v, initial_state, output_final_state)
     return o, final_state

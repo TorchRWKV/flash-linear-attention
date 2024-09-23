@@ -108,11 +108,25 @@ def get_package_version():
     with open(Path(this_dir) / 'fla' / '__init__.py') as f:
         version_match = re.search(r"^__version__\s*=\s*(.*)$", f.read(), re.MULTILINE)
     version = ast.literal_eval(version_match.group(1))
+    # Check for .git directory
+    git_dir = os.path.join(this_dir, '.git')
+    if os.path.exists(git_dir):
+        # We're in a Git repository, try to get the branch name
+        try:
+            git_branch = subprocess.check_output(['git', 'rev-parse', '--abbrev-ref', 'HEAD'],
+                                                 universal_newlines=True,
+                                                 stderr=subprocess.DEVNULL,
+                                                 cwd=this_dir).strip()
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            git_branch = None
+    else:
+        git_branch = None
 
     build_date = datetime.now().strftime("%Y%m%d%H%M")
-    dev_suffix = f".dev{build_date}"
-
-    return f"{version}{dev_suffix}"
+    if git_branch and git_branch in ('stable'):
+        return f"{version}.{build_date}"
+    else:
+        return f"{version}.dev{build_date}"
 
 
 setup(

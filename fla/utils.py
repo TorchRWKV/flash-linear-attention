@@ -83,7 +83,7 @@ def check_compute_capacity():
 
 
 @lru_cache(maxsize=None)
-def check_pytorch_version(version_s:str):
+def check_pytorch_version(version_s: str):
     if version.parse(torch.__version__) >= version.parse(version_s):
         return True
     else:
@@ -117,7 +117,7 @@ else:
 @lru_cache(maxsize=None)
 def detect_tf32():
     env_tf32 = os.environ.get('USE_TF32', 'true').lower()
-    
+
     if env_tf32 in ('1', 'true', 'yes', 'on'):
         return True
     elif env_tf32 in ('0', 'false', 'no', 'off'):

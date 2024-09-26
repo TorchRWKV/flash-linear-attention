@@ -81,8 +81,8 @@ def naive_recurrent_rwkv7(
             # state = state_new
             # Also equivalent to the following code
             # Calculate sab
-            temp = torch.bmm(state.view(B*H, V, V), a_t.view(B*H, V, 1))
-            sab = torch.bmm(temp.view(B*H, V, 1), b_t.view(B*H, 1, V))
+            sa = torch.bmm(state.view(B*H, V, V), a_t.view(B*H, V, 1))
+            sab = torch.bmm(sa.view(B*H, V, 1), b_t.view(B*H, 1, V))
 
             # Update state
             kv = torch.bmm(k_t.view(B*H, V, 1), v_t.view(B*H, 1, V))
@@ -170,22 +170,35 @@ def naive_recurrent_rwkv7_bwd(
         prev_state = states[t]
 
         # Gradient of output
-        dq[:, :, t] += torch.einsum('bhi,bhij->bhj', doutput[:, :, t], state) * scale
-        dstate += torch.einsum('bhi,bhj->bhij', doutput[:, :, t], q_t)
+        # torch.einsum('bhi,bhij->bhj', doutput[:, :, t], state)
+        dq[:, :, t] += torch.bmm(doutput[:, :, t].view(B*H, 1, V), state.view(B*H, V, V)).view(B,H,V) * scale
+
+        # torch.einsum('bhi,bhj->bhij', doutput[:, :, t], q_t)
+        dstate += torch.mul(doutput[:, :, t].unsqueeze(3), q_t.unsqueeze(2))
+
 
         # Gradient of state update
         dw[:, :, t] += torch.sum(dstate * prev_state, dim=(-2)) * w_t
 
         # Gradient of sab
-        da[:, :, t] += torch.einsum('bhij,bhik,bhj->bhk', dstate, prev_state, b_t)
-        db[:, :, t] += torch.einsum('bhij,bhik,bhk->bhj', dstate, prev_state, a_t)
+        # torch.einsum('bhij,bhik,bhj->bhk', dstate, prev_state, b_t)
+        temp = torch.bmm(dstate.view(B*H, V, V).permute(0, 2, 1), prev_state.view(B*H, V, V)).view(B*H, V, V)
+        da[:, :, t] += torch.bmm(temp.permute(0, 2, 1), b_t.view(B*H, V, 1)).view(B, H, V)
+        
+        # torch.einsum('bhij,bhik,bhk->bhj', dstate, prev_state, a_t)
+        db[:, :, t] += torch.bmm(temp, a_t.view(B*H, V, 1)).view(B, H, V)
 
-        # # Gradient of k_t * v_t
-        dk[:, :, t] += torch.einsum('bhij,bhi->bhj', dstate, v_t) * scale
-        dv[:, :, t] += torch.einsum('bhij,bhj->bhi', dstate, k_t) * scale
+        # Gradient of k_t * v_t
+        # torch.einsum('bhij,bhi->bhj', dstate, v_t)
+        dk[:, :, t] += torch.bmm(dstate.view(B*H, V, V).permute(0, 2, 1), v_t.view(B*H, V, 1)).view(B, H, V) * scale
+        # torch.einsum('bhij,bhj->bhi', dstate, k_t)
+        dv[:, :, t] += torch.bmm(dstate.view(B*H, V, V), k_t.view(B*H, V, 1)).view(B, H, V) * scale
 
-        # # Gradient for previous state
-        dprev_state = torch.einsum('bhij,bhk,bhj->bhik', dstate, a_t, b_t)
+        # Gradient for previous state
+        # torch.einsum('bhij,bhk,bhj->bhik', dstate, a_t, b_t)
+        mul_result = dstate.unsqueeze(3) * a_t.unsqueeze(2).unsqueeze(-1) # [B, H, V, 1, V] * [B, H, 1, V, 1] = [B, H, V, 1, V]
+        dprev_state = torch.bmm(mul_result.view(B*H, V*V, V), b_t.view(B*H, V, 1)).view(B, H, V, V)
+        
         dprev_state += dstate *  w[:, :, t, None, :]
 
         # Update dstate for next iteration
@@ -272,7 +285,7 @@ if __name__ == "__main__":
     def get_err_ratio(x, y):
         err = (x-y).flatten().square().mean().sqrt().item()
         base = (x).flatten().square().mean().sqrt().item()
-        return err / base
+        return err / (base + 1e-20)
     q = (torch.randn(B, H, L, D).to(device).to(dtype)).fill_(torch.rand(1).item()).requires_grad_(require_grad)
     k = (torch.randn(B, H, L, D).to(device).to(dtype)).fill_(torch.rand(1).item()).requires_grad_(require_grad)
     v = torch.randn(B, H, L, D).to(device).to(dtype).fill_(torch.rand(1).item()).requires_grad_(require_grad)

@@ -4,6 +4,7 @@
 import torch
 import triton
 import triton.language as tl
+from fla.utils import device_capacity
 
 
 @triton.autotune(
@@ -213,7 +214,8 @@ def chunk_fwd_h_fn(k, v, g, gk, gv, BT, h0, output_final_state, states_in_fp32=F
     if output_final_state:
         ht = k.new_empty(B, H, K, V, dtype=torch.float32)
 
-    BK, BV = min(64, triton.next_power_of_2(K)), min(64, triton.next_power_of_2(V))
+    BK = min(64, triton.next_power_of_2(K)) if device_capacity else min(32, triton.next_power_of_2(K))
+    BV = min(64, triton.next_power_of_2(V)) if device_capacity else min(32, triton.next_power_of_2(V))
     NT, NK, NV = triton.cdiv(T, BT), triton.cdiv(K, BK), triton.cdiv(V, BV)
     h = k.new_empty(B, H, NT * K, V, dtype=k.dtype if not states_in_fp32 else torch.float32)
 
@@ -234,8 +236,8 @@ def chunk_bwd_dh_fn(q, k, v, g, gk, gv, do, h0, dht, BT, scale, states_in_fp32=F
     HQ = q.shape[1]
     B, H, T, K, V = *k.shape, v.shape[-1]
     BT = 64
-    BK = min(triton.next_power_of_2(K), 64)
-    BV = min(triton.next_power_of_2(V), 64)
+    BK = min(triton.next_power_of_2(K), 64) if device_capacity else min(32, triton.next_power_of_2(K))
+    BV = min(triton.next_power_of_2(V), 64) if device_capacity else min(32, triton.next_power_of_2(V))
     NT, NK, NV = triton.cdiv(T, BT), triton.cdiv(K, BK), triton.cdiv(V, BV)
     NG = HQ // H
 

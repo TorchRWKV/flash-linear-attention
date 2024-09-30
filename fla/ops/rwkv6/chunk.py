@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# Copyright (c) 2024, Songlin Yang, Yu Zhang
+# Copyright (c) 2024, Songlin Yang, Yu Zhang, Zhiyuan Li
 
 from typing import Optional, Tuple
 
@@ -104,7 +104,7 @@ def post_process_grad(
 
     b_q = (tl.load(p_q, boundary_check=(0, 1)) * scale).to(TLTYPE)
     b_k = (tl.load(p_k, boundary_check=(0, 1)) * scale).to(TLTYPE)
-    b_v = (tl.load(p_v, boundary_check=(0, 1)) * scale).to(TLTYPE)
+    b_v = tl.load(p_v, boundary_check=(0, 1)).to(TLTYPE)
     b_do = tl.load(p_do, boundary_check=(0, 1)).to(TLTYPE)
     b_u = tl.load(p_u, boundary_check=(0,)).to(TLTYPE)
 
@@ -182,7 +182,7 @@ def chunk_rwkv6_fwd_kernel_h(
         # [BK, BT]
         b_k = (tl.load(p_k, boundary_check=(0, 1)) * scale).to(TLTYPE)
         # [BT, BV]
-        b_v = (tl.load(p_v, boundary_check=(0, 1)) * scale).to(TLTYPE)
+        b_v = tl.load(p_v, boundary_check=(0, 1)).to(TLTYPE)
         # [BK, BT]
         b_g = tl.load(p_g, boundary_check=(0, 1))
         if i_t < NT - 1:
@@ -378,7 +378,7 @@ def chunk_rwkv6_fwd_kernel_inter(
     p_o = tl.make_block_ptr(o + i_bh * s_v_h, (T, V), (s_v_t, s_v_d), (i_t * BT, i_v * BV), (BT, BV), (1, 0))
     p_A = tl.make_block_ptr(A + i_bh * T * BT, (T, BT), (BT, 1), (i_t * BT, 0), (BT, BT), (1, 0))
     # [BT, BV]
-    b_v = (tl.load(p_v, boundary_check=(0, 1)) * scale).to(TLTYPE)
+    b_v = tl.load(p_v, boundary_check=(0, 1)).to(TLTYPE)
     # [BT, BT]
     b_A = tl.load(p_A, boundary_check=(0, 1)).to(TLTYPE)
     b_o += tl.dot(b_A, b_v, allow_tf32=USE_TF32).to(TLTYPE)
@@ -537,7 +537,7 @@ def chunk_rwkv6_bwd_kernel_inter(
                                  (s_v_t, s_v_d), (offset_k, i_v * BV), (BT, BV), (1, 0))
 
         # [BT, BV]
-        b_v = (tl.load(p_v, boundary_check=(0, 1)) * scale).to(TLTYPE)
+        b_v = tl.load(p_v, boundary_check=(0, 1)).to(TLTYPE)
         # [BV, BK]
         b_h = tl.load(p_h, boundary_check=(0, 1))
         # [BT, BV]
@@ -550,7 +550,6 @@ def chunk_rwkv6_bwd_kernel_inter(
         if i_k == 0:
             b_dv += tl.dot(b_A, b_do, allow_tf32=USE_TF32)
         b_do = (b_do * scale).to(b_do.dtype)
-        b_dv = (b_dv * scale).to(b_dv.dtype)
 
         tl.store(p_dv, b_dv.to(p_dv.dtype.element_ty), boundary_check=(0, 1))
         # [BT, BT]
@@ -559,7 +558,6 @@ def chunk_rwkv6_bwd_kernel_inter(
         b_dq += tl.dot(b_do.to(TLTYPE), b_h.to(TLTYPE), allow_tf32=False).to(TLTYPE)  # must be false
         # [BT, BK]
         b_dk += (tl.dot(b_v.to(TLTYPE), tl.trans(b_dh).to(TLTYPE), allow_tf32=False) * scale).to(TLTYPE) # must be false
-        # b_dk = (b_dk * scale).to(b_dk.dtype)
 
     b_dq = b_dq * tl.exp(b_gq).to(TLTYPE)
     b_dk = b_dk * b_gn
@@ -699,10 +697,11 @@ class ChunkRWKV6Function(torch.autograd.Function):
 
     @staticmethod
     @contiguous
-    def forward(ctx, r, k, v, g, u, scale, initial_state, output_final_state, checkpoint_level, u_2d: bool = False, training: bool = True, use_tf32: bool = False):
+    def forward(ctx, r, k, v, g, u, scale, initial_state, output_final_state, checkpoint_level, 
+                u_2d: bool = False, training: bool = True, use_tf32: bool = False, BT: int = 32):
         q = r  # alias
         B, H, T, K, V = *q.shape, v.shape[-1]
-        BT, BC = 32, 16
+        BC = 16
         BK = min(64, triton.next_power_of_2(K)) if device_capacity else min(32, triton.next_power_of_2(K))
         BV = min(64, triton.next_power_of_2(V)) if device_capacity else min(32, triton.next_power_of_2(V))
         NT, NC = triton.cdiv(T, BT), triton.cdiv(BT, BC)
@@ -909,7 +908,7 @@ class ChunkRWKV6Function(torch.autograd.Function):
         du = du.sum([0, 2]) if u_2d else du.sum(2)
         dh0 = dh0.to(q) if initial_state is not None else None
         return dq.to(dtype), dk.to(dtype), dv.to(dtype), dg.to(dtype), du.to(dtype), None, \
-                dh0, None, None, None, None, None
+                dh0, None, None, None, None, None, None
 
 
 _detect_use_tf32 = None
@@ -919,12 +918,13 @@ def chunk_rwkv6(
     v: torch.Tensor,
     g: torch.Tensor,
     u: torch.Tensor,
-    scale: float = -1.0,
+    scale: float = 1.0,
     initial_state: torch.Tensor = None,
     output_final_state: bool = False,
     checkpoint_level: Optional[int] = 0,
     training: bool = True,
-    use_tf32: Optional[bool] = None
+    use_tf32: Optional[bool] = None,
+    chunk_size: int = 32
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     r"""
     Args:
@@ -953,8 +953,7 @@ def chunk_rwkv6(
     """
     global _detect_use_tf32
     assert checkpoint_level in [0, 1]
-    if scale == -1.0:
-        scale = r.shape[-1] ** -0.5
+    scale = r.shape[-1] ** -0.5 if scale == -1.0 else scale
     u_2d = True if u.dim() == 2 else False
     if use_tf32 is None:
         if _detect_use_tf32 is None:
@@ -963,39 +962,70 @@ def chunk_rwkv6(
     else:
         _detect_use_tf32 = use_tf32
     o, final_state = ChunkRWKV6Function.apply(r, k, v, g, u, scale, initial_state,
-                                              output_final_state, checkpoint_level, u_2d, training, _detect_use_tf32)
+                                              output_final_state, checkpoint_level, u_2d, training, _detect_use_tf32, chunk_size)
     return o, final_state
 
 
 if __name__ == "__main__":
     def get_err_ratio(x, y):
+        x = x.to(y.device)
         err = (x-y).flatten().square().mean().sqrt().item()
         base = (x).flatten().square().mean().sqrt().item()
-        return err / base
+        return err / (base + 1e-14)
     from fla.ops.rwkv6 import fused_recurrent_rwkv6, native_recurrent_rwkv6
-    scale = -1.0
+    from fla.ops.rwkv6.recurrent_naive import naive_recurrent_rwkv6
+    scale = 1.0
     use_h = True
     u_2d = False
-    B, H, T, D = 4, 4, 1024, 64
-    dtype = torch.float16
+    B = 1; T = 1024*4; C=4096; HEAD_SIZE=64; H = C // HEAD_SIZE
+    dtype = torch.bfloat16
     from fla.utils import device
     from torch.nn import functional as F
-    torch.manual_seed(42)
+    torch.manual_seed(142)
     atol = 1e-3 if dtype == torch.float else 1e-2
 
-    q = torch.randn(B, H, T, D, device=device).to(dtype).requires_grad_(True)
-    k = torch.randn(B, H, T, D, device=device).to(dtype).requires_grad_(True)
-    v = torch.randn(B, H, T, 2*D, device=device).to(dtype).requires_grad_(True)
-    w = F.logsigmoid(torch.randn(B, H, T, D, device=device)).to(dtype).requires_grad_(True)
-    if u_2d:
-        u = torch.randn(H, D, device=device).to(dtype).requires_grad_(True)
-    else:
-        u = (torch.randn(B, H, D).to(device).to(dtype)).requires_grad_(True)
-    do = torch.rand_like(v, device=device)
-    h = torch.randn(B, H, D, 2*D, device=device, dtype=dtype, requires_grad=True)
+    def RUN_FLA_FUSED(B, T, C, H, r, k, v, w, u, h, scale=1.0):
+        r = r.view(B,T,H,-1).transpose(1,2)
+        k = k.view(B,T,H,-1).transpose(1,2)
+        v = v.view(B,T,H,-1).transpose(1,2)
+        w = -torch.exp(w.view(B,T,H,-1).transpose(1,2))
+        o, state = fused_recurrent_rwkv6(r, k, v, w, u=u, scale=scale, initial_state=h, output_final_state=True)
+        return o.transpose(1,2).reshape(B,T,C), state
+    
+    def RUN_FLA_CHUNK(B, T, C, H, r, k, v, w, u, h, scale=1.0, chunk_size=32):
+        r = r.view(B,T,H,-1).transpose(1,2)
+        k = k.view(B,T,H,-1).transpose(1,2)
+        v = v.view(B,T,H,-1).transpose(1,2)
+        w = -torch.exp(w.view(B,T,H,-1).transpose(1,2))
+        o, state = chunk_rwkv6(r, k, v, w, u=u, scale=scale, initial_state=h, output_final_state=True, chunk_size=chunk_size)
+        return o.transpose(1,2).reshape(B,T,C), state
 
-    ref_o, _ = native_recurrent_rwkv6(q.float(), k.float(), v.float(), w.float(), u.float(), scale=scale, initial_state=h.float() if use_h else None, output_final_state=use_h)
-    ref_o.backward(do)
+    with torch.no_grad():
+        q = torch.empty(B, T, C, device=device).uniform_(-1, 1).to(dtype=dtype)
+        k = torch.empty(B, T, C, device=device).uniform_(-1, 1).to(dtype=dtype)
+        v = torch.empty(B, T, C, device=device).uniform_(-1, 1).to(dtype=dtype)
+        w = torch.empty(B, T, C, device=device).uniform_(-8, -6).to(dtype=dtype)
+        u = torch.empty(H, HEAD_SIZE, device=device).uniform_(-1, 1).to(dtype=dtype)
+        h = torch.zeros(B, H, HEAD_SIZE, HEAD_SIZE, device=device).to(dtype=dtype)
+        do = torch.rand_like(v, device=device)
+    def clear_grad():
+        q.requires_grad_()
+        k.requires_grad_()
+        v.requires_grad_()
+        w.requires_grad_()
+        u.requires_grad_()
+        h.requires_grad_()
+        if q.grad is not None: q.grad.data.zero_()
+        if k.grad is not None: k.grad.data.zero_()
+        if v.grad is not None: v.grad.data.zero_()
+        if w.grad is not None: w.grad.data.zero_()
+        if u.grad is not None: u.grad.data.zero_()
+        if h.grad is not None: h.grad.data.zero_()
+    clear_grad()
+    def LOSS(y):
+        return ((y * y) - torch.tanh(y)).sum()
+    ref_o, _ = RUN_FLA_FUSED(B, T, C, H, q.float(), k.float(), v.float(), w.float(), u.float(), h.float())
+    LOSS(ref_o).backward()
     ref_dq, q.grad = q.grad.clone(), None
     ref_dk, k.grad = k.grad.clone(), None
     ref_dv, v.grad = v.grad.clone(), None
@@ -1004,8 +1034,8 @@ if __name__ == "__main__":
     if use_h:
         ref_dh, h.grad = h.grad.clone(), None
 
-    tri_o, _ = chunk_rwkv6(q, k, v, w, u, scale=scale, initial_state=h if use_h else None, output_final_state=use_h)
-    tri_o.backward(do)
+    tri_o, _ = RUN_FLA_CHUNK(B, T, C, H, q, k, v, w, u, h)
+    LOSS(tri_o).backward()
     tri_dq, q.grad = q.grad.clone(), None
     tri_dk, k.grad = k.grad.clone(), None
     tri_dv, v.grad = v.grad.clone(), None
@@ -1015,10 +1045,13 @@ if __name__ == "__main__":
         tri_dh, h.grad = h.grad.clone(), None
 
     assert get_err_ratio(ref_o, tri_o) < atol
-    print(get_err_ratio(ref_dq, tri_dq)) # pass
-    print(get_err_ratio(ref_dk, tri_dk))
-    print(get_err_ratio(ref_dv, tri_dv))
-    print(get_err_ratio(ref_dw, tri_dw))
+    print("dq", get_err_ratio(ref_dq, tri_dq)) # pass
+    print("dk", get_err_ratio(ref_dk, tri_dk))
+    print("dv", get_err_ratio(ref_dv, tri_dv))
+    print("dw", get_err_ratio(ref_dw, tri_dw))
+    print("du", get_err_ratio(ref_du, tri_du))
+    if use_h:
+        print("dh", get_err_ratio(ref_dh, tri_dh))
     assert get_err_ratio(ref_dq, tri_dq) < atol
     assert get_err_ratio(ref_dk, tri_dk) < atol
     assert get_err_ratio(ref_dv, tri_dv) < atol

@@ -62,7 +62,6 @@ def chunk_rwkv6_fwd_kernel_cum(
     tl.store(p_o_minus_s, (b_o - b_s).to(p_o_minus_s.dtype.element_ty), boundary_check=(0, 1))
 
 
-
 @triton.jit
 def post_process_grad(
     q,
@@ -557,7 +556,7 @@ def chunk_rwkv6_bwd_kernel_inter(
         # [BT, BK]
         b_dq += tl.dot(b_do.to(TLTYPE), b_h.to(TLTYPE), allow_tf32=False).to(TLTYPE)  # must be false
         # [BT, BK]
-        b_dk += (tl.dot(b_v.to(TLTYPE), tl.trans(b_dh).to(TLTYPE), allow_tf32=False) * scale).to(TLTYPE) # must be false
+        b_dk += (tl.dot(b_v.to(TLTYPE), tl.trans(b_dh).to(TLTYPE), allow_tf32=False) * scale).to(TLTYPE)  # must be false
 
     b_dq = b_dq * tl.exp(b_gq).to(TLTYPE)
     b_dk = b_dk * b_gn
@@ -620,12 +619,12 @@ def chunk_rwkv6_bwd_kernel_intra(
         # [BC, BK]
         b_k = tl.load(p_k, boundary_check=(0, 1)) * scale
         b_gk = tl.load(p_gk, boundary_check=(0, 1)).to(tl.float32)
-        b_kg = b_k * tl.exp(b_gn[None, :] - b_gk)
+        b_kg = b_k * safe_exp(b_gn[None, :] - b_gk, TLTYPE)
         # [BC, BC]
         b_dA = tl.load(p_dA, boundary_check=(0, 1)).to(TLTYPE)
         # [BC, BK]
         b_dq_dk_shared += tl.dot(b_dA, b_kg, allow_tf32=False).to(TLTYPE)  # must be false
-    b_dq_dk_shared = b_dq_dk_shared * tl.exp(b_gs - b_gn[None, :]).to(TLTYPE)
+    b_dq_dk_shared = b_dq_dk_shared * safe_exp(b_gs - b_gn[None, :], TLTYPE).to(TLTYPE)
 
     o_i = tl.arange(0, BC)
     o_dA = i_bh * T * BT + (offset_k + i_i * BC + tl.arange(0, BC)) * BT + i_i * BC
@@ -642,7 +641,7 @@ def chunk_rwkv6_bwd_kernel_intra(
         # [BC, BK]
         m_i = o_i[:, None] > j
         # [BC, BK]
-        b_dq_dk_shared += tl.where(m_i, b_dA[:, None] * b_kj[None, :] * tl.exp(b_gs - b_gkj[None, :]), 0.)
+        b_dq_dk_shared += tl.where(m_i, b_dA[:, None] * b_kj[None, :] * safe_exp(b_gs - b_gkj[None, :], TLTYPE), 0.)
 
     p_dq = tl.make_block_ptr(dq + i_bh * s_k_h, (T, K), (s_k_t, s_k_d), (offset_k + i_i * BC, offset_BK), (BC, BK), (1, 0))
 
@@ -657,7 +656,6 @@ def chunk_rwkv6_bwd_kernel_intra(
     # [BK,]
     b_gn = tl.load(p_gn, boundary_check=(0,)).to(tl.float32)
     # [BC, BK]
-    # b_k = tl.load(p_k, boundary_check=(0, 1))
     b_gk = tl.load(p_gk, boundary_check=(0, 1)).to(TLTYPE)
     b_dq_dk_shared = tl.where(True, 0., b_dq_dk_shared).to(TLTYPE)
 
@@ -668,12 +666,13 @@ def chunk_rwkv6_bwd_kernel_intra(
         # [BC, BK]
         b_q = tl.load(p_q, boundary_check=(0, 1))
         b_gs = tl.load(p_gs, boundary_check=(0, 1)).to(TLTYPE)
-        b_qg = (b_q * tl.exp(b_gs - b_gn[None, :]))
+        b_qg = (b_q * safe_exp(b_gs - b_gn[None, :], TLTYPE))
         # [BC, BC]
         b_dA = tl.load(p_dA, boundary_check=(0, 1))
         # [BC, BK]
         b_dq_dk_shared += tl.dot(tl.trans(b_dA), b_qg, allow_tf32=False).to(TLTYPE) * scale
-    b_dq_dk_shared = b_dq_dk_shared * tl.exp(b_gn[None, :] - b_gk).to(TLTYPE)
+
+    b_dq_dk_shared = b_dq_dk_shared * safe_exp(b_gn[None, :] - b_gk, TLTYPE).to(TLTYPE)
 
     o_dA = i_bh * T * BT + (offset_k + i_i * BC) * BT + i_i * BC + tl.arange(0, BC)
     for j in range(0, BC):
@@ -686,18 +685,27 @@ def chunk_rwkv6_bwd_kernel_intra(
         b_gqj = tl.load(p_gqj, boundary_check=(0,))
         # [BC, BK]
         m_i = o_i[:, None] < j
-        b_dq_dk_shared += tl.where(m_i, b_dA[:, None] * b_qj[None, :] * tl.exp(b_gqj[None, :] - b_gk), 0.).to(TLTYPE) * scale
+        b_dq_dk_shared += tl.where(m_i, b_dA[:, None] * b_qj[None, :] * safe_exp(b_gqj[None, :] - b_gk, TLTYPE), 0.).to(TLTYPE) * scale
 
     p_dk = tl.make_block_ptr(dk + i_bh * s_k_h, (T, K), (s_k_t, s_k_d), (offset_k + i_i * BC, offset_BK), (BC, BK), (1, 0))
     b_dq_dk_shared = b_dq_dk_shared + tl.load(p_dk, boundary_check=(0, 1)).to(TLTYPE)
     tl.store(p_dk, b_dq_dk_shared.to(p_dk.dtype.element_ty), boundary_check=(0, 1))
 
 
+@triton.jit
+def safe_exp(x, TLTYPE: tl.constexpr):
+    min_x = -11 if TLTYPE == tl.float16 else -30 
+    max_x = 11 if TLTYPE == tl.float16 else 88
+    safe_temp = tl.maximum(x, min_x)  
+    safe_temp = tl.minimum(safe_temp, max_x)  
+    return tl.exp(safe_temp)
+
+
 class ChunkRWKV6Function(torch.autograd.Function):
 
     @staticmethod
     @contiguous
-    def forward(ctx, r, k, v, g, u, scale, initial_state, output_final_state, checkpoint_level, 
+    def forward(ctx, r, k, v, g, u, scale, initial_state, output_final_state, checkpoint_level,
                 u_2d: bool = False, training: bool = True, use_tf32: bool = False, BT: int = 32):
         q = r  # alias
         B, H, T, K, V = *q.shape, v.shape[-1]
@@ -878,8 +886,8 @@ class ChunkRWKV6Function(torch.autograd.Function):
             scale=scale,
             T=T, K=K, BT=BT, BC=BC, BK=BK, NC=NC,
             TLTYPE=tl.float32,
-            num_warps = num_warps,
-            num_stages = num_stages
+            num_warps=num_warps,
+            num_stages=num_stages
         )
 
         du = g
@@ -902,16 +910,18 @@ class ChunkRWKV6Function(torch.autograd.Function):
             v.stride(1), v.stride(2), v.stride(3), H=H,
             T=T, BT=BT, K=K, V=V, BK=next_pk_2, BV=next_pv_2, U_2D=u_2d,
             TLTYPE=tl_dtype,
-            num_warps = num_warps,
-            num_stages = num_stages
+            num_warps=num_warps,
+            num_stages=num_stages
         )
         du = du.sum([0, 2]) if u_2d else du.sum(2)
         dh0 = dh0.to(q) if initial_state is not None else None
         return dq.to(dtype), dk.to(dtype), dv.to(dtype), dg.to(dtype), du.to(dtype), None, \
-                dh0, None, None, None, None, None, None
+            dh0, None, None, None, None, None, None
 
 
 _detect_use_tf32 = None
+
+
 def chunk_rwkv6(
     r: torch.Tensor,
     k: torch.Tensor,
@@ -977,7 +987,11 @@ if __name__ == "__main__":
     scale = 1.0
     use_h = True
     u_2d = False
-    B = 1; T = 1024*4; C=4096; HEAD_SIZE=64; H = C // HEAD_SIZE
+    B = 1
+    T = 1024*4
+    C = 4096
+    HEAD_SIZE = 64
+    H = C // HEAD_SIZE
     dtype = torch.bfloat16
     from fla.utils import device
     from torch.nn import functional as F
@@ -985,20 +999,20 @@ if __name__ == "__main__":
     atol = 1e-3 if dtype == torch.float else 1e-2
 
     def RUN_FLA_FUSED(B, T, C, H, r, k, v, w, u, h, scale=1.0):
-        r = r.view(B,T,H,-1).transpose(1,2)
-        k = k.view(B,T,H,-1).transpose(1,2)
-        v = v.view(B,T,H,-1).transpose(1,2)
-        w = -torch.exp(w.view(B,T,H,-1).transpose(1,2))
+        r = r.view(B, T, H, -1).transpose(1, 2)
+        k = k.view(B, T, H, -1).transpose(1, 2)
+        v = v.view(B, T, H, -1).transpose(1, 2)
+        w = -torch.exp(w.view(B, T, H, -1).transpose(1, 2))
         o, state = fused_recurrent_rwkv6(r, k, v, w, u=u, scale=scale, initial_state=h, output_final_state=True)
-        return o.transpose(1,2).reshape(B,T,C), state
-    
+        return o.transpose(1, 2).reshape(B, T, C), state
+
     def RUN_FLA_CHUNK(B, T, C, H, r, k, v, w, u, h, scale=1.0, chunk_size=32):
-        r = r.view(B,T,H,-1).transpose(1,2)
-        k = k.view(B,T,H,-1).transpose(1,2)
-        v = v.view(B,T,H,-1).transpose(1,2)
-        w = -torch.exp(w.view(B,T,H,-1).transpose(1,2))
+        r = r.view(B, T, H, -1).transpose(1, 2)
+        k = k.view(B, T, H, -1).transpose(1, 2)
+        v = v.view(B, T, H, -1).transpose(1, 2)
+        w = -torch.exp(w.view(B, T, H, -1).transpose(1, 2))
         o, state = chunk_rwkv6(r, k, v, w, u=u, scale=scale, initial_state=h, output_final_state=True, chunk_size=chunk_size)
-        return o.transpose(1,2).reshape(B,T,C), state
+        return o.transpose(1, 2).reshape(B, T, C), state
 
     with torch.no_grad():
         q = torch.empty(B, T, C, device=device).uniform_(-1, 1).to(dtype=dtype)
@@ -1008,6 +1022,7 @@ if __name__ == "__main__":
         u = torch.empty(H, HEAD_SIZE, device=device).uniform_(-1, 1).to(dtype=dtype)
         h = torch.zeros(B, H, HEAD_SIZE, HEAD_SIZE, device=device).to(dtype=dtype)
         do = torch.rand_like(v, device=device)
+
     def clear_grad():
         q.requires_grad_()
         k.requires_grad_()
@@ -1015,13 +1030,20 @@ if __name__ == "__main__":
         w.requires_grad_()
         u.requires_grad_()
         h.requires_grad_()
-        if q.grad is not None: q.grad.data.zero_()
-        if k.grad is not None: k.grad.data.zero_()
-        if v.grad is not None: v.grad.data.zero_()
-        if w.grad is not None: w.grad.data.zero_()
-        if u.grad is not None: u.grad.data.zero_()
-        if h.grad is not None: h.grad.data.zero_()
+        if q.grad is not None:
+            q.grad.data.zero_()
+        if k.grad is not None:
+            k.grad.data.zero_()
+        if v.grad is not None:
+            v.grad.data.zero_()
+        if w.grad is not None:
+            w.grad.data.zero_()
+        if u.grad is not None:
+            u.grad.data.zero_()
+        if h.grad is not None:
+            h.grad.data.zero_()
     clear_grad()
+
     def LOSS(y):
         return ((y * y) - torch.tanh(y)).sum()
     ref_o, _ = RUN_FLA_FUSED(B, T, C, H, q.float(), k.float(), v.float(), w.float(), u.float(), h.float())
@@ -1045,7 +1067,7 @@ if __name__ == "__main__":
         tri_dh, h.grad = h.grad.clone(), None
 
     assert get_err_ratio(ref_o, tri_o) < atol
-    print("dq", get_err_ratio(ref_dq, tri_dq)) # pass
+    print("dq", get_err_ratio(ref_dq, tri_dq))  # pass
     print("dk", get_err_ratio(ref_dk, tri_dk))
     print("dv", get_err_ratio(ref_dv, tri_dv))
     print("dw", get_err_ratio(ref_dw, tri_dw))

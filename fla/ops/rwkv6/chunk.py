@@ -965,10 +965,8 @@ def chunk_rwkv6(
     assert checkpoint_level in [0, 1]
     scale = r.shape[-1] ** -0.5 if scale == -1.0 else scale
     u_2d = True if u.dim() == 2 else False
-    if use_tf32 is None:
-        if _detect_use_tf32 is None:
-            _detect_use_tf32 = detect_tf32()
-        use_tf32 = _detect_use_tf32
+    if use_tf32 is None and _detect_use_tf32 is None:
+        _detect_use_tf32 = detect_tf32()
     else:
         _detect_use_tf32 = use_tf32
     o, final_state = ChunkRWKV6Function.apply(r, k, v, g, u, scale, initial_state,

@@ -34,14 +34,14 @@ def test_recurrent_naive(
 
     q = torch.randn(B, H, T, D, device=device).to(dtype).requires_grad_(True)
     k = torch.randn(B, H, T, D, device=device).to(dtype).requires_grad_(True)
-    v = torch.randn(B, H, T, 2*D, device=device).to(dtype).requires_grad_(True)
+    v = torch.randn(B, H, T, D, device=device).to(dtype).requires_grad_(True)
     w = F.logsigmoid(torch.randn(B, H, T, D, device=device)).to(dtype).requires_grad_(True)
     if u_2d:
         u = torch.randn(H, D, device=device).to(dtype).requires_grad_(True)
     else:
         u = torch.randn(B, H, D, device=device).to(dtype).requires_grad_(True)
     do = torch.rand_like(v, device=device)
-    h = torch.randn(B, H, D, 2*D, device=device, dtype=dtype, requires_grad=True)
+    h = torch.randn(B, H, D, D, device=device, dtype=dtype, requires_grad=True)
 
     o, _ = naive_recurrent_rwkv6(q, k, v, w, u, scale=scale, initial_state=h)
     o.backward(do)
@@ -87,14 +87,14 @@ def test_fused_recurrent(
 
     q = torch.randn(B, H, T, D, device=device).to(dtype).requires_grad_(True)
     k = torch.randn(B, H, T, D, device=device).to(dtype).requires_grad_(True)
-    v = torch.randn(B, H, T, 2*D, device=device).to(dtype).requires_grad_(True)
+    v = torch.randn(B, H, T, D, device=device).to(dtype).requires_grad_(True)
     w = F.logsigmoid(torch.randn(B, H, T, D, device=device)).to(dtype).requires_grad_(True)
     if u_2d:
         u = torch.randn(H, D, device=device).to(dtype).requires_grad_(True)
     else:
         u = (torch.randn(B, H, D).to(device).to(dtype)).requires_grad_(True)
     do = torch.rand_like(v, device=device)
-    h = torch.randn(B, H, D, 2*D, device=device, dtype=dtype, requires_grad=True)
+    h = torch.randn(B, H, D, D, device=device, dtype=dtype, requires_grad=True)
 
     ref_o, _ = naive_recurrent_rwkv6(q, k, v, w, u, scale=scale, initial_state=h if use_h else None, output_final_state=use_h)
     ref_o.backward(do)
@@ -160,14 +160,14 @@ def test_fla_autocast(
 
     q = torch.randn(B, H, T, D, device=device).to(dtype).requires_grad_(True)
     k = torch.randn(B, H, T, D, device=device).to(dtype).requires_grad_(True)
-    v = torch.randn(B, H, T, 2*D, device=device).to(dtype).requires_grad_(True)
+    v = torch.randn(B, H, T, D, device=device).to(dtype).requires_grad_(True)
     w = F.logsigmoid(torch.randn(B, H, T, D, device=device)).to(dtype).requires_grad_(True)
     if u_2d:
         u = torch.randn(H, D, device=device).to(dtype).requires_grad_(True)
     else:
         u = (torch.randn(B, H, D).to(device).to(dtype)).requires_grad_(True)
     do = torch.rand_like(v, device=device)
-    h = torch.randn(B, H, D, 2*D, device=device, dtype=dtype, requires_grad=True)
+    h = torch.randn(B, H, D, D, device=device, dtype=dtype, requires_grad=True)
 
     ref_o, _ = naive_recurrent_rwkv6(q, k, v, w, u, scale=scale, initial_state=h if use_h else None, output_final_state=use_h)
     ref_o.backward(do)
@@ -251,7 +251,7 @@ def test_fla_autocast(
 
 @pytest.mark.parametrize("B", [4])
 @pytest.mark.parametrize("H", [4])
-@pytest.mark.parametrize("T", [1024])
+@pytest.mark.parametrize("T", [24, 1024])
 @pytest.mark.parametrize("D", [64, 128])
 @pytest.mark.parametrize("dtype", [torch.float, torch.float16, torch.bfloat16])
 @pytest.mark.parametrize("use_h", [False, True])
@@ -272,14 +272,14 @@ def test_chunk_with_initial_h(
 
     q = torch.randn(B, H, T, D, device=device).to(dtype).requires_grad_(True)
     k = torch.randn(B, H, T, D, device=device).to(dtype).requires_grad_(True)
-    v = torch.randn(B, H, T, 2*D, device=device).to(dtype).requires_grad_(True)
+    v = torch.randn(B, H, T, D, device=device).to(dtype).requires_grad_(True)
     w = F.logsigmoid(torch.randn(B, H, T, D, device=device)).to(dtype).requires_grad_(True)
     if u_2d:
         u = torch.randn(H, D, device=device).to(dtype).requires_grad_(True)
     else:
         u = (torch.randn(B, H, D).to(device).to(dtype)).requires_grad_(True)
     do = torch.rand_like(v, device=device)
-    h = torch.randn(B, H, D, 2*D, device=device, dtype=dtype, requires_grad=True)
+    h = torch.randn(B, H, D, D, device=device, dtype=dtype, requires_grad=True)
 
     ref_o, _ = naive_recurrent_rwkv6(q.float(), k.float(), v.float(), w.float(), u.float(), scale=scale, initial_state=h.float() if use_h else None, output_final_state=use_h)
     ref_o.backward(do)
@@ -360,7 +360,7 @@ def RUN_FLA_NATIVE_MANUAL_BACKWARD(B, T, C, H, r, k, v, w, u, h):
     return o.transpose(1,2).reshape(B,T,C), state
 
 @pytest.mark.parametrize("B", [4])
-@pytest.mark.parametrize("T", [512])
+@pytest.mark.parametrize("T", [24, 512])
 @pytest.mark.parametrize("C", [4096])
 @pytest.mark.parametrize("HEAD_SIZE", [64])
 @pytest.mark.parametrize("dtype", [torch.float, torch.bfloat16])
@@ -739,3 +739,6 @@ def test_multi_state_backworad_with_native(
     assert get_err_ratio(gproj, gproj1) < atol, f"proj, {get_err_ratio(gproj, gproj1)}, dtype = {dtype}"
     has_non_zero = torch.any(gproj1 != 0).item()
     assert has_non_zero, "gproj1 is all zeros!"
+
+
+test_fla_autocast(2, 4, 1024, 64, torch.bfloat16, False, True, 1.0)

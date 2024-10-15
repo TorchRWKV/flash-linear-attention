@@ -14,36 +14,36 @@ np.set_printoptions(precision=4, suppress=True, linewidth=200)
 torch.backends.cudnn.allow_tf32 = False
 torch.backends.cuda.matmul.allow_tf32 = False
 
-@pytest.mark.parametrize("B", [4])
-@pytest.mark.parametrize("H", [4])
+@pytest.mark.parametrize("B", [2])
 @pytest.mark.parametrize("T", [1024])
-@pytest.mark.parametrize("D", [100])
+@pytest.mark.parametrize("C", [4096])
+@pytest.mark.parametrize("HEAD_SIZE", [64, 128])
 @pytest.mark.parametrize("dtype", [torch.float])
 @pytest.mark.parametrize("u_2d", [True, False])
 @pytest.mark.parametrize("scale", [-1.0, 1.0])
 def test_recurrent_naive(
     B: int,
-    H: int,
     T: int,
-    D: int,
+    C: int,
+    HEAD_SIZE: int,
     dtype: torch.dtype,
     u_2d: bool,
     scale: float
 ):
     torch.manual_seed(42)
-
-    q = torch.randn(B, H, T, D, device=device).to(dtype).requires_grad_(True)
-    k = torch.randn(B, H, T, D, device=device).to(dtype).requires_grad_(True)
-    v = torch.randn(B, H, T, D, device=device).to(dtype).requires_grad_(True)
-    w = F.logsigmoid(torch.randn(B, H, T, D, device=device)).to(dtype).requires_grad_(True)
+    H = C // HEAD_SIZE
+    q = torch.empty(B, T, C, device=device).uniform_(-1, 1).to(dtype=dtype).requires_grad_(True)
+    k = torch.empty(B, T, C, device=device).uniform_(-1, 1).to(dtype=dtype).requires_grad_(True)
+    v = torch.empty(B, T, C, device=device).uniform_(-1, 1).to(dtype=dtype).requires_grad_(True)
+    w = torch.empty(B, T, C, device=device).uniform_(-8, -4).to(dtype=dtype).requires_grad_(True).to(device)
     if u_2d:
-        u = torch.randn(H, D, device=device).to(dtype).requires_grad_(True)
+        u = torch.empty(H, HEAD_SIZE, device=device).uniform_(-1, 1).to(dtype=dtype).requires_grad_(True)
     else:
-        u = torch.randn(B, H, D, device=device).to(dtype).requires_grad_(True)
+        u = torch.empty(B, H, HEAD_SIZE, device=device).uniform_(-1, 1).to(dtype=dtype).requires_grad_(True)
     do = torch.rand_like(v, device=device)
-    h = torch.randn(B, H, D, D, device=device, dtype=dtype, requires_grad=True)
+    h = torch.randn(B, H, HEAD_SIZE, HEAD_SIZE, device=device, dtype=dtype, requires_grad=True)
 
-    o, _ = naive_recurrent_rwkv6(q, k, v, w, u, scale=scale, initial_state=h)
+    o, _ = RUN_FLA_NATIVE_AUTO_BACKWARD(B, T, C, H, q, k, v, w, u, h=h, scale=scale)
     o.backward(do)
     dq, q.grad = q.grad.clone(), None
     dk, k.grad = k.grad.clone(), None
@@ -52,29 +52,29 @@ def test_recurrent_naive(
     du, u.grad = u.grad.clone(), None
     dh, h.grad = h.grad.clone(), None
 
-    dq2, dk2, dv2, dw2, du2, dh2 = naive_recurrent_rwkv6_bwd(q, k, v, w, u, o, do, initial_state=h, scale=scale, u_2d=u_2d)
+    o, _ = RUN_FLA_NATIVE_MANUAL_BACKWARD(B, T, C, H, q, k, v, w, u, h=h, scale=scale)
+    o.backward(do)
+    assert dq.allclose(q.grad, atol=1e-3)
+    assert dk.allclose(k.grad, atol=1e-3)
+    assert dv.allclose(v.grad, atol=1e-3)
+    assert dw.allclose(w.grad, atol=1e-3)
+    assert du.allclose(u.grad, atol=1e-3)
+    assert dh.allclose(h.grad, atol=1e-3)
 
-    assert dq.allclose(dq2, atol=1e-3)
-    assert dk.allclose(dk2, atol=1e-3)
-    assert dv.allclose(dv2, atol=1e-3)
-    assert dw.allclose(dw2, atol=1e-3)
-    assert du.allclose(du2, atol=1e-3)
-    assert dh.allclose(dh2, atol=1e-3)
 
-
-@pytest.mark.parametrize("B", [4])
-@pytest.mark.parametrize("H", [4])
+@pytest.mark.parametrize("B", [2])
 @pytest.mark.parametrize("T", [1024])
-@pytest.mark.parametrize("D", [64, 128])
-@pytest.mark.parametrize("dtype", [torch.float, torch.float16, torch.bfloat16])
+@pytest.mark.parametrize("C", [4096])
+@pytest.mark.parametrize("HEAD_SIZE", [64, 128])
+@pytest.mark.parametrize("dtype", [torch.float, torch.bfloat16, torch.float16])
 @pytest.mark.parametrize("use_h", [False, True])
 @pytest.mark.parametrize("u_2d", [True, False])
 @pytest.mark.parametrize("scale", [-1.0, 1.0])
 def test_fused_recurrent(
     B: int,
-    H: int,
     T: int,
-    D: int,
+    C: int,
+    HEAD_SIZE: int,
     dtype: torch.dtype,
     use_h: bool,
     u_2d: bool,
@@ -85,18 +85,21 @@ def test_fused_recurrent(
     torch.manual_seed(42)
     atol = 1e-3 if dtype == torch.float else 1e-2
 
-    q = torch.randn(B, H, T, D, device=device).to(dtype).requires_grad_(True)
-    k = torch.randn(B, H, T, D, device=device).to(dtype).requires_grad_(True)
-    v = torch.randn(B, H, T, D, device=device).to(dtype).requires_grad_(True)
-    w = F.logsigmoid(torch.randn(B, H, T, D, device=device)).to(dtype).requires_grad_(True)
+    H = C // HEAD_SIZE
+    q = torch.empty(B, T, C, device=device).uniform_(-1, 1).to(dtype=dtype).requires_grad_(True)
+    k = torch.empty(B, T, C, device=device).uniform_(-1, 1).to(dtype=dtype).requires_grad_(True)
+    v = torch.empty(B, T, C, device=device).uniform_(-1, 1).to(dtype=dtype).requires_grad_(True)
+    w = torch.empty(B, T, C, device=device).uniform_(-8, -4).to(dtype=dtype).requires_grad_(True).to(device)
     if u_2d:
-        u = torch.randn(H, D, device=device).to(dtype).requires_grad_(True)
+        u = torch.empty(H, HEAD_SIZE, device=device).uniform_(-1, 1).to(dtype=dtype).requires_grad_(True)
     else:
-        u = (torch.randn(B, H, D).to(device).to(dtype)).requires_grad_(True)
+        u = torch.empty(B, H, HEAD_SIZE, device=device).uniform_(-1, 1).to(dtype=dtype).requires_grad_(True)
     do = torch.rand_like(v, device=device)
-    h = torch.randn(B, H, D, D, device=device, dtype=dtype, requires_grad=True)
+    h = torch.randn(B, H, HEAD_SIZE, HEAD_SIZE, device=device, dtype=dtype, requires_grad=True)
+    do = torch.rand_like(v, device=device)
+    
 
-    ref_o, _ = naive_recurrent_rwkv6(q, k, v, w, u, scale=scale, initial_state=h if use_h else None, output_final_state=use_h)
+    ref_o, _ = RUN_FLA_NATIVE_AUTO_BACKWARD(B, T, C, H, q, k, v, w, u, h=h if use_h else None, scale=scale, output_final_state=use_h)
     ref_o.backward(do)
     ref_dq, q.grad = q.grad.clone(), None
     ref_dk, k.grad = k.grad.clone(), None
@@ -106,7 +109,7 @@ def test_fused_recurrent(
     if use_h:
         ref_dh, h.grad = h.grad.clone(), None
 
-    tri_o, _ = fused_recurrent_rwkv6(q, k, v, w, u, scale=scale, initial_state=h if use_h else None, output_final_state=use_h)
+    tri_o, _ = RUN_FLA_FUSED(B, T, C, H, q, k, v, w, u, h=h if use_h else None, scale=scale, output_final_state=use_h)
     tri_o.backward(do)
     tri_dq, q.grad = q.grad.clone(), None
     tri_dk, k.grad = k.grad.clone(), None
@@ -121,7 +124,7 @@ def test_fused_recurrent(
     assert get_err_ratio(ref_dk, tri_dk) < atol, f"k, {get_err_ratio(ref_dk, tri_dk)}, dtype = {dtype}"
     assert get_err_ratio(ref_dv, tri_dv) < atol, f"v, {get_err_ratio(ref_dv, tri_dv)}, dtype = {dtype}"
     if get_err_ratio(ref_dw, tri_dw) > (atol * 5):
-        if D != 64:
+        if HEAD_SIZE != 64:
             import logging
             logging.warning(f"w, {get_err_ratio(ref_dw, tri_dw)}, dtype = {dtype}, scale = {scale}, D = {D}")
         else:
@@ -131,19 +134,19 @@ def test_fused_recurrent(
     if use_h:
         assert get_err_ratio(ref_dh, tri_dh) < atol
 
-@pytest.mark.parametrize("B", [4])
-@pytest.mark.parametrize("H", [4])
+@pytest.mark.parametrize("B", [2])
 @pytest.mark.parametrize("T", [1024])
-@pytest.mark.parametrize("D", [64])
-@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+@pytest.mark.parametrize("C", [4096])
+@pytest.mark.parametrize("HEAD_SIZE", [64, 128])
+@pytest.mark.parametrize("dtype", [torch.bfloat16])
 @pytest.mark.parametrize("use_h", [False, True])
 @pytest.mark.parametrize("u_2d", [False])
 @pytest.mark.parametrize("scale", [1.0])
 def test_fla_autocast(
     B: int,
-    H: int,
     T: int,
-    D: int,
+    C: int,
+    HEAD_SIZE: int,
     dtype: torch.dtype,
     use_h: bool,
     u_2d: bool,
@@ -158,18 +161,21 @@ def test_fla_autocast(
     torch.manual_seed(42)
     atol = 1e-3 if dtype == torch.float else 1e-2
 
-    q = torch.randn(B, H, T, D, device=device).to(dtype).requires_grad_(True)
-    k = torch.randn(B, H, T, D, device=device).to(dtype).requires_grad_(True)
-    v = torch.randn(B, H, T, D, device=device).to(dtype).requires_grad_(True)
-    w = F.logsigmoid(torch.randn(B, H, T, D, device=device)).to(dtype).requires_grad_(True)
+    H = C // HEAD_SIZE
+    q = torch.empty(B, T, C, device=device).uniform_(-1, 1).to(dtype=dtype).requires_grad_(True)
+    k = torch.empty(B, T, C, device=device).uniform_(-1, 1).to(dtype=dtype).requires_grad_(True)
+    v = torch.empty(B, T, C, device=device).uniform_(-1, 1).to(dtype=dtype).requires_grad_(True)
+    w = torch.empty(B, T, C, device=device).uniform_(-8, -4).to(dtype=dtype).requires_grad_(True).to(device)
     if u_2d:
-        u = torch.randn(H, D, device=device).to(dtype).requires_grad_(True)
+        u = torch.empty(H, HEAD_SIZE, device=device).uniform_(-1, 1).to(dtype=dtype).requires_grad_(True)
     else:
-        u = (torch.randn(B, H, D).to(device).to(dtype)).requires_grad_(True)
+        u = torch.empty(B, H, HEAD_SIZE, device=device).uniform_(-1, 1).to(dtype=dtype).requires_grad_(True)
     do = torch.rand_like(v, device=device)
-    h = torch.randn(B, H, D, D, device=device, dtype=dtype, requires_grad=True)
+    h = torch.randn(B, H, HEAD_SIZE, HEAD_SIZE, device=device, dtype=dtype, requires_grad=True)
 
-    ref_o, _ = naive_recurrent_rwkv6(q, k, v, w, u, scale=scale, initial_state=h if use_h else None, output_final_state=use_h)
+    do = torch.rand_like(v, device=device)
+
+    ref_o, _ = RUN_FLA_NATIVE_AUTO_BACKWARD(B, T, C, H, q, k, v, w, u, h=h if use_h else None, scale=scale, output_final_state=use_h)
     ref_o.backward(do)
     ref_dq, q.grad = q.grad.clone(), None
     ref_dk, k.grad = k.grad.clone(), None
@@ -183,7 +189,7 @@ def test_fla_autocast(
         torch.set_autocast_dtype(device, torch.float32)
         assert torch.is_autocast_enabled(device) == True
         assert torch.get_autocast_dtype(device) == torch.float32
-        tri_o, _ = fused_recurrent_rwkv6(q, k, v, w, u, scale=scale, initial_state=h if use_h else None, output_final_state=use_h)
+        tri_o, _ = RUN_FLA_FUSED(B, T, C, H, q, k, v, w, u, h=h if use_h else None, scale=scale, output_final_state=use_h)
         tri_o.backward(do)
     tri_dq, q.grad = q.grad.clone(), None
     tri_dk, k.grad = k.grad.clone(), None
@@ -198,7 +204,7 @@ def test_fla_autocast(
     assert get_err_ratio(ref_dk, tri_dk) < atol, f"k, {get_err_ratio(ref_dk, tri_dk)}, dtype = {dtype}"
     assert get_err_ratio(ref_dv, tri_dv) < atol, f"v, {get_err_ratio(ref_dv, tri_dv)}, dtype = {dtype}"
     if get_err_ratio(ref_dw, tri_dw) > (atol * 5):
-        if D != 64:
+        if HEAD_SIZE != 64:
             import logging
             logging.warning(f"w, {get_err_ratio(ref_dw, tri_dw)}, dtype = {dtype}, scale = {scale}, D = {D}")
         else:
@@ -209,7 +215,7 @@ def test_fla_autocast(
         assert get_err_ratio(ref_dh, tri_dh) < atol
 
     # test for chunk
-    ref_o, _ = naive_recurrent_rwkv6(q, k, v, w, u, scale=scale, initial_state=h if use_h else None, output_final_state=use_h)
+    ref_o, _ = RUN_FLA_NATIVE_AUTO_BACKWARD(B, T, C, H, q, k, v, w, u, h=h if use_h else None, scale=scale, output_final_state=use_h)
     ref_o.backward(do)
     ref_dq, q.grad = q.grad.clone(), None
     ref_dk, k.grad = k.grad.clone(), None
@@ -223,7 +229,7 @@ def test_fla_autocast(
         torch.set_autocast_dtype(device, torch.float32)
         assert torch.is_autocast_enabled(device) == True
         assert torch.get_autocast_dtype(device) == torch.float32
-        tri_o, _ = chunk_rwkv6(q, k, v, w, u, scale=scale, initial_state=h if use_h else None, output_final_state=use_h)
+        tri_o, _ = RUN_FLA_CHUNK(B, T, C, H, q, k, v, w, u, h=h if use_h else None, scale=scale, output_final_state=use_h)
         tri_o.backward(do)
     tri_dq, q.grad = q.grad.clone(), None
     tri_dk, k.grad = k.grad.clone(), None
@@ -238,7 +244,7 @@ def test_fla_autocast(
     assert get_err_ratio(ref_dk, tri_dk) < atol, f"k, {get_err_ratio(ref_dk, tri_dk)}, dtype = {dtype}"
     assert get_err_ratio(ref_dv, tri_dv) < atol, f"v, {get_err_ratio(ref_dv, tri_dv)}, dtype = {dtype}"
     if get_err_ratio(ref_dw, tri_dw) > (atol * 5):
-        if D != 64:
+        if HEAD_SIZE != 64:
             import logging
             logging.warning(f"w, {get_err_ratio(ref_dw, tri_dw)}, dtype = {dtype}, scale = {scale}, D = {D}")
         else:
@@ -249,19 +255,19 @@ def test_fla_autocast(
         assert get_err_ratio(ref_dh, tri_dh) < atol
 
 
-@pytest.mark.parametrize("B", [4])
-@pytest.mark.parametrize("H", [4])
-@pytest.mark.parametrize("T", [24, 1024])
-@pytest.mark.parametrize("D", [64, 128])
-@pytest.mark.parametrize("dtype", [torch.float, torch.float16, torch.bfloat16])
+@pytest.mark.parametrize("B", [2])
+@pytest.mark.parametrize("T", [1024])
+@pytest.mark.parametrize("C", [4096])
+@pytest.mark.parametrize("HEAD_SIZE", [64, 128])
+@pytest.mark.parametrize("dtype", [torch.float, torch.bfloat16, torch.float16])
 @pytest.mark.parametrize("use_h", [False, True])
 @pytest.mark.parametrize("u_2d", [True, False])
 @pytest.mark.parametrize("scale", [-1.0, 1.0])
 def test_chunk_with_initial_h(
     B: int,
-    H: int,
     T: int,
-    D: int,
+    C: int,
+    HEAD_SIZE: int,
     dtype: torch.dtype,
     use_h: bool,
     u_2d: bool,
@@ -270,18 +276,21 @@ def test_chunk_with_initial_h(
     torch.manual_seed(42)
     atol = 1e-3 if dtype == torch.float else 1e-2
 
-    q = torch.randn(B, H, T, D, device=device).to(dtype).requires_grad_(True)
-    k = torch.randn(B, H, T, D, device=device).to(dtype).requires_grad_(True)
-    v = torch.randn(B, H, T, D, device=device).to(dtype).requires_grad_(True)
-    w = F.logsigmoid(torch.randn(B, H, T, D, device=device)).to(dtype).requires_grad_(True)
+    H = C // HEAD_SIZE
+    q = torch.empty(B, T, C, device=device).uniform_(-1, 1).to(dtype=dtype).requires_grad_(True)
+    k = torch.empty(B, T, C, device=device).uniform_(-1, 1).to(dtype=dtype).requires_grad_(True)
+    v = torch.empty(B, T, C, device=device).uniform_(-1, 1).to(dtype=dtype).requires_grad_(True)
+    w = torch.empty(B, T, C, device=device).uniform_(-8, -4).to(dtype=dtype).requires_grad_(True).to(device)
     if u_2d:
-        u = torch.randn(H, D, device=device).to(dtype).requires_grad_(True)
+        u = torch.empty(H, HEAD_SIZE, device=device).uniform_(-1, 1).to(dtype=dtype).requires_grad_(True)
     else:
-        u = (torch.randn(B, H, D).to(device).to(dtype)).requires_grad_(True)
+        u = torch.empty(B, H, HEAD_SIZE, device=device).uniform_(-1, 1).to(dtype=dtype).requires_grad_(True)
     do = torch.rand_like(v, device=device)
-    h = torch.randn(B, H, D, D, device=device, dtype=dtype, requires_grad=True)
+    h = torch.randn(B, H, HEAD_SIZE, HEAD_SIZE, device=device, dtype=dtype, requires_grad=True)
 
-    ref_o, _ = naive_recurrent_rwkv6(q.float(), k.float(), v.float(), w.float(), u.float(), scale=scale, initial_state=h.float() if use_h else None, output_final_state=use_h)
+    do = torch.rand_like(v, device=device)
+
+    ref_o, _ = RUN_FLA_NATIVE_AUTO_BACKWARD(B, T, C, H, q.float(), k.float(), v.float(), w.float(), u.float(), scale=scale, h=h.float() if use_h else None, output_final_state=use_h)
     ref_o.backward(do)
     ref_dq, q.grad = q.grad.clone(), None
     ref_dk, k.grad = k.grad.clone(), None
@@ -291,7 +300,7 @@ def test_chunk_with_initial_h(
     if use_h:
         ref_dh, h.grad = h.grad.clone(), None
 
-    tri_o, _ = chunk_rwkv6(q, k, v, w, u, scale=scale, initial_state=h if use_h else None, output_final_state=use_h)
+    tri_o, _ = RUN_FLA_CHUNK(B, T, C, H, q, k, v, w, u, h=h if use_h else None, scale=scale, output_final_state=use_h)
     tri_o.backward(do)
     tri_dq, q.grad = q.grad.clone(), None
     tri_dk, k.grad = k.grad.clone(), None
@@ -305,7 +314,7 @@ def test_chunk_with_initial_h(
     assert get_err_ratio(ref_dq, tri_dq) < atol, f"q, {get_err_ratio(ref_dq, tri_dq)}, dtype = {dtype}"
     assert get_err_ratio(ref_dk, tri_dk) < atol, f"k, {get_err_ratio(ref_dk, tri_dk)}, dtype = {dtype}"
     assert get_err_ratio(ref_dv, tri_dv) < atol, f"v, {get_err_ratio(ref_dv, tri_dv)}, dtype = {dtype}"
-    assert get_err_ratio(ref_dw, tri_dw) < atol, f"w, {get_err_ratio(ref_dw, tri_dw)}, dtype = {dtype}"
+    assert get_err_ratio(ref_dw, tri_dw) < atol, f"w, {get_err_ratio(ref_dw, tri_dw)}, dtype = {dtype}" 
     assert get_err_ratio(ref_du, tri_du) < atol, f"u, {get_err_ratio(ref_du, tri_du)}, dtype = {dtype}"
     if use_h:
         assert get_err_ratio(ref_dh, tri_dh) < atol, f"h, {get_err_ratio(ref_dh, tri_dh)}, dtype = {dtype}"
@@ -318,7 +327,7 @@ def set_seed(seed):
 def get_err_ratio(x, y):
     err = (x-y).flatten().square().mean().sqrt().item()
     base = (x).flatten().square().mean().sqrt().item()
-    return err / base
+    return err / (base + 1e-20)
 
 def val(x):
     return x.detach().float().cpu().numpy()
@@ -326,37 +335,36 @@ def val(x):
 def LOSS(y):
     return ((y * y) - torch.tanh(y)).sum()
 
-def RUN_FLA_CHUNK(B, T, C, H, r, k, v, w, u, h):
+def RUN_FLA_CHUNK(B, T, C, H, r, k, v, w, u, h, scale=1.0, output_final_state=True):
     r = r.view(B,T,H,-1).transpose(1,2)
     k = k.view(B,T,H,-1).transpose(1,2)
     v = v.view(B,T,H,-1).transpose(1,2)
     w = -torch.exp(w.view(B,T,H,-1).transpose(1,2))
-    o, state = chunk_rwkv6(r, k, v, w, u=u, scale=1.0, initial_state=h, output_final_state=True)
+    o, state = chunk_rwkv6(r, k, v, w, u=u, scale=scale, initial_state=h, output_final_state=output_final_state)
     return o.transpose(1,2).reshape(B,T,C), state
 
-def RUN_FLA_FUSED(B, T, C, H, r, k, v, w, u, h):
+def RUN_FLA_FUSED(B, T, C, H, r, k, v, w, u, h, scale=1.0, output_final_state=True):
     r = r.view(B,T,H,-1).transpose(1,2)
     k = k.view(B,T,H,-1).transpose(1,2)
     v = v.view(B,T,H,-1).transpose(1,2)
     w = -torch.exp(w.view(B,T,H,-1).transpose(1,2))
-    o, state = fused_recurrent_rwkv6(r, k, v, w, u=u, scale=1.0, initial_state=h, output_final_state=True)
+    o, state = fused_recurrent_rwkv6(r, k, v, w, u=u, scale=scale, initial_state=h, output_final_state=output_final_state)
     return o.transpose(1,2).reshape(B,T,C), state
 
-def RUN_FLA_NATIVE_AUTO_BACKWARD(B, T, C, H, r, k, v, w, u, h):
+def RUN_FLA_NATIVE_AUTO_BACKWARD(B, T, C, H, r, k, v, w, u, h, scale=1.0, output_final_state=True):
     r = r.view(B,T,H,-1).transpose(1,2)
     k = k.view(B,T,H,-1).transpose(1,2)
     v = v.view(B,T,H,-1).transpose(1,2)
     w = -torch.exp(w.view(B,T,H,-1).transpose(1,2))
-    o, state = naive_recurrent_rwkv6(r, k, v, w, u=u, scale=1.0, initial_state=h, output_final_state=True)
+    o, state = naive_recurrent_rwkv6(r, k, v, w, u=u, scale=scale, initial_state=h, output_final_state=output_final_state)
     return o.transpose(1,2).reshape(B,T,C), state
 
-
-def RUN_FLA_NATIVE_MANUAL_BACKWARD(B, T, C, H, r, k, v, w, u, h):
+def RUN_FLA_NATIVE_MANUAL_BACKWARD(B, T, C, H, r, k, v, w, u, h, scale=1.0, output_final_state=True):
     r = r.view(B,T,H,-1).transpose(1,2)
     k = k.view(B,T,H,-1).transpose(1,2)
     v = v.view(B,T,H,-1).transpose(1,2)
     w = -torch.exp(w.view(B,T,H,-1).transpose(1,2))
-    o, state = native_recurrent_rwkv6(r, k, v, w, u=u, scale=1.0, initial_state=h, output_final_state=True)
+    o, state = native_recurrent_rwkv6(r, k, v, w, u=u, scale=scale, initial_state=h, output_final_state=output_final_state)
     return o.transpose(1,2).reshape(B,T,C), state
 
 @pytest.mark.parametrize("B", [4])
@@ -429,7 +437,7 @@ def test_chunk_error_ratio(
 
 
 @pytest.mark.parametrize("B", [2])
-@pytest.mark.parametrize("T", [512])
+@pytest.mark.parametrize("T", [1024])
 @pytest.mark.parametrize("C", [4096])
 @pytest.mark.parametrize("HEAD_SIZE", [64])
 @pytest.mark.parametrize("dtype", [torch.float, torch.bfloat16])
@@ -632,7 +640,7 @@ def test_chunk_error_ratio_multi_state(
     assert get_err_ratio(gu_chunk1, gu1) < atol, f"u1, {get_err_ratio(gu_chunk1, gu1)}, dtype = {dtype}"
 
 @pytest.mark.parametrize("B", [2])
-@pytest.mark.parametrize("T", [512])
+@pytest.mark.parametrize("T", [1024])
 @pytest.mark.parametrize("C", [4096])
 @pytest.mark.parametrize("HEAD_SIZE", [64])
 @pytest.mark.parametrize("dtype", [torch.float, torch.bfloat16])
@@ -673,7 +681,7 @@ def test_multi_state_backworad_with_native(
     w_img = linear_w(img)
     k_img = linear_k(img)
     v_img = linear_v(img)
-    y_img, img_state = RUN_FLA_NATIVE_MANUAL_BACKWARD(B, T, C, HEAD_SIZE, r_img.float(), k_img.float(), v_img.float(), w_img.float(), u.float(), h=None)
+    y_img, img_state = RUN_FLA_NATIVE_MANUAL_BACKWARD(B, T, C, H, r_img.float(), k_img.float(), v_img.float(), w_img.float(), u.float(), h=None)
 
     r_text = linear_r(text_emb)
     w_text = linear_w(text_emb)
@@ -689,7 +697,7 @@ def test_multi_state_backworad_with_native(
     w_img = linear_w(img)
     k_img = linear_k(img)
     v_img = linear_v(img)
-    y_img, img_state = RUN_FLA_FUSED(B, T, C, HEAD_SIZE, r_img, k_img, v_img, w_img, u, h=None)
+    y_img, img_state = RUN_FLA_FUSED(B, T, C, H, r_img, k_img, v_img, w_img, u, h=None)
 
 
     r_text = linear_r(text_emb)
@@ -726,7 +734,7 @@ def test_multi_state_backworad_with_native(
     w_img = linear_w(img)
     k_img = linear_k(img)
     v_img = linear_v(img)
-    y_img, img_state = RUN_FLA_CHUNK(B, T, C, HEAD_SIZE, r_img, k_img, v_img, w_img, u, h=None)
+    y_img, img_state = RUN_FLA_CHUNK(B, T, C, H, r_img, k_img, v_img, w_img, u, h=None)
 
 
     r_text = linear_r(text_emb)
@@ -740,5 +748,3 @@ def test_multi_state_backworad_with_native(
     has_non_zero = torch.any(gproj1 != 0).item()
     assert has_non_zero, "gproj1 is all zeros!"
 
-
-test_fla_autocast(2, 4, 1024, 64, torch.bfloat16, False, True, 1.0)

@@ -40,7 +40,7 @@ def naive_recurrent_rwkv7(
     if (torch.is_autocast_enabled(device) if check_pytorch_version('2.4') else torch.is_autocast_enabled()):
         torch_dtype = torch.get_autocast_dtype(device) if check_pytorch_version('2.4') else torch.get_autocast_gpu_dtype()
     else:
-        torch_dtype = torch.float32 if q.dtype != torch.float16 else torch.float16
+        torch_dtype = torch.float32 if q.dtype != torch.float64 else torch.float64
     orig_dtype = q.dtype
     B, H, L, N, V = q.shape[0], q.shape[1], q.shape[2], q.shape[3], v.shape[-1]
     q, k, v, w, a, b = (x.to(dtype=torch_dtype) for x in (q, k, v, w, a, b))
@@ -76,14 +76,18 @@ def naive_recurrent_rwkv7(
             o[:, :, t] = torch.einsum('bhj,bhij->bhi', q_t, state)
         else:
             # Calculate sab
-            sa = torch.bmm(state.view(B*H, V, V), a_t.view(B*H, V, 1))
-            sab = torch.bmm(sa.view(B*H, V, 1), b_t.view(B*H, 1, V)).view(B, H, D, D)
+            # sa = torch.bmm(state.view(B*H, V, V), a_t.view(B*H, V, 1))
+            sa = torch.matmul(state, a_t.unsqueeze(-1))
+            # sab = torch.bmm(sa.view(B*H, V, 1), b_t.view(B*H, 1, V)).view(B, H, D, D)
+            sab = torch.matmul(sa, b_t.unsqueeze(-2))
             # Update state
-            kv = torch.bmm(v_t.view(B*H, V, 1), k_t.view(B*H, 1, V)).view(B, H, V, V)
+            # kv = torch.bmm(v_t.view(B*H, V, 1), k_t.view(B*H, 1, V)).view(B, H, V, V)
+            kv = torch.matmul(v_t.unsqueeze(-1), k_t.unsqueeze(-2))
             state = state * w[:, :, t, None, :] + sab + kv
             # Calculate o
-            o[:, :, t] = torch.bmm(q_t.reshape(B*H, 1, V),
-                            state.transpose(2, 3).reshape(B*H, V, V)).view(B, H, V)
+            # o_t = torch.bmm(q_t.reshape(B*H, 1, V),
+            #                 state.transpose(2, 3).reshape(B*H, V, V)).view(B, H, V)
+            o[:, :, t] = torch.matmul(q_t.unsqueeze(-2), state.transpose(-2, -1)).squeeze(-2)
 
 
     ht = state if output_final_state else None
@@ -107,7 +111,7 @@ def naive_recurrent_rwkv7_bwd(
     state_ckpt_interval: int = 16
 ):
     if dtype is None:
-        torch_dtype = torch.float32 if q.dtype != torch.float16 else torch.float16
+        torch_dtype = torch.float32 if q.dtype != torch.float64 else torch.float64
     else:
         torch_dtype = dtype
     q, k, v, w, a, b, doutput, state_cache = (x.to(dtype=torch_dtype) for x in (q, k, v, w, a, b, doutput, state_cache))
@@ -140,9 +144,9 @@ def naive_recurrent_rwkv7_bwd(
         states = [state_t]
         for t in range(last_ckpt, length):
             k_t, v_t, a_t, b_t, w_t = k[:, :, t], v[:, :, t], a[:, :, t], b[:, :, t], w[:, :, t]
-            temp = torch.bmm(states[-1].view(B*H, V, V), a_t.view(B*H, V, 1))
-            sab = torch.bmm(temp.view(B*H, V, 1), b_t.view(B*H, 1, V)).view(B, H, D, D)
-            kv = torch.bmm(v_t.view(B*H, V, 1), k_t.view(B*H, 1, V)).view(B, H, V, V)
+            sa = torch.matmul(states[-1], a_t.unsqueeze(-1))
+            sab = torch.matmul(sa, b_t.unsqueeze(-2))
+            kv = torch.matmul(v_t.unsqueeze(-1), k_t.unsqueeze(-2))
             new_state = states[-1] * w_t[:, :, None, :] + sab + kv
             states.append(new_state)
         return states
@@ -170,8 +174,7 @@ def naive_recurrent_rwkv7_bwd(
         w_t = w[:, :, t]
 
         # Gradient of output
-        dq[:, :, t] += torch.bmm(doutput[:, :, t].view(B*H, 1, V), state.view(B*H, V, V)).view(B, H, V) * scale
-
+        dq[:, :, t] += torch.matmul(doutput[:, :, t].unsqueeze(-2), state).squeeze(-2) * scale
         # torch.einsum('bhi,bhj->bhij', doutput[:, :, t], q_t)
         dstate += torch.mul(doutput[:, :, t].unsqueeze(3), q_t.unsqueeze(2))
 
@@ -180,23 +183,28 @@ def naive_recurrent_rwkv7_bwd(
 
         # Gradient of sab
         # torch.einsum('bhij,bhik,bhj->bhk', dstate, prev_state, b_t)
-        temp = torch.bmm(dstate.view(B*H, V, V).permute(0, 2, 1), prev_state.view(B*H, V, V)).view(B*H, V, V)
-        da[:, :, t] += torch.bmm(temp.permute(0, 2, 1), b_t.view(B*H, V, 1)).view(B, H, V)
+        # temp = torch.bmm(dstate.view(B*H, V, V).permute(0, 2, 1), prev_state.view(B*H, V, V)).view(B*H, V, V)
+        temp = torch.matmul(dstate.permute(0, 1, 3, 2), prev_state)
+        da[:, :, t] += torch.matmul(temp.permute(0, 1, 3, 2), b_t.unsqueeze(-1)).squeeze(-1)
 
         # torch.einsum('bhij,bhik,bhk->bhj', dstate, prev_state, a_t)
-        db[:, :, t] += torch.bmm(temp, a_t.view(B*H, V, 1)).view(B, H, V)
+        db[:, :, t] += torch.matmul(temp, a_t.unsqueeze(-1)).squeeze(-1)
 
         # Gradient of k_t * v_t
         # torch.einsum('bhij,bhi->bhj', dstate, v_t)
-        dk[:, :, t] += torch.bmm(dstate.view(B*H, V, V).permute(0, 2, 1), v_t.view(B*H, V, 1)).view(B, H, V)
+        # dk[:, :, t] += torch.bmm(dstate.view(B*H, V, V).permute(0, 2, 1), v_t.view(B*H, V, 1)).view(B, H, V)
+        dk[:, :, t] += torch.matmul(dstate.permute(0, 1, 3, 2), v_t.unsqueeze(-1)).squeeze(-1)
         # torch.einsum('bhij,bhj->bhi', dstate, k_t)
-        dv[:, :, t] += torch.bmm(dstate.view(B*H, V, V), k_t.view(B*H, V, 1)).view(B, H, V)
+        # dv[:, :, t] += torch.bmm(dstate.view(B*H, V, V), k_t.view(B*H, V, 1)).view(B, H, V)
+        dv[:, :, t] += torch.matmul(dstate, k_t.unsqueeze(-1)).squeeze(-1)
 
         # Gradient for previous state
         # torch.einsum('bhij,bhk,bhj->bhik', dstate, a_t, b_t)
         # [B, H, V, 1, V] * [B, H, 1, V, 1] = [B, H, V, 1, V]
-        mul_result = dstate.unsqueeze(3) * a_t.unsqueeze(2).unsqueeze(-1)
-        dprev_state = torch.bmm(mul_result.view(B*H, V*V, V), b_t.view(B*H, V, 1)).view(B, H, V, V)
+        mul_result = (dstate.unsqueeze(3) * a_t.unsqueeze(2).unsqueeze(-1)).view(B, H, V*V, V)
+        # dprev_state = torch.bmm(mul_result.view(B*H, V*V, V), b_t.view(B*H, V, 1)).view(B, H, V, V)
+        dprev_state = torch.matmul(mul_result, b_t.unsqueeze(-1)).view(B, H, V, V)
+
 
         dprev_state += dstate * w[:, :, t, None, :]
 
@@ -309,7 +317,7 @@ if __name__ == "__main__":
         assert torch.allclose(ref_o, ref_o1, atol=1e-11), print(ref_o - ref_o1)
         print("Forward pass test passed")
     
-    ref_o, _, _ = naive_recurrent_rwkv7(q, k, v, w, a, b, scale=1.0, initial_state=None, manual_einsum=False)
+    ref_o, _, _ = naive_recurrent_rwkv7(q, k, v, w, a, b, scale=1.0, initial_state=None, manual_einsum=True)
     ref_o.backward(do)
     ref_dq, q.grad = q.grad.clone(), None
     ref_dk, k.grad = k.grad.clone(), None

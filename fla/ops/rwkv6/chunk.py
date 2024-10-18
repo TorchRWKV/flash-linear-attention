@@ -9,6 +9,7 @@ import triton.language as tl
 
 from fla.ops.utils import chunk_global_reversed_cumsum
 from fla.utils import contiguous, device_capacity, check_pytorch_version, device, detect_tf32
+from fla.utils import autocast_custom_fwd, autocast_custom_bwd
 
 
 @triton.autotune(
@@ -696,6 +697,7 @@ class ChunkRWKV6Function(torch.autograd.Function):
 
     @staticmethod
     @contiguous
+    @autocast_custom_fwd
     def forward(ctx, r, k, v, g, u, scale, initial_state, output_final_state, checkpoint_level,
                 u_2d: bool = False, training: bool = True, use_tf32: bool = False, BT: int = 32):
         q = r  # alias
@@ -706,14 +708,9 @@ class ChunkRWKV6Function(torch.autograd.Function):
         NK = triton.cdiv(K, BK)
         BH = B * H
 
-        if (torch.is_autocast_enabled(device) if check_pytorch_version('2.4') else torch.is_autocast_enabled()):
-            torch_dtype = torch.get_autocast_dtype(device) if check_pytorch_version('2.4') else torch.get_autocast_gpu_dtype()
-            q, k, v, g, u = (x.to(dtype=torch_dtype) for x in (q, k, v, g, u))
-            initial_state = initial_state.to(dtype=torch_dtype) if initial_state is not None else initial_state
-        else:
-            torch_dtype = torch.float32 if q.dtype != torch.float16 else torch.float16
-
+        torch_dtype = torch.float32 if q.dtype != torch.float16 else torch.float16
         tl_dtype = tl.float32 if q.dtype != torch.float16 else tl.float16
+
         g_org, g, gs, o, final_state, A, h = g, torch.empty_like(
             g, dtype=torch.float32), torch.empty_like(
             g, dtype=torch.float32), torch.empty_like(v), q.new_empty(
@@ -781,6 +778,7 @@ class ChunkRWKV6Function(torch.autograd.Function):
 
     @staticmethod
     @contiguous
+    @autocast_custom_bwd
     def backward(ctx, do, dht=None):
         q, k, v, g, u, h, initial_state, A = ctx.saved_tensors
         scale, u_2d, use_tf32 = ctx.scale, ctx.u_2d, ctx.use_tf32
@@ -900,7 +898,7 @@ class ChunkRWKV6Function(torch.autograd.Function):
             num_stages=num_stages
         )
         du = du.sum([0, 2]) if u_2d else du.sum(2)
-        dh0 = dh0.to(q) if initial_state is not None else None
+        dh0 = dh0.to(dtype) if initial_state is not None else None
         return dq.to(dtype), dk.to(dtype), dv.to(dtype), dg.to(dtype), du.to(dtype), None, \
             dh0, None, None, None, None, None, None
 

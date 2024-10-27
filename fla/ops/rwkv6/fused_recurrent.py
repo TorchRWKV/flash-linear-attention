@@ -76,7 +76,7 @@ def fused_recurrent_rwkv6_fwd_kernel(
     b_u = tl.load(p_u, mask=mask_bk, other=0).to(TLTYPE)
     for _ in range(0, T):
         b_k = (tl.load(p_k, mask=mask_bk, other=0)* scale).to(TLTYPE)
-        b_v = (tl.load(p_v, mask=mask_bv, other=0)* scale).to(TLTYPE)
+        b_v = tl.load(p_v, mask=mask_bv, other=0).to(TLTYPE)
         b_q = (tl.load(p_q, mask=mask_bk, other=0)* scale).to(TLTYPE)
         b_w = tl.load(p_w, mask=mask_bk, other=0).to(tl.float32)
         b_w = tl.exp(b_w).to(TLTYPE)
@@ -151,7 +151,7 @@ def fused_recurrent_rwkv6_bwd_kernel_dq(
 
     for _ in range(0, T):
         b_k = (tl.load(p_k, mask=mask_bk, other=0) * scale).to(TLTYPE)
-        b_v = (tl.load(p_v, mask=mask_bv, other=0) * scale).to(TLTYPE)
+        b_v = tl.load(p_v, mask=mask_bv, other=0).to(TLTYPE)
         b_kv = b_k[None, :] * b_v[:, None]
         b_do = tl.load(p_do, mask=mask_bv, other=0).to(TLTYPE)
         b_w = tl.load(p_w, mask=mask_bk, other=0).to(tl.float32)
@@ -231,7 +231,7 @@ def fused_recurrent_rwkv6_bwd_kernel_dkv(
     for _ in range(T - 1, -1, -1):
         b_q = (tl.load(p_q, mask=mask_bk, other=0) * scale).to(TLTYPE)
         b_k = (tl.load(p_k, mask=mask_bk, other=0) * scale).to(TLTYPE)
-        b_v = (tl.load(p_v, mask=mask_bv, other=0) * scale).to(TLTYPE)
+        b_v = tl.load(p_v, mask=mask_bv, other=0).to(TLTYPE)
         b_w = tl.load(p_w, mask=mask_bk, other=0).to(tl.float32)
         b_do = tl.load(p_do, mask=mask_bv, other=0).to(TLTYPE)
         b_dkv = (b_q[:, None] * b_do[None, :]).to(TLTYPE)
@@ -240,7 +240,6 @@ def fused_recurrent_rwkv6_bwd_kernel_dkv(
         b_dk += tl.sum(b_dkv * b_u[:, None] * b_v[None, :], axis=1)
         b_dv = tl.sum((b_dh + (b_dkv * b_u[:, None])) * b_k[:, None], axis=0)
         b_dk *= scale
-        b_dv *= scale
         tl.store(p_dk, b_dk.to(p_dk.dtype.element_ty), mask=mask_bk)
         tl.store(p_dv, b_dv.to(p_dv.dtype.element_ty), mask=mask_bv)
         b_dh = b_dh * tl.exp(b_w)[:, None].to(TLTYPE)
@@ -371,9 +370,9 @@ class FusedRecurrentRWKV6Function(torch.autograd.Function):
         dw = chunk_global_reversed_cumsum(dw).to(w)
 
         if u_2d:
-            du = ((do * scale * v ).sum(-1)[..., None] * k * (scale**2) * q).sum([0, -2]).to(u)
+            du = ((do * v).sum(-1)[..., None] * k * (scale**2) * q).sum([0, -2]).to(u)
         else:
-            du = ((do * v * scale).sum(-1)[..., None] * k * (scale**2) * q).sum(-2).to(u)
+            du = ((do * v).sum(-1)[..., None] * k * (scale**2) * q).sum(-2).to(u)
         return dq, dk, dv, dw, du, None, dh0 if initial_state is not None else None, None, None, None, None
 
 
@@ -383,7 +382,7 @@ def fused_recurrent_rwkv6(
     v: torch.Tensor,
     w: torch.Tensor,
     u: torch.Tensor,
-    scale: float = -1.0,
+    scale: float = 1.0,
     initial_state: torch.Tensor = None,
     output_final_state: bool = False,
     reverse: bool = False,

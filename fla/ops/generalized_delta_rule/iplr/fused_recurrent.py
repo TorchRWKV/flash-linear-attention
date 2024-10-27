@@ -17,8 +17,10 @@ def fused_recurrent_fwd_kernel(
     q,  # query [B, H, L, K]
     k,  # key [B, H, L, V]
     v,  # value [B, H, L, V].
-    beta,  # beta [B, H, L]
+    alpha,  # beta [B, H, L]
+    beta,
     o,  # output [B, H, L, V]
+    ha, # tmp variable [B, H, L, V] for storing intermediate results of (h * alpha[None, :]).sum(0)
     h0,
     ht,  # final hidden state [B, H, K, V]
     s_qk_h,  # stride size: L * K
@@ -33,7 +35,6 @@ def fused_recurrent_fwd_kernel(
     BV: tl.constexpr,  # BLOCK SIZE along the V dimension
     USE_INITIAL_STATE: tl.constexpr,  # whether to use initial state
     STORE_FINAL_STATE: tl.constexpr,  # whether to store final state
-    IS_HEADWISE_BETA: tl.constexpr,  # whether beta is headwise vector or scalar
 ):
 
     # indices
@@ -42,11 +43,10 @@ def fused_recurrent_fwd_kernel(
     p_q = q + i_bh * s_qk_h + i_k * BK + tl.arange(0, BK)
     p_k = k + i_bh * s_qk_h + i_k * BK + tl.arange(0, BK)
     p_v = v + i_bh * s_vo_h + i_v * BV + tl.arange(0, BV)
-    if IS_HEADWISE_BETA:
-        p_beta = beta + i_bh * s_vo_h + i_v * BV + tl.arange(0, BV)
-    else:
-        p_beta = beta + i_bh * T
+    p_alpha = alpha + i_bh * s_qk_h + i_k * BK + tl.arange(0, BK)
+    p_beta = beta + i_bh * s_qk_h + i_k * BK + tl.arange(0, BK)
     p_o = o + (i_bh + i_k * B * H) * s_vo_h + i_v * BV + tl.arange(0, BV)
+    p_ha = ha + (i_bh + i_k * B * H) * s_vo_h + i_v * BV + tl.arange(0, BV)
 
     mask_bk = (i_k * BK + tl.arange(0, BK)) < K
     mask_bv = (i_v * BV + tl.arange(0, BV)) < V
@@ -62,25 +62,22 @@ def fused_recurrent_fwd_kernel(
         b_k = tl.load(p_k, mask=mask_bk, other=0).to(tl.float32)
         b_v = tl.load(p_v, mask=mask_bv, other=0).to(tl.float32)
         b_q = tl.load(p_q, mask=mask_bk, other=0).to(tl.float32) * scale
-        _v_minus = tl.sum(h * b_k[None, :], axis=1)
-        b_v -= _v_minus
-        if IS_HEADWISE_BETA:
-            b_beta = tl.load(p_beta, mask=mask_bv, other=0).to(tl.float32)
-        else:
-            b_beta = tl.load(p_beta).to(tl.float32)
-        # in-place overwrite
-        tl.store(p_v, b_v.to(p_v.dtype.element_ty), mask=mask_bv)
-        b_v *= b_beta
-        h += b_k[None, :] * b_v[:, None]
+        b_alpha = tl.load(p_alpha, mask=mask_bk, other=0).to(tl.float32)
+        b_beta = tl.load(p_beta, mask=mask_bk, other=0).to(tl.float32)
+        # to store
+        tmp = tl.sum(h * b_alpha[None, :], axis=1)
+        h += (tmp[:, None] * b_beta[None, :] + b_k[None, :] * b_v[:, None])
         _o = h * b_q[None, :]
         _o = tl.sum(_o, axis=1)
         tl.store(p_o, _o.to(p_o.dtype.element_ty), mask=mask_bv)
-
+        tl.store(p_ha, tmp.to(p_ha.dtype.element_ty), mask=mask_bv)
         p_q += K
         p_k += K
         p_o += V
         p_v += V
-        p_beta += V if IS_HEADWISE_BETA else 1
+        p_ha += V
+        p_alpha += K
+        p_beta += K
 
     if STORE_FINAL_STATE:
         p_ht = ht + i_bh * K * V + (i_k * BK + tl.arange(0, BK)[None, :]) * V + (i_v * BV + tl.arange(0, BV)[:, None])
@@ -95,14 +92,18 @@ def fused_recurrent_bwd_kernel(
     q,  # query [B, H, L, K]
     k,  # key [B, H, L, V]
     v,  # value [B, H, L, V]
-    beta,  # beta [B, H, L, (V)]
+    alpha, # alpha [B, H, L, K]
+    beta,  # beta [B, H, L, K]
+    ha, # ha [B, H, L, V]
     dht,  # gradient of final state [B, H, K, V]
     dh0,  # gradient of initial state [B, H, K, V]
     do,  # gradient of output [B, H, L, V]
     dq,  # gradient of query [NV, B, H, L, K]
     dk,  # gradient of key [NV, B, H, L, K]
     dv,  # gradient of value [NK, B, H, L, V]
-    dbeta,  # gradient of beta [NV, (NK), B, H, L]
+    dalpha, # gradient of alpha [NV, B, H, L, K]
+    dbeta,  # gradient of beta [NV, B, H, L, K]
+    dha, # gradient of ha [NK, B, H, L, V]
     h0,  # initial state [B, H, K, V]
     s_qk_h,  # stride size: L * K
     s_vo_h,  # stride size: L * V
@@ -116,7 +117,6 @@ def fused_recurrent_bwd_kernel(
     BK: tl.constexpr,  # BLOCK SIZE along the K dimension
     BV: tl.constexpr,  # BLOCK SIZE along the V dimension
     USE_INITIAL_STATE: tl.constexpr,  # whether to use initial state h0
-    IS_HEADWISE_BETA: tl.constexpr,  # whether beta is headwise vector or scalar
     USE_DH0: tl.constexpr,  # whether to use dh0
     USE_DHT: tl.constexpr,  # whether to use dht
 ):
@@ -128,17 +128,14 @@ def fused_recurrent_bwd_kernel(
     p_k = k + i_bh * s_qk_h + i_k * BK + tl.arange(0, BK) + (T - 1) * K
     p_do = do + i_bh * s_vo_h + i_v * BV + tl.arange(0, BV) + (T - 1) * V
     p_v = v + i_bh * s_vo_h + i_v * BV + tl.arange(0, BV) + (T - 1) * V
-    if IS_HEADWISE_BETA:
-        p_beta = beta + i_bh * s_vo_h + i_v * BV + tl.arange(0, BV) + (T - 1) * V
-    else:
-        p_beta = beta + i_bh * T + T - 1
+    p_ha = ha + i_bh * s_vo_h + i_v * BV + tl.arange(0, BV) + (T - 1) * V
+    p_alpha = alpha + i_bh * s_qk_h + i_k * BK + tl.arange(0, BK) + (T - 1) * K
+    p_beta = beta + i_bh * s_qk_h + i_k * BK + tl.arange(0, BK) + (T - 1) * K
 
     p_dk = dk + (i_bh + i_v * B * H) * s_qk_h + i_k * BK + tl.arange(0, BK) + (T - 1) * K
+    p_dbeta = dbeta + (i_bh + i_v * B * H) * s_qk_h + i_k * BK + tl.arange(0, BK) + (T - 1) * K
     p_dv = dv + (i_bh + i_k * B * H) * s_vo_h + i_v * BV + tl.arange(0, BV) + (T - 1) * V
-    if IS_HEADWISE_BETA:
-        p_dbeta = dbeta + (i_bh + i_k * B * H + i_v * B * H * NK) * s_vo_h + tl.arange(0, BV) + (T - 1) * V
-    else:
-        p_dbeta = dbeta + (i_bh + i_v * B * H) * T + T - 1
+    p_dha = dha + (i_bh + i_k * B * H) * s_vo_h + i_v * BV + tl.arange(0, BV) + (T - 1) * V
     d_h = tl.zeros([BK, BV], dtype=tl.float32)
 
     if USE_DHT:
@@ -150,34 +147,33 @@ def fused_recurrent_bwd_kernel(
         b_k = tl.load(p_k, mask=mask_bk, other=0).to(tl.float32)
         b_v = tl.load(p_v, mask=mask_bv, other=0).to(tl.float32)
         b_do = tl.load(p_do, mask=mask_bv, other=0).to(tl.float32)
-        if IS_HEADWISE_BETA:
-            b_beta = tl.load(p_beta, mask=mask_bv, other=0).to(tl.float32)
-        else:
-            b_beta = tl.load(p_beta).to(tl.float32)
+        b_beta = tl.load(p_beta, mask=mask_bk, other=0).to(tl.float32)
+        b_alpha = tl.load(p_alpha, mask=mask_bk, other=0).to(tl.float32)
+        b_ha = tl.load(p_ha, mask=mask_bv, other=0).to(tl.float32)
+        
         d_h += b_q[:, None] * b_do[None, :]
-        d_k = tl.sum(d_h * (b_v * b_beta)[None, :], axis=1)
+        d_k = tl.sum(d_h * b_v[None, :], axis=1)
         d_v = tl.sum(d_h * b_k[:, None], axis=0)
-
-        d_beta = d_v * b_v if IS_HEADWISE_BETA else tl.sum(d_v * b_v)
-        d_v = d_v * b_beta
-
         tl.store(p_dk, d_k.to(p_dk.dtype.element_ty), mask=mask_bk)
         tl.store(p_dv, d_v.to(p_dv.dtype.element_ty), mask=mask_bv)
-        if IS_HEADWISE_BETA:
-            tl.store(p_dbeta, d_beta.to(p_dbeta.dtype.element_ty), mask=mask_bv)
-        else:
-            tl.store(p_dbeta, d_beta.to(p_dbeta.dtype.element_ty))
 
-        d_h -= b_k[:, None] * d_v[None, :]
+        b_dha = tl.sum(d_h * b_beta[:, None], axis=0)
+        tl.store(p_dha, b_dha.to(p_dha.dtype.element_ty), mask=mask_bv)
+        b_dbeta = tl.sum(d_h * b_ha[None, :], axis=1)
+        tl.store(p_dbeta, b_dbeta.to(p_dbeta.dtype.element_ty), mask=mask_bk)
 
+        d_h += b_dha[None, :] * b_alpha[:, None]
         p_do -= V
         p_q -= K
         p_k -= K
         p_v -= V
         p_dk -= K
         p_dv -= V
-        p_dbeta -= V if IS_HEADWISE_BETA else 1
-        p_beta -= V if IS_HEADWISE_BETA else 1
+        p_beta -= K
+        p_dbeta -= K
+        p_alpha -= K
+        p_dha -= V
+        p_ha -= V
 
     if USE_DH0:
         p_dh0 = dh0 + i_bh * K * V + (i_k * BK + tl.arange(0, BK)[:, None]) * V + (i_v * BV + tl.arange(0, BV)[None, :])
@@ -186,18 +182,17 @@ def fused_recurrent_bwd_kernel(
     tl.debug_barrier()
 
     h = tl.zeros([BK, BV], dtype=tl.float32)
-
     p_q = q + i_bh * s_qk_h + i_k * BK + tl.arange(0, BK)
     p_k = k + i_bh * s_qk_h + i_k * BK + tl.arange(0, BK)
+    p_beta = beta + i_bh * s_qk_h + i_k * BK + tl.arange(0, BK)
     p_v = v + i_bh * s_vo_h + i_v * BV + tl.arange(0, BV)
-    if IS_HEADWISE_BETA:
-        p_beta = beta + i_bh * s_vo_h + i_v * BV + tl.arange(0, BV)
-    else:
-        p_beta = beta + i_bh * T
+    p_ha = ha + i_bh * s_vo_h + i_v * BV + tl.arange(0, BV)
     p_do = do + i_bh * s_vo_h + i_v * BV + tl.arange(0, BV)
     p_dq = dq + (i_bh + i_v * B * H) * s_qk_h + i_k * BK + tl.arange(0, BK)
     p_dv = dv + (i_bh + i_k * B * H) * s_vo_h + i_v * BV + tl.arange(0, BV)
-    p_dk = dk + (i_bh + i_v * B * H) * s_qk_h + i_k * BK + tl.arange(0, BK)
+    p_dha = dha + (i_bh + i_k * B * H) * s_vo_h + i_v * BV + tl.arange(0, BV)
+    p_alpha = alpha + (i_bh + i_v * B * H) * s_qk_h + i_k * BK + tl.arange(0, BK)
+    p_dalpha = dalpha + (i_bh + i_v * B * H) * s_qk_h + i_k * BK + tl.arange(0, BK)
 
     if USE_INITIAL_STATE:
         mask_kv = mask_bk[:, None] & mask_bv[None, :]
@@ -205,21 +200,15 @@ def fused_recurrent_bwd_kernel(
         h += tl.load(p_h0, mask=mask_kv, other=0).to(tl.float32)
 
     for i in range(0, T):
-        d_k = tl.load(p_dk, mask=mask_bk, other=0).to(tl.float32)
-        d_v = tl.load(p_dv, mask=mask_bv, other=0).to(tl.float32)
-        d_k -= tl.sum(d_v[None, :] * h, axis=1)
-        tl.store(p_dk, d_k.to(p_dk.dtype.element_ty), mask=mask_bk)
-
+        d_ha = tl.load(p_dha, mask=mask_bv, other=0).to(tl.float32)
+        d_alpha = tl.sum(d_ha[None, :] * h, axis=1)
+        tl.store(p_dalpha, d_alpha.to(p_dalpha.dtype.element_ty), mask=mask_bk)
         b_k = tl.load(p_k, mask=mask_bk, other=0).to(tl.float32)
         b_v = tl.load(p_v, mask=mask_bv, other=0).to(tl.float32)
         b_do = tl.load(p_do, mask=mask_bv, other=0).to(tl.float32)
-        if IS_HEADWISE_BETA:
-            b_beta = tl.load(p_beta, mask=mask_bv, other=0).to(tl.float32)
-        else:
-            b_beta = tl.load(p_beta).to(tl.float32)
-        b_v *= b_beta
-
-        h += b_k[:, None] * b_v[None, :]
+        b_beta = tl.load(p_beta, mask=mask_bk, other=0).to(tl.float32)
+        b_ha = tl.load(p_ha, mask=mask_bv, other=0).to(tl.float32)
+        h += b_k[:, None] * b_v[None, :] + b_beta[:, None] * b_ha[None, :]
         _d_q = h * b_do[None, :]
         d_q = tl.sum(_d_q, axis=1) * scale
         tl.store(p_dq, d_q.to(p_dq.dtype.element_ty), mask=mask_bk)
@@ -228,18 +217,20 @@ def fused_recurrent_bwd_kernel(
         p_do += V
         p_v += V
         p_dk += K
-        p_dv += V
+        p_dalpha += K
+        p_dha += V
+        p_ha += V
         p_dq += K
-        p_beta += V if IS_HEADWISE_BETA else 1
+        p_beta += K
+
 
 
 class FusedRecurrentFunction(torch.autograd.Function):
 
     @staticmethod
     @contiguous
-    def forward(ctx, q, k, v, beta, scale=None, initial_state=None, output_final_state=False):
+    def forward(ctx, q, k, v, alpha, beta, scale=None, initial_state=None, output_final_state=False):
         B, H, T, K, V = *q.shape, v.shape[-1]
-
         BK, BV = triton.next_power_of_2(K), min(triton.next_power_of_2(V), 8)
         NK, NV = triton.cdiv(K, BK), triton.cdiv(V, BV)
         num_stages = 1
@@ -252,9 +243,11 @@ class FusedRecurrentFunction(torch.autograd.Function):
         else:
             final_state = None
 
+        ha = torch.empty_like(v, dtype=torch.float32)
+
         grid = (NV, NK, B * H)
         fused_recurrent_fwd_kernel[grid](
-            q, k, v, beta, o, initial_state, final_state,
+            q, k, v, alpha, beta, o, ha, initial_state, final_state,
             q.stride(1),
             v.stride(1),
             scale,
@@ -262,19 +255,18 @@ class FusedRecurrentFunction(torch.autograd.Function):
             BK=BK, BV=BV,
             USE_INITIAL_STATE=initial_state is not None,
             STORE_FINAL_STATE=final_state is not None,
-            IS_HEADWISE_BETA=beta.ndim == v.ndim,
             num_warps=num_warps,
             num_stages=num_stages,
         )
         o = o.squeeze(0)
-        ctx.save_for_backward(q, k, v, beta, initial_state)
+        ctx.save_for_backward(q, k, v, alpha, beta, ha, initial_state)
         ctx.scale = scale
         return o, final_state
 
     @staticmethod
     @contiguous
     def backward(ctx, do, dht):
-        q, k, v, beta, initial_state = ctx.saved_tensors
+        q, k, v, alpha, beta, ha, initial_state = ctx.saved_tensors
         B, H, T, K, V = *q.shape, v.shape[-1]
         scale = ctx.scale
         BK, BV = triton.next_power_of_2(K), min(triton.next_power_of_2(V), 32)
@@ -283,15 +275,13 @@ class FusedRecurrentFunction(torch.autograd.Function):
         num_stages = 1
         num_warps = 2
 
-        beta_vector = beta.ndim == v.ndim
-
         dq = q.new_empty(NV, B, H, T, K)
-        dk = q.new_empty(NV, B, H, T, K)
-        dv = q.new_empty(NK, B, H, T, V)
-        if beta_vector:
-            dbeta = q.new_empty(NV, NK, B, H, T, V)
-        else:
-            dbeta = q.new_empty(NV, B, H, T)
+        dk = k.new_empty(NV, B, H, T, K)
+        dalpha = alpha.new_empty(NV, B, H, T, K)
+        dbeta = beta.new_empty(NV, B, H, T, K) 
+        dv = v.new_empty(NK, B, H, T, V)
+        dha = ha.new_empty(NK, B, H, T, V)
+        
         grid = (NV, NK, B * H)
 
         if initial_state is not None and initial_state.requires_grad:
@@ -300,7 +290,7 @@ class FusedRecurrentFunction(torch.autograd.Function):
             dh0 = None
 
         fused_recurrent_bwd_kernel[grid](
-            q, k, v, beta, dht, dh0, do, dq, dk, dv, dbeta, initial_state,
+            q, k, v, alpha, beta, ha, dht, dh0, do, dq, dk, dv, dalpha, dbeta, dha, initial_state,
             q.stride(1),
             v.stride(1),
             NK, scale,
@@ -309,27 +299,31 @@ class FusedRecurrentFunction(torch.autograd.Function):
             USE_INITIAL_STATE=initial_state is not None,
             USE_DH0=dh0 is not None,
             USE_DHT=dht is not None,
-            IS_HEADWISE_BETA=beta_vector,
             num_warps=num_warps,
             num_stages=num_stages
         )
         dq = dq.sum(0)
         dk = dk.sum(0)
         dv = dv.sum(0)
-        dbeta = dbeta.sum((0, 1)) if beta_vector else dbeta.sum(0)
-        return dq.to(q), dk.to(k), dv.to(v), dbeta.to(beta), None, dh0, None
+        dalpha = dalpha.sum(0)
+        dbeta = dbeta.sum(0)
+        return dq.to(q), dk.to(k), dv.to(v), dalpha.to(alpha), dbeta.to(beta), None, dh0, None
 
 
-def fused_recurrent_delta_rule(
+def fused_recurrent_iplr(
     q: torch.Tensor,
     k: torch.Tensor,
     v: torch.Tensor,
-    beta: torch.Tensor = None,
+    alpha: torch.Tensor,
+    beta: torch.Tensor,
     scale: float = None,
     initial_state: torch.Tensor = None,
     output_final_state: bool = False
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     r"""
+    This function computes the recurrence S_t = S_t @ (I + alpha_t beta_t^T) + v_t k_t^T in a recurrent manner.
+    Since the transition matrices is identity-plus-low-rank, we call it the Identity-Plus-Low-Rank (IPLR).
+
     Args:
         q (torch.Tensor):
             queries of shape `(B, H, T, K)`
@@ -337,8 +331,10 @@ def fused_recurrent_delta_rule(
             keys of shape `(B, H, T, K)`
         v (torch.Tensor):
             values of shape `(B, H, T, V)`
+        alpha (torch.Tensor):
+            alphas of shape `(B, H, T, K)`
         beta (torch.Tensor):
-             betas of shape `(B, H, T)`
+             betas of shape `(B, H, T, K)`
         scale (Optional[int]):
             Scale factor for the RetNet attention scores.
             If not provided, it will default to `1 / sqrt(K)`. Default: `None`.
@@ -351,7 +347,5 @@ def fused_recurrent_delta_rule(
         scale = q.shape[-1] ** -0.5
     else:
         assert scale > 0, "scale must be positive"
-    if beta is None:
-        beta = torch.ones_like(q[..., 0])
-    o, final_state = FusedRecurrentFunction.apply(q, k, v, beta, scale, initial_state, output_final_state)
+    o, final_state = FusedRecurrentFunction.apply(q, k, v, alpha, beta, scale, initial_state, output_final_state)
     return o, final_state

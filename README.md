@@ -33,17 +33,21 @@ Some benchmarks (chunk_rwkv6(fla) vs CUDA kernel)
 
 ```
 from fla.ops.rwkv6 import chunk_rwkv6, fused_recurrent_rwkv6, native_recurrent_rwkv6
-
-@torch.compile
-def run_fla_kernel(B, T, C, H, r, k, v, w, u, s):
+@torch.compiler.disable(recursive=True) 
+# torch.compiler introduces errors in numerical precision (torch 2.4)
+def RUN_FLA_CHUNK(B, T, C, H, r, k, v, w, u, h, scale=1.0, chunk_size=32):
     r = r.view(B,T,H,-1).transpose(1,2)
     k = k.view(B,T,H,-1).transpose(1,2)
     v = v.view(B,T,H,-1).transpose(1,2)
     # u can be 3d or 2d (B, H, -1) or just (H, -1) to save VRAM
     w = -torch.exp(w.view(B,T,H,-1).transpose(1,2))
-    o, final_state = chunk_rwkv6(r, k, v, w, u=u, scale=1.0, initial_state=s, output_final_state=True)
+    # change to scale=-1.0 when using fp16, this will apply scale to r and k.
+    o, final_state = chunk_rwkv6(r, k, v, w, u=u, scale=scale, initial_state=h, 
+        output_final_state=True, chunk_size=chunk_size)
     return o.transpose(1,2).reshape(B,T,C), final_state
 ```
+
+
 >This repo aims at providing a collection of efficient Triton-based implementations for state-of-the-art linear attention models. **Any pull requests are welcome!**
 
 <div align="center">

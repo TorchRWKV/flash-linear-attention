@@ -14,7 +14,7 @@ def naive_recurrent_rwkv6(
     v: torch.Tensor,
     w: torch.Tensor,
     u: torch.Tensor,
-    scale: float = -1.0,
+    scale: float = 1.0,
     initial_state: Optional[torch.Tensor] = None,
     output_final_state: bool = False,
     u_2d: bool = False
@@ -22,7 +22,7 @@ def naive_recurrent_rwkv6(
     if (torch.is_autocast_enabled(device) if check_pytorch_version('2.4') else torch.is_autocast_enabled()):
         torch_dtype = torch.get_autocast_dtype(device) if check_pytorch_version('2.4') else torch.get_autocast_gpu_dtype()
     else:
-        torch_dtype = torch.float32 if q.dtype != torch.float16 else torch.float16
+        torch_dtype = q.dtype if q.dtype in [torch.float16, torch.float32, torch.float64] else torch.float32
     orig_dtype = q.dtype
     B, H, T, K, V = q.shape[0], q.shape[1], q.shape[2], q.shape[3], v.shape[-1]
     q, k, v, w, u = (x.to(dtype=torch_dtype) for x in (q, k, v, w, u))
@@ -45,7 +45,7 @@ def naive_recurrent_rwkv6(
     for i in range(T):
         q_i = q[:, :, i, :] * scale
         k_i = k[:, :, i] * scale
-        v_i = v[:, :, i, :] * scale
+        v_i = v[:, :, i, :]
         w_i = w[:, :, i]
         kv_i = k_i[..., None] * v_i[..., None, :]
         o_i = (h + u_expand * kv_i) * q_i[..., None]
@@ -66,7 +66,7 @@ def naive_recurrent_rwkv6_bwd(
     do: torch.Tensor,
     dh_t: Optional[torch.Tensor] = None,
     initial_state: Optional[torch.Tensor] = None,
-    scale: float = -1.0,
+    scale: float = 1.0,
     u_2d: bool = False
 ):
     torch_type = torch.float32 if q.dtype != torch.float16 else torch.float16
@@ -92,7 +92,7 @@ def naive_recurrent_rwkv6_bwd(
 
     for i in range(T):
         k_i = k[:, :, i] * scale
-        v_i = v[:, :, i] * scale
+        v_i = v[:, :, i]
         w_i = w[:, :, i]
         kv_i = k_i[..., None] * v_i[..., None, :]
         h_i = (h + u_expand * kv_i)
@@ -115,7 +115,7 @@ def naive_recurrent_rwkv6_bwd(
     for i in range(T - 1, -1, -1):
         q_i = q[:, :, i] * scale
         k_i = k[:, :, i] * scale
-        v_i = v[:, :, i] * scale
+        v_i = v[:, :, i]
 
         d_kv_i = do[:, :, i, None, :] * q_i[..., None]
         du += (d_kv_i * k_i[..., None] * v_i[..., None, :]).sum(sum_dims)
@@ -128,7 +128,7 @@ def naive_recurrent_rwkv6_bwd(
         dv_i += (dh * k_i[..., None]).sum(-2)
 
         dk[:, :, i] = dk_i * scale
-        dv[:, :, i] = dv_i * scale
+        dv[:, :, i] = dv_i
         dh = dh * w[:, :, i, :, None] + d_kv_i
 
 
@@ -169,7 +169,7 @@ def native_recurrent_rwkv6(
     v: torch.Tensor,
     w: torch.Tensor,
     u: torch.Tensor,
-    scale: float = -1.0,
+    scale: float = 1.0,
     initial_state: torch.Tensor = None,
     output_final_state: bool = False,
     training: bool = True,

@@ -55,7 +55,7 @@ def naive_recurrent_rwkv7(
     if initial_state is not None:
         state += initial_state.to(dtype=torch_dtype)
 
-    w = torch.exp(w)
+    w = torch.exp(-torch.exp(w))
 
 
     state_cache = []
@@ -138,12 +138,11 @@ def naive_recurrent_rwkv7_bwd(
 
     state += state_cache[0]
 
-    w = torch.exp(w)
 
     def reconstruct_state_cache(state_t, last_ckpt, length):
         states = [state_t]
         for t in range(last_ckpt, length):
-            k_t, v_t, a_t, b_t, w_t = k[:, :, t], v[:, :, t], a[:, :, t], b[:, :, t], w[:, :, t]
+            k_t, v_t, a_t, b_t, w_t = k[:, :, t], v[:, :, t], a[:, :, t], b[:, :, t], torch.exp(-torch.exp(w[:, :, t]))
             sa = torch.matmul(states[-1], a_t.unsqueeze(-1))
             sab = torch.matmul(sa, b_t.unsqueeze(-2))
             kv = torch.matmul(v_t.unsqueeze(-1), k_t.unsqueeze(-2))
@@ -171,7 +170,8 @@ def naive_recurrent_rwkv7_bwd(
         v_t = v[:, :, t]
         a_t = a[:, :, t]
         b_t = b[:, :, t]
-        w_t = w[:, :, t]
+        w_t_temp = -torch.exp(w[:, :, t])
+        w_t = torch.exp(w_t_temp)
 
         # Gradient of output
         dq[:, :, t] += torch.matmul(doutput[:, :, t].unsqueeze(-2), state).squeeze(-2) * scale
@@ -179,7 +179,8 @@ def naive_recurrent_rwkv7_bwd(
         dstate += torch.mul(doutput[:, :, t].unsqueeze(3), q_t.unsqueeze(2))
 
         # Gradient of state update
-        dw[:, :, t] += torch.sum(dstate * prev_state, dim=(-2)) * w_t
+        dw[:, :, t] += torch.sum(dstate * prev_state, dim=(-2)) * w_t * w_t_temp
+
 
         # Gradient of sab
         # torch.einsum('bhij,bhik,bhj->bhk', dstate, prev_state, b_t)
@@ -206,7 +207,7 @@ def naive_recurrent_rwkv7_bwd(
         dprev_state = torch.matmul(mul_result, b_t.unsqueeze(-1)).view(B, H, V, V)
 
 
-        dprev_state += dstate * w[:, :, t, None, :]
+        dprev_state += dstate * w_t[..., None, :]
 
         # Update dstate for next iteration
         dstate = dprev_state
@@ -289,7 +290,7 @@ if __name__ == "__main__":
     H = 64
     L = 32
     D = 64
-    dtype = torch.float64
+    dtype = torch.float
     require_grad = True
     torch.manual_seed(44)
 
@@ -341,11 +342,17 @@ if __name__ == "__main__":
 
     assert get_err_ratio(ref_o, tri_o) < atol
     print(get_err_ratio(ref_dq, tri_dq))  # pass
+    torch.testing.assert_close(ref_dq, tri_dq, rtol=1e-4, atol=1e-4)
     print(get_err_ratio(ref_dk, tri_dk))
+    torch.testing.assert_close(ref_dk, tri_dk, rtol=1e-4, atol=1e-4)
     print(get_err_ratio(ref_dv, tri_dv))
+    torch.testing.assert_close(ref_dv, tri_dv, rtol=1e-4, atol=1e-4)
     print(get_err_ratio(ref_dw, tri_dw))
+    torch.testing.assert_close(ref_dw, tri_dw, rtol=1e-4, atol=1e-4)
     print(get_err_ratio(ref_da, tri_da))
+    torch.testing.assert_close(ref_da, tri_da, rtol=1e-4, atol=1e-4)
     print(get_err_ratio(ref_db, tri_db))
+    torch.testing.assert_close(ref_db, tri_db, rtol=1e-4, atol=1e-4)
     assert get_err_ratio(ref_dq, tri_dq) < atol
     assert get_err_ratio(ref_dk, tri_dk) < atol
     assert get_err_ratio(ref_dv, tri_dv) < atol

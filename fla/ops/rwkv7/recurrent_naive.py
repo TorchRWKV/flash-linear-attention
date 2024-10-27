@@ -37,10 +37,7 @@ def naive_recurrent_rwkv7(
     Returns:
         Attention output and optionally the final state
     """
-    if (torch.is_autocast_enabled(device) if check_pytorch_version('2.4') else torch.is_autocast_enabled()):
-        torch_dtype = torch.get_autocast_dtype(device) if check_pytorch_version('2.4') else torch.get_autocast_gpu_dtype()
-    else:
-        torch_dtype = torch.float32 if q.dtype != torch.float64 else torch.float64
+    torch_dtype = q.dtype if q.dtype in [torch.float64, torch.float] else torch.float
     orig_dtype = q.dtype
     B, H, L, N, V = q.shape[0], q.shape[1], q.shape[2], q.shape[3], v.shape[-1]
     q, k, v, w, a, b = (x.to(dtype=torch_dtype) for x in (q, k, v, w, a, b))
@@ -53,9 +50,7 @@ def naive_recurrent_rwkv7(
         scale = N ** -0.5
 
     if initial_state is not None:
-        state = initial_state.to(dtype=torch_dtype)
-
-    w = torch.exp(-torch.exp(w))
+        state += initial_state.to(dtype=torch_dtype)
 
 
     state_cache = []
@@ -72,7 +67,7 @@ def naive_recurrent_rwkv7(
 
         # from bo's code 
         sab = torch.einsum('bhik,bhk,bhj->bhij', state, a_t, b_t)
-        state = state * w[:, :, t, None, :] + sab + torch.einsum('bhj,bhi->bhij', k_t, v_t)
+        state = state * torch.exp(-torch.exp(w[:, :, t, None, :])) + sab + torch.einsum('bhj,bhi->bhij', k_t, v_t)
         o[:, :, t] = torch.einsum('bhj,bhij->bhi', q_t, state)
     
 
@@ -106,10 +101,7 @@ def naive_recurrent_rwkv7_2(
     Returns:
         Attention output and optionally the final state
     """
-    if (torch.is_autocast_enabled(device) if check_pytorch_version('2.4') else torch.is_autocast_enabled()):
-        torch_dtype = torch.get_autocast_dtype(device) if check_pytorch_version('2.4') else torch.get_autocast_gpu_dtype()
-    else:
-        torch_dtype = torch.float32 if q.dtype != torch.float64 else torch.float64
+    torch_dtype = q.dtype if q.dtype in [torch.float64, torch.float] else torch.float
     orig_dtype = q.dtype
     B, H, L, N, V = q.shape[0], q.shape[1], q.shape[2], q.shape[3], v.shape[-1]
     q, k, v, w, a, b = (x.to(dtype=torch_dtype) for x in (q, k, v, w, a, b))
@@ -122,7 +114,7 @@ def naive_recurrent_rwkv7_2(
         scale = N ** -0.5
 
     if initial_state is not None:
-        state = initial_state.to(dtype=torch_dtype)
+        state += initial_state.to(dtype=torch_dtype)
 
 
     for t in range(L):
@@ -167,10 +159,7 @@ def naive_recurrent_rwkv7_bwd(
     dtype: Optional[torch.dtype] = None,
     state_ckpt_interval: int = 16
 ):
-    if dtype is None:
-        torch_dtype = torch.float32 if q.dtype != torch.float64 else torch.float64
-    else:
-        torch_dtype = dtype
+    torch_dtype = q.dtype if q.dtype in [torch.float64, torch.float] else torch.float
     q, k, v, w, a, b, doutput, state_cache = (x.to(dtype=torch_dtype) for x in (q, k, v, w, a, b, doutput, state_cache))
     if dh_t is not None:
         dh_t = dh_t.to(dtype=torch_dtype)

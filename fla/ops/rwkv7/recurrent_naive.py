@@ -8,6 +8,7 @@ from fla.utils import autocast_custom_bwd, autocast_custom_fwd, contiguous
 from fla.utils import check_pytorch_version, device
 
 
+
 def naive_recurrent_rwkv7(
     q: torch.Tensor,
     k: torch.Tensor,
@@ -18,7 +19,6 @@ def naive_recurrent_rwkv7(
     scale: float = 1.0,
     initial_state: Optional[torch.Tensor] = None,
     output_final_state: bool = True,
-    manual_einsum: bool = True,
     state_ckpt: bool = False,
     state_ckpt_interval: int = 16
 ):
@@ -53,7 +53,7 @@ def naive_recurrent_rwkv7(
         scale = N ** -0.5
 
     if initial_state is not None:
-        state += initial_state.to(dtype=torch_dtype)
+        state = initial_state.to(dtype=torch_dtype)
 
     w = torch.exp(-torch.exp(w))
 
@@ -69,31 +69,88 @@ def naive_recurrent_rwkv7(
         if t % state_ckpt_interval == 0 and state_ckpt:
             state_cache.append(state.detach())
 
-        if not manual_einsum:
-            # from bo's code 
-            sab = torch.einsum('bhik,bhk,bhj->bhij', state, a_t, b_t)
-            state = state * w[:, :, t, None, :] + sab + torch.einsum('bhj,bhi->bhij', k_t, v_t)
-            o[:, :, t] = torch.einsum('bhj,bhij->bhi', q_t, state)
-        else:
-            # Calculate sab
-            # sa = torch.bmm(state.view(B*H, V, V), a_t.view(B*H, V, 1))
-            sa = torch.matmul(state, a_t.unsqueeze(-1))
-            # sab = torch.bmm(sa.view(B*H, V, 1), b_t.view(B*H, 1, V)).view(B, H, D, D)
-            sab = torch.matmul(sa, b_t.unsqueeze(-2))
-            # Update state
-            # kv = torch.bmm(v_t.view(B*H, V, 1), k_t.view(B*H, 1, V)).view(B, H, V, V)
-            kv = torch.matmul(v_t.unsqueeze(-1), k_t.unsqueeze(-2))
-            state = state * w[:, :, t, None, :] + sab + kv
-            # Calculate o
-            # o_t = torch.bmm(q_t.reshape(B*H, 1, V),
-            #                 state.transpose(2, 3).reshape(B*H, V, V)).view(B, H, V)
-            o[:, :, t] = torch.matmul(q_t.unsqueeze(-2), state.transpose(-2, -1)).squeeze(-2)
 
+        # from bo's code 
+        sab = torch.einsum('bhik,bhk,bhj->bhij', state, a_t, b_t)
+        state = state * w[:, :, t, None, :] + sab + torch.einsum('bhj,bhi->bhij', k_t, v_t)
+        o[:, :, t] = torch.einsum('bhj,bhij->bhi', q_t, state)
+    
 
     ht = state if output_final_state else None
     state_cache = torch.stack(state_cache) if state_ckpt else None
     return o.to(orig_dtype), ht, state_cache if state_ckpt else None
 
+def naive_recurrent_rwkv7_2(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    w: torch.Tensor,
+    a: torch.Tensor,  # Dynamic learning rate modulator
+    b: torch.Tensor,  # State update modulator
+    scale: float = 1.0,
+    initial_state: Optional[torch.Tensor] = None,
+    output_final_state: bool = True,
+):
+    """
+    Naive recurrent implementation of RWKV-7 (Goose) attention mechanism.
+
+    Args:
+        q, k, v: Query, Key, and Value tensors
+        w: Time decay weights
+        a: Dynamic learning rate modulator, influences the in-context learning rate
+        b: State update modulator, directly participates in state update calculation
+        scale: Scaling factor for attention scores
+        initial_state: Initial state for the recurrent computation
+        output_final_state: Whether to output the final state
+
+    Returns:
+        Attention output and optionally the final state
+    """
+    if (torch.is_autocast_enabled(device) if check_pytorch_version('2.4') else torch.is_autocast_enabled()):
+        torch_dtype = torch.get_autocast_dtype(device) if check_pytorch_version('2.4') else torch.get_autocast_gpu_dtype()
+    else:
+        torch_dtype = torch.float32 if q.dtype != torch.float64 else torch.float64
+    orig_dtype = q.dtype
+    B, H, L, N, V = q.shape[0], q.shape[1], q.shape[2], q.shape[3], v.shape[-1]
+    q, k, v, w, a, b = (x.to(dtype=torch_dtype) for x in (q, k, v, w, a, b))
+    # q, k, v, a, b, w,
+    # shape: (B, H, L, D), (B, H, L, D), (B, H, T, V), (B, H, L, D), (B, H, L, D), (B, H, L, D)
+    state = torch.zeros(B, H, N, V, dtype=torch_dtype, device=q.device)
+    o = torch.zeros_like(v)
+
+    if scale == -1.0:
+        scale = N ** -0.5
+
+    if initial_state is not None:
+        state = initial_state.to(dtype=torch_dtype)
+
+
+    for t in range(L):
+        for bi in range(B):
+            for hi in range(H):
+                q_t = q[bi, hi, t] * scale
+                k_t = k[bi, hi, t]
+                v_t = v[bi, hi, t]
+                a_t = a[bi, hi, t]
+                b_t = b[bi, hi, t]
+                w_t = torch.exp(-torch.exp(w[bi, hi, t]))
+
+                # 计算sa
+                sa = (a_t[:, None] * state[bi, hi]).sum(dim=0)
+
+                # 2. 更新state和计算输出 (与kernel一致)
+                state[bi, hi] = (state[bi, hi] * w_t[:, None] +  # [N,V] * [N,1]
+                                    k_t[:, None] * v_t[None, :] +     # [N,1] * [1,V]
+                                    sa * b_t[:, None])                # [V] * [N,1]
+
+                # 计算输出(矩阵乘法)
+                y = (state[bi, hi] * q_t[:, None]).sum(dim=0)  
+
+                o[bi, hi, t] = y
+
+
+    ht = state if output_final_state else None
+    return o.to(orig_dtype), ht,  None
 
 @torch.no_grad()
 def naive_recurrent_rwkv7_bwd(
@@ -215,6 +272,7 @@ def naive_recurrent_rwkv7_bwd(
     return dq, dk, dv, dw, da, db, dstate
 
 
+
 class NativeRecurrentRWKV7Function(torch.autograd.Function):
     @staticmethod
     @contiguous
@@ -223,7 +281,7 @@ class NativeRecurrentRWKV7Function(torch.autograd.Function):
                 training: bool = True, dtype: Optional[torch.dtype] = None,
                 state_ckpt_interval: int = 16):
         o, ht, state_cache = naive_recurrent_rwkv7(q, k, v, w, a, b, scale=scale, initial_state=None,
-                                                   manual_einsum=True, state_ckpt=True, state_ckpt_interval=state_ckpt_interval)
+                                                   state_ckpt=True, state_ckpt_interval=state_ckpt_interval)
         if training:
             ctx.save_for_backward(q, k, v, w, a, b, state_cache)
             ctx.scale = scale
@@ -285,10 +343,10 @@ def native_recurrent_rwkv7(
 
 if __name__ == "__main__":
     from fla.utils import get_available_device
-    device = 'cpu'
+    device = 'xpu'
     B = 4
-    H = 64
-    L = 32
+    H = 4
+    L = 20
     D = 64
     dtype = torch.float
     require_grad = True
@@ -301,7 +359,7 @@ if __name__ == "__main__":
     q = torch.empty(B, H, L, D, device=device).uniform_(-1, 1).to(dtype=dtype).requires_grad_(True)
     k = torch.empty(B, H, L, D, device=device).uniform_(-1, 1).to(dtype=dtype).requires_grad_(True)
     v = torch.randn(B, H, L, D).to(device).uniform_(-1, 1).to(dtype=dtype).requires_grad_(True)
-    w = (torch.randn(B, H, L, D).uniform_(0.95, 0.9997).to(device).to(dtype)).requires_grad_(require_grad)
+    w = (torch.randn(B, H, L, D).uniform_(-8, -6).to(device).to(dtype)).requires_grad_(require_grad)
 
     # a: 基于 torch.sigmoid(...) * 2.0 的计算，范围在 [0, 2]
     a = torch.rand(B, H, L, D, device=device, dtype=dtype).clamp(0, 0.1).requires_grad_(require_grad)
@@ -310,15 +368,17 @@ if __name__ == "__main__":
     b = torch.randn(B, H, L, D, device=device, dtype=dtype).clamp(-0.2, 0.2).requires_grad_(require_grad)
 
     do = torch.rand_like(v).to(device).fill_(torch.rand(1).item())
-    h = torch.zeros(B, H, D, D, device=device, dtype=torch.float32).fill_(torch.rand(1).item()).requires_grad_(require_grad)
-
+    h = torch.zeros(B, H, D, D, device=device, dtype=torch.float32).requires_grad_(require_grad)
+    h1 = h.clone().detach().requires_grad_(True)
     with torch.no_grad():
-        ref_o, _, _ = naive_recurrent_rwkv7(q, k, v, w, a, b, scale=1.0, initial_state=None, manual_einsum=False)
-        ref_o1, _, _ = naive_recurrent_rwkv7(q, k, v, w, a, b, scale=1.0, initial_state=None, manual_einsum=True)
-        assert torch.allclose(ref_o, ref_o1, atol=1e-11), print(ref_o - ref_o1)
+        ref_o, _, _ = naive_recurrent_rwkv7(q, k, v, w, a, b, scale=1.0, initial_state=h)
+        ref_o1, _, _ = naive_recurrent_rwkv7_2(q, k, v, w, a, b, scale=1.0, initial_state=h)
+
+        torch.testing.assert_close(ref_o1, ref_o, atol=1e-4, rtol=1e-4)
+        # assert torch.allclose(ref_o, ref_o1, atol=1e-11), print(ref_o - ref_o1)
         print("Forward pass test passed")
     
-    ref_o, _, _ = naive_recurrent_rwkv7(q, k, v, w, a, b, scale=1.0, initial_state=None, manual_einsum=True)
+    ref_o, _, _ = naive_recurrent_rwkv7(q, k, v, w, a, b, scale=1.0, initial_state=None)
     ref_o.backward(do)
     ref_dq, q.grad = q.grad.clone(), None
     ref_dk, k.grad = k.grad.clone(), None

@@ -110,8 +110,8 @@ if check_pytorch_version('2.4'):
         return custom_bwd(**kwargs)
 
 else:
-    autocast_custom_fwd = getattr(torch, f"{device.split(':')[0]}").amp.custom_fwd
-    autocast_custom_bwd = getattr(torch, f"{device.split(':')[0]}").amp.custom_bwd
+    autocast_custom_fwd = torch.cuda.amp.custom_fwd
+    autocast_custom_bwd = torch.cuda.amp.custom_bwd
 
 
 @lru_cache(maxsize=None)

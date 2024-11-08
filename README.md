@@ -42,7 +42,7 @@ def RUN_FLA_CHUNK(B, T, C, H, r, k, v, w, u, h, scale=1.0, chunk_size=32):
     # u can be 3d or 2d (B, H, -1) or just (H, -1) to save VRAM
     w = -torch.exp(w.view(B,T,H,-1).transpose(1,2))
     # change to scale=-1.0 when using fp16, this will apply scale to r and k.
-    o, final_state = chunk_rwkv6(r, k, v, w, u=u, scale=scale, initial_state=h, 
+    o, final_state = chunk_rwkv6(r, k, v, w, u=u, scale=1.0, initial_state=h, 
         output_final_state=True, chunk_size=chunk_size)
     return o.transpose(1,2).reshape(B,T,C), final_state
 ```

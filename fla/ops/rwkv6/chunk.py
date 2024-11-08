@@ -9,6 +9,7 @@ import triton.language as tl
 
 from fla.ops.utils import chunk_global_reversed_cumsum
 from fla.utils import contiguous, device_capacity, check_pytorch_version, device, detect_tf32
+from fla.utils import autocast_custom_fwd, autocast_custom_bwd
 
 
 @triton.autotune(
@@ -619,12 +620,12 @@ def chunk_rwkv6_bwd_kernel_intra(
         # [BC, BK]
         b_k = tl.load(p_k, boundary_check=(0, 1)) * scale
         b_gk = tl.load(p_gk, boundary_check=(0, 1)).to(tl.float32)
-        b_kg = b_k * safe_exp(b_gn[None, :] - b_gk, TLTYPE)
+        b_kg = b_k * safe_exp_in_intra(b_gn[None, :] - b_gk)
         # [BC, BC]
         b_dA = tl.load(p_dA, boundary_check=(0, 1)).to(TLTYPE)
         # [BC, BK]
         b_dq_dk_shared += tl.dot(b_dA, b_kg, allow_tf32=False).to(TLTYPE)  # must be false
-    b_dq_dk_shared = b_dq_dk_shared * safe_exp(b_gs - b_gn[None, :], TLTYPE).to(TLTYPE)
+    b_dq_dk_shared = b_dq_dk_shared * safe_exp_in_intra(b_gs - b_gn[None, :]).to(TLTYPE)
 
     o_i = tl.arange(0, BC)
     o_dA = i_bh * T * BT + (offset_k + i_i * BC + tl.arange(0, BC)) * BT + i_i * BC
@@ -641,7 +642,7 @@ def chunk_rwkv6_bwd_kernel_intra(
         # [BC, BK]
         m_i = o_i[:, None] > j
         # [BC, BK]
-        b_dq_dk_shared += tl.where(m_i, b_dA[:, None] * b_kj[None, :] * safe_exp(b_gs - b_gkj[None, :], TLTYPE), 0.)
+        b_dq_dk_shared += tl.where(m_i, b_dA[:, None] * b_kj[None, :] * safe_exp_in_intra(b_gs - b_gkj[None, :]), 0.)
 
     p_dq = tl.make_block_ptr(dq + i_bh * s_k_h, (T, K), (s_k_t, s_k_d), (offset_k + i_i * BC, offset_BK), (BC, BK), (1, 0))
 
@@ -666,13 +667,13 @@ def chunk_rwkv6_bwd_kernel_intra(
         # [BC, BK]
         b_q = tl.load(p_q, boundary_check=(0, 1))
         b_gs = tl.load(p_gs, boundary_check=(0, 1)).to(TLTYPE)
-        b_qg = (b_q * safe_exp(b_gs - b_gn[None, :], TLTYPE))
+        b_qg = (b_q * safe_exp_in_intra(b_gs - b_gn[None, :]))
         # [BC, BC]
         b_dA = tl.load(p_dA, boundary_check=(0, 1))
         # [BC, BK]
         b_dq_dk_shared += tl.dot(tl.trans(b_dA), b_qg, allow_tf32=False).to(TLTYPE) * scale
 
-    b_dq_dk_shared = b_dq_dk_shared * safe_exp(b_gn[None, :] - b_gk, TLTYPE).to(TLTYPE)
+    b_dq_dk_shared = b_dq_dk_shared * safe_exp_in_intra(b_gn[None, :] - b_gk).to(TLTYPE)
 
     o_dA = i_bh * T * BT + (offset_k + i_i * BC) * BT + i_i * BC + tl.arange(0, BC)
     for j in range(0, BC):
@@ -685,7 +686,7 @@ def chunk_rwkv6_bwd_kernel_intra(
         b_gqj = tl.load(p_gqj, boundary_check=(0,))
         # [BC, BK]
         m_i = o_i[:, None] < j
-        b_dq_dk_shared += tl.where(m_i, b_dA[:, None] * b_qj[None, :] * safe_exp(b_gqj[None, :] - b_gk, TLTYPE), 0.).to(TLTYPE) * scale
+        b_dq_dk_shared += tl.where(m_i, b_dA[:, None] * b_qj[None, :] * safe_exp_in_intra(b_gqj[None, :] - b_gk), 0.).to(TLTYPE) * scale
 
     p_dk = tl.make_block_ptr(dk + i_bh * s_k_h, (T, K), (s_k_t, s_k_d), (offset_k + i_i * BC, offset_BK), (BC, BK), (1, 0))
     b_dq_dk_shared = b_dq_dk_shared + tl.load(p_dk, boundary_check=(0, 1)).to(TLTYPE)
@@ -693,11 +694,12 @@ def chunk_rwkv6_bwd_kernel_intra(
 
 
 @triton.jit
-def safe_exp(x, TLTYPE: tl.constexpr):
-    min_x = -11 if TLTYPE == tl.float16 else -30 
-    max_x = 11 if TLTYPE == tl.float16 else 88
-    safe_temp = tl.maximum(x, min_x)  
-    safe_temp = tl.minimum(safe_temp, max_x)  
+def safe_exp_in_intra(x):
+    # since it's only calculated in fp32, we can use magic numbers -30 and 85
+    # because exp(-45) is close to 0 and exp(88) is close to inf(fp32)
+    # to ensure numerical stability, we clip the input to [-30, 85]
+    safe_temp = tl.maximum(x, -30)
+    safe_temp = tl.minimum(safe_temp, 85)
     return tl.exp(safe_temp)
 
 
@@ -705,6 +707,7 @@ class ChunkRWKV6Function(torch.autograd.Function):
 
     @staticmethod
     @contiguous
+    @autocast_custom_fwd
     def forward(ctx, r, k, v, g, u, scale, initial_state, output_final_state, checkpoint_level,
                 u_2d: bool = False, training: bool = True, use_tf32: bool = False, BT: int = 32):
         q = r  # alias
@@ -717,12 +720,7 @@ class ChunkRWKV6Function(torch.autograd.Function):
         NV = triton.cdiv(V, BV)
         BH = B * H
 
-        if (torch.is_autocast_enabled(device) if check_pytorch_version('2.4') else torch.is_autocast_enabled()):
-            torch_dtype = torch.get_autocast_dtype(device) if check_pytorch_version('2.4') else torch.get_autocast_gpu_dtype()
-            q, k, v, g, u = (x.to(dtype=torch_dtype) for x in (q, k, v, g, u))
-            initial_state = initial_state.to(dtype=torch_dtype) if initial_state is not None else initial_state
-        else:
-            torch_dtype = torch.float32 if q.dtype != torch.float16 else torch.float16
+        torch_dtype = torch.float32 if q.dtype != torch.float16 else torch.float16
 
         tl_dtype = tl.float32 if q.dtype != torch.float16 else tl.float16
         g_org, g, gs, o, final_state, A, h = g, torch.empty_like(
@@ -792,6 +790,7 @@ class ChunkRWKV6Function(torch.autograd.Function):
 
     @staticmethod
     @contiguous
+    @autocast_custom_bwd
     def backward(ctx, do, dht=None):
         q, k, v, g, u, h, initial_state, A = ctx.saved_tensors
         scale, u_2d, use_tf32 = ctx.scale, ctx.u_2d, ctx.use_tf32
@@ -914,7 +913,7 @@ class ChunkRWKV6Function(torch.autograd.Function):
             num_stages=num_stages
         )
         du = du.sum([0, 2]) if u_2d else du.sum(2)
-        dh0 = dh0.to(q) if initial_state is not None else None
+        dh0 = dh0.to(dtype) if initial_state is not None else None
         return dq.to(dtype), dk.to(dtype), dv.to(dtype), dg.to(dtype), du.to(dtype), None, \
             dh0, None, None, None, None, None, None
 

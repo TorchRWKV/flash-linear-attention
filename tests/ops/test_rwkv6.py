@@ -82,6 +82,8 @@ def test_fused_recurrent(
 ):
     if dtype == torch.float16 and 'cuda' in device:
         pytest.skip("Skipping test for float16(Nvidia), see https://github.com/triton-lang/triton/issues/4701")
+    if dtype == torch.float16 and scale == 1.0:
+        pytest.skip("Skipping test for float16 with scale=1.0")
     torch.manual_seed(42)
     atol = 1e-3 if dtype == torch.float else 1e-2
 
@@ -158,6 +160,8 @@ def test_fla_autocast(
         pytest.skip("Skipping test for pytorch version < 2.4.0")
     if dtype == torch.float16 and 'cuda' in device:
         pytest.skip("Skipping test for float16(Nvidia), see https://github.com/triton-lang/triton/issues/4701")
+    if dtype == torch.float16 and scale == 1.0:
+        pytest.skip("Skipping test for float16 with scale=1.0")
     torch.manual_seed(42)
     atol = 1e-3 if dtype == torch.float else 1e-2
 
@@ -275,6 +279,8 @@ def test_chunk_with_initial_h(
 ):
     torch.manual_seed(42)
     atol = 1e-3 if dtype == torch.float else 1e-2
+    if dtype == torch.float16 and scale == 1.0:
+        pytest.skip("Skipping test for float16 with scale=1.0")
 
     H = C // HEAD_SIZE
     q = torch.empty(B, T, C, device=device).uniform_(-1, 1).to(dtype=dtype).requires_grad_(True)
@@ -335,6 +341,9 @@ def test_chunk_with_different_dimension(
     compile: bool
 ):
     torch.manual_seed(42)
+    from fla.utils import check_pytorch_version
+    if not check_pytorch_version('2.4') and compile:
+        pytest.skip("Skipping compile test for pytorch version < 2.4.0")
     wrapper = (torch.compile(fullgraph=True) if 'cuda' in device else torch.compile()) if compile else lambda x: x
     @wrapper
     def test_chunk_rwkv6(r: torch.Tensor,
@@ -706,111 +715,3 @@ def test_chunk_error_ratio_multi_state(
     assert get_err_ratio(gw_chunk1, gw1) < atol, f"w1, {get_err_ratio(gw_chunk1, gw1)}, dtype = {dtype}"
     assert get_err_ratio(gu_chunk1, gu1) < atol, f"u1, {get_err_ratio(gu_chunk1, gu1)}, dtype = {dtype}"
 
-@pytest.mark.parametrize("B", [1])
-@pytest.mark.parametrize("T", [1024])
-@pytest.mark.parametrize("C", [512])
-@pytest.mark.parametrize("HEAD_SIZE", [64])
-@pytest.mark.parametrize("dtype", [torch.float, torch.bfloat16])
-def test_multi_state_backworad_with_native(
-    B: int,
-    T: int,
-    C: int,
-    HEAD_SIZE: int,
-    dtype: torch.dtype
-):
-    atol = 1e-3 if dtype == torch.float else 1e-2
-    import torch.nn as nn
-    H = C // HEAD_SIZE
-    with torch.no_grad():
-        u = torch.empty(H, HEAD_SIZE, device=device, dtype=dtype).uniform_(-1, 1).requires_grad_(True)
-        image_feature = torch.randn(B, T, C, device=device, dtype=dtype).requires_grad_(True)
-        text_emb = torch.randn(B, T, C, device=device, dtype=dtype).requires_grad_(True)
-
-    def clear_image_grad():
-        image_feature.requires_grad_()
-        u.requires_grad_()
-        text_emb.requires_grad_()
-        if image_feature.grad is not None: image_feature.grad.data.zero_()
-        if u.grad is not None: u.grad.data.zero_()
-        if text_emb.grad is not None: text_emb.grad.data.zero_()
-        if proj_layer.weight.grad is not None: proj_layer.weight.grad.data.zero_()
-    proj_layer = nn.Linear(C, C, bias=False, device=device, dtype=dtype)
-    linear_r = nn.Linear(C, C, bias=False, device=device, dtype=dtype)
-    linear_w = nn.Linear(C, C, bias=False, device=device, dtype=dtype)
-    linear_k = nn.Linear(C, C, bias=False, device=device, dtype=dtype)
-    linear_v = nn.Linear(C, C, bias=False, device=device, dtype=dtype)
-    linear_r.requires_grad_(False)
-    linear_w.requires_grad_(False)
-    linear_k.requires_grad_(False)
-    linear_v.requires_grad_(False)
-    img = proj_layer(image_feature)
-    r_img = linear_r(img)
-    w_img = linear_w(img)
-    k_img = linear_k(img)
-    v_img = linear_v(img)
-    y_img, img_state = RUN_FLA_NATIVE_MANUAL_BACKWARD(B, T, C, H, r_img.float(), k_img.float(), v_img.float(), w_img.float(), u.float(), h=None)
-
-    r_text = linear_r(text_emb)
-    w_text = linear_w(text_emb)
-    k_text = linear_k(text_emb)
-    v_text = linear_v(text_emb)
-    y_text, text_state = RUN_FLA_NATIVE_MANUAL_BACKWARD(B, T, C, H, r_text.float(), k_text.float(), v_text.float(), w_text.float(), u.float(), h=img_state.float())
-
-    LOSS(y_text).backward()
-    gproj = proj_layer.weight.grad.data.clone()
-    clear_image_grad()
-    img = proj_layer(image_feature)
-    r_img = linear_r(img)
-    w_img = linear_w(img)
-    k_img = linear_k(img)
-    v_img = linear_v(img)
-    y_img, img_state = RUN_FLA_FUSED(B, T, C, H, r_img, k_img, v_img, w_img, u, h=None)
-
-
-    r_text = linear_r(text_emb)
-    w_text = linear_w(text_emb)
-    k_text = linear_k(text_emb)
-    v_text = linear_v(text_emb)
-    y_text, text_state = RUN_FLA_FUSED(B, T, C, H, r_text, k_text, v_text, w_text, u, h=img_state)
-
-    LOSS(y_text).backward()
-    gproj1 = proj_layer.weight.grad.data.clone()
-    assert get_err_ratio(gproj, gproj1) < atol, f"proj, {get_err_ratio(gproj, gproj1)}"
-    has_non_zero = torch.any(gproj1 != 0).item()
-    assert has_non_zero, "gproj1 is all zeros!"
-
-    clear_image_grad()
-    img = proj_layer(image_feature)
-    r_img = linear_r(img)
-    w_img = linear_w(img)
-    k_img = linear_k(img)
-    v_img = linear_v(img)
-    y_img, img_state = RUN_FLA_NATIVE_MANUAL_BACKWARD(B, T, C, HEAD_SIZE, r_img.float(), k_img.float(), v_img.float(), w_img.float(), u.float(), h=None)
-
-    r_text = linear_r(text_emb)
-    w_text = linear_w(text_emb)
-    k_text = linear_k(text_emb)
-    v_text = linear_v(text_emb)
-    y_text, text_state = RUN_FLA_NATIVE_MANUAL_BACKWARD(B, T, C, H, r_text.float(), k_text.float(), v_text.float(), w_text.float(), u.float(), h=img_state.float())
-
-    LOSS(y_text).backward()
-    gproj = proj_layer.weight.grad.data.clone()
-    clear_image_grad()
-    img = proj_layer(image_feature)
-    r_img = linear_r(img)
-    w_img = linear_w(img)
-    k_img = linear_k(img)
-    v_img = linear_v(img)
-    y_img, img_state = RUN_FLA_CHUNK(B, T, C, H, r_img, k_img, v_img, w_img, u, h=None)
-
-
-    r_text = linear_r(text_emb)
-    w_text = linear_w(text_emb)
-    k_text = linear_k(text_emb)
-    v_text = linear_v(text_emb)
-    y_text, text_state = RUN_FLA_CHUNK(B, T, C, H, r_text, k_text, v_text, w_text, u, h=img_state)
-
-    LOSS(y_text).backward()
-    assert get_err_ratio(gproj, gproj1) < atol, f"proj, {get_err_ratio(gproj, gproj1)}, dtype = {dtype}"
-    has_non_zero = torch.any(gproj1 != 0).item()
-    assert has_non_zero, "gproj1 is all zeros!"

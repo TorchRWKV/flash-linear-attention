@@ -149,6 +149,7 @@ setup(
     python_requires='>=3.7',
     install_requires=[
         'transformers',
+        'datasets',
         'einops',
         'ninja'
     ],

@@ -7,7 +7,7 @@ import torch.nn.functional as F
 from fla.ops.rwkv6 import chunk_rwkv6, fused_recurrent_rwkv6, native_recurrent_rwkv6
 from fla.ops.rwkv6.recurrent_naive import (naive_recurrent_rwkv6,
                                            naive_recurrent_rwkv6_bwd)
-from fla.utils import device
+from fla.utils import device, check_pytorch_version
 import numpy as np
 np.set_printoptions(precision=4, suppress=True, linewidth=200)
 
@@ -70,7 +70,8 @@ def test_recurrent_naive(
 @pytest.mark.parametrize("use_h", [False, True])
 @pytest.mark.parametrize("u_2d", [True, False])
 @pytest.mark.parametrize("scale", [-1.0, 1.0])
-def test_fused_recurrent(
+@pytest.mark.parametrize("compile", [False, True])
+def test_fused_recurrent_with_compile(
     B: int,
     T: int,
     C: int,
@@ -78,12 +79,18 @@ def test_fused_recurrent(
     dtype: torch.dtype,
     use_h: bool,
     u_2d: bool,
-    scale: float
+    scale: float,
+    compile: bool
 ):
     if dtype == torch.float16 and 'cuda' in device:
         pytest.skip("Skipping test for float16(Nvidia), see https://github.com/triton-lang/triton/issues/4701")
     if dtype == torch.float16 and scale == 1.0:
         pytest.skip("Skipping test for float16 with scale=1.0")
+    if not check_pytorch_version('2.4') and compile:
+        pytest.skip("Skipping compile test for pytorch version < 2.4.0")
+
+    full_grapth = True if 'cuda' in device else False
+    RUN_FLA_FUSED_T = torch.compile(RUN_FLA_FUSED, fullgraph=full_grapth) if compile else RUN_FLA_FUSED
     torch.manual_seed(42)
     atol = 1e-3 if dtype == torch.float else 1e-2
 
@@ -111,7 +118,7 @@ def test_fused_recurrent(
     if use_h:
         ref_dh, h.grad = h.grad.clone(), None
 
-    tri_o, _ = RUN_FLA_FUSED(B, T, C, H, q, k, v, w, u, h=h if use_h else None, scale=scale, output_final_state=use_h)
+    tri_o, _ = RUN_FLA_FUSED_T(B, T, C, H, q, k, v, w, u, h=h if use_h else None, scale=scale, output_final_state=use_h)
     tri_o.backward(do)
     tri_dq, q.grad = q.grad.clone(), None
     tri_dk, k.grad = k.grad.clone(), None
@@ -267,7 +274,8 @@ def test_fla_autocast(
 @pytest.mark.parametrize("use_h", [False, True])
 @pytest.mark.parametrize("u_2d", [True, False])
 @pytest.mark.parametrize("scale", [-1.0, 1.0])
-def test_chunk_with_initial_h(
+@pytest.mark.parametrize("compile", [False, True])
+def test_chunk_with_initial_h_and_compile(
     B: int,
     T: int,
     C: int,
@@ -275,12 +283,18 @@ def test_chunk_with_initial_h(
     dtype: torch.dtype,
     use_h: bool,
     u_2d: bool,
-    scale: float
+    scale: float,
+    compile: bool
 ):
     torch.manual_seed(42)
     atol = 1e-3 if dtype == torch.float else 1e-2
     if dtype == torch.float16 and scale == 1.0:
         pytest.skip("Skipping test for float16 with scale=1.0")
+    if not check_pytorch_version('2.4') and compile:
+        pytest.skip("Skipping compile test for pytorch version < 2.4.0")
+    
+    full_grapth = True if 'cuda' in device else False
+    RUN_FLA_CHUNK_T = torch.compile(RUN_FLA_CHUNK, fullgraph=full_grapth) if compile else RUN_FLA_CHUNK
 
     H = C // HEAD_SIZE
     q = torch.empty(B, T, C, device=device).uniform_(-1, 1).to(dtype=dtype).requires_grad_(True)
@@ -306,7 +320,7 @@ def test_chunk_with_initial_h(
     if use_h:
         ref_dh, h.grad = h.grad.clone(), None
 
-    tri_o, _ = RUN_FLA_CHUNK(B, T, C, H, q, k, v, w, u, h=h if use_h else None, scale=scale, output_final_state=use_h)
+    tri_o, _ = RUN_FLA_CHUNK_T(B, T, C, H, q, k, v, w, u, h=h if use_h else None, scale=scale, output_final_state=use_h)
     LOSS(tri_o).backward()
     tri_dq, q.grad = q.grad.clone(), None
     tri_dk, k.grad = k.grad.clone(), None
@@ -331,30 +345,15 @@ def test_chunk_with_initial_h(
 @pytest.mark.parametrize("T", [130, 146, 162])
 @pytest.mark.parametrize("D", [100, 300])
 @pytest.mark.parametrize("dtype", [torch.bfloat16])
-@pytest.mark.parametrize("compile", [False, True])
 def test_chunk_with_different_dimension(
     B: int,
     H: int,
     T: int,
     D: int,
     dtype: torch.dtype,
-    compile: bool
 ):
     torch.manual_seed(42)
-    from fla.utils import check_pytorch_version
-    if not check_pytorch_version('2.4') and compile:
-        pytest.skip("Skipping compile test for pytorch version < 2.4.0")
-    wrapper = (torch.compile(fullgraph=True) if 'cuda' in device else torch.compile()) if compile else lambda x: x
-    @wrapper
-    def test_chunk_rwkv6(r: torch.Tensor,
-        k: torch.Tensor,
-        v: torch.Tensor,
-        g: torch.Tensor,
-        u: torch.Tensor,
-        scale: float = 1.0,
-        initial_state: torch.Tensor = None,
-        output_final_state: bool = False):
-        return chunk_rwkv6(r, k, v, g, u, scale, initial_state, output_final_state)
+     
     # [B, H, T, d_head]
     q = torch.randn((B, H, T, D), dtype=dtype, device=device).requires_grad_()
     k = torch.randn((B, H, T, D), dtype=dtype, device=device).requires_grad_()
@@ -376,7 +375,7 @@ def test_chunk_with_different_dimension(
     ref_du, u.grad = u.grad.clone(), None
 
     # triton implementation
-    tri, tri_ht = test_chunk_rwkv6(q, k, v, g, u, initial_state=h0, output_final_state=True)
+    tri, tri_ht = chunk_rwkv6(q, k, v, g, u, initial_state=h0, output_final_state=True)
     LOSS(tri).backward()
     tri_dq, q.grad = q.grad.clone(), None
     tri_dk, k.grad = k.grad.clone(), None

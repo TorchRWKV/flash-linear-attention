@@ -10,6 +10,12 @@ from pathlib import Path
 from datetime import datetime
 from packaging.version import Version, parse
 from setuptools import find_packages, setup
+from setuptools.command.install import install
+from setuptools.command.develop import develop
+import shutil
+import subprocess
+import sys
+
 
 with open('README.md') as f:
     long_description = f.read()
@@ -129,6 +135,48 @@ def get_package_version():
         return f"{version}.dev{build_date}"
 
 
+def check_conflicts():
+    try:
+        result = subprocess.run(['pip', 'list'], capture_output=True, text=True)
+        if 'fla' in result.stdout and 'rwkv-fla' not in result.stdout:
+            print("Error: fla package is already installed. Please uninstall it first with 'pip uninstall fla'")
+            sys.exit(1)
+    except Exception:
+        pass
+
+def rename2rwkvfla():
+    packages = find_packages()
+
+    import os
+    import fileinput
+
+    if os.path.exists('fla'):
+        shutil.rmtree('rwkvfla') if os.path.exists('rwkvfla') else None
+        shutil.copytree('fla', 'rwkvfla')
+
+        # 递归遍历 rwkvfla 目录下的所有 .py 文件
+        for root, dirs, files in os.walk('rwkvfla'):
+            for file in files:
+                if file.endswith('.py'):
+                    filepath = os.path.join(root, file)
+                    # 读取文件内容
+                    with open(filepath, 'r') as f:
+                        content = f.read()
+                    
+                    # 替换 import 语句
+                    content = content.replace('from fla', 'from rwkvfla')
+                    content = content.replace('import fla', 'import rwkvfla')
+                    
+                    # 写回文件
+                    with open(filepath, 'w') as f:
+                        f.write(content)
+
+    package_map = {'fla': 'rwkvfla'}
+    new_packages = [package_map.get(p, p) for p in packages]
+    return new_packages
+
+check_conflicts()
+
 setup(
     name=PACKAGE_NAME,
     version=get_package_version(),
@@ -138,7 +186,7 @@ setup(
     author='Zhiyuan Li, Songlin Yang, Yu Zhang',
     author_email='uniartisan2017@gmail.com',
     url='https://github.com/TorchRWKV/flash-linear-attention',
-    packages=find_packages(),
+    packages=rename2rwkvfla(),
     license='MIT',
     classifiers=[
         'Programming Language :: Python :: 3',
@@ -159,8 +207,5 @@ setup(
         'cuda': ['triton'],
         'xpu': ['pytorch-triton-xpu'],
         'rocm': ['pytorch-triton-rocm'],
-    },
-    conflict=[
-        "fla"
-    ]
+    }
 )

@@ -90,13 +90,14 @@ def check_compute_capacity():
 
 @lru_cache(maxsize=None)
 def check_pytorch_version(version_s: str):
-    if version.parse(torch.__version__) >= version.parse(version_s):
-        return True
-    else:
-        return False
+    current_parts = torch.__version__.split('.')[:2]  # 只取主版本号和次版本号
+    required_parts = version_s.split('.')
+    current = float(f"{current_parts[0]}.{current_parts[1]}")
+    required = float(f"{required_parts[0]}.{required_parts[1]}")
+    return current >= required
 
 
-device = get_available_device()
+device = 'cuda' if get_available_device() == 'cpu' else get_available_device()
 device_capacity = check_compute_capacity()
 
 

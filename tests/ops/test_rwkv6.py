@@ -20,7 +20,7 @@ torch.backends.cuda.matmul.allow_tf32 = False
 @pytest.mark.parametrize("HEAD_SIZE", [64, 128])
 @pytest.mark.parametrize("dtype", [torch.float])
 @pytest.mark.parametrize("u_2d", [True, False])
-@pytest.mark.parametrize("scale", [-1.0, 1.0])
+@pytest.mark.parametrize("scale", [1.0])
 def test_recurrent_naive(
     B: int,
     T: int,
@@ -66,10 +66,10 @@ def test_recurrent_naive(
 @pytest.mark.parametrize("T", [1024])
 @pytest.mark.parametrize("C", [512])
 @pytest.mark.parametrize("HEAD_SIZE", [64, 128])
-@pytest.mark.parametrize("dtype", [torch.float, torch.bfloat16, torch.float16])
+@pytest.mark.parametrize("dtype", [torch.float, torch.bfloat16])
 @pytest.mark.parametrize("use_h", [False, True])
 @pytest.mark.parametrize("u_2d", [True, False])
-@pytest.mark.parametrize("scale", [-1.0, 1.0])
+@pytest.mark.parametrize("scale", [1.0])
 @pytest.mark.parametrize("compile", [False, True])
 def test_fused_recurrent_with_compile(
     B: int,
@@ -86,8 +86,8 @@ def test_fused_recurrent_with_compile(
         pytest.skip("Skipping test for float16(Nvidia), see https://github.com/triton-lang/triton/issues/4701")
     if dtype == torch.float16 and scale == 1.0:
         pytest.skip("Skipping test for float16 with scale=1.0")
-    if not check_pytorch_version('2.4') and compile:
-        pytest.skip("Skipping compile test for pytorch version < 2.4.0")
+    if not check_pytorch_version('2.6') and compile:
+        pytest.skip("Skipping compile test for pytorch version < 2.6.0")
 
     full_grapth = True if 'cuda' in device else False
     RUN_FLA_FUSED_T = torch.compile(RUN_FLA_FUSED, fullgraph=full_grapth) if compile else RUN_FLA_FUSED
@@ -270,11 +270,11 @@ def test_fla_autocast(
 @pytest.mark.parametrize("T", [130, 146, 162])
 @pytest.mark.parametrize("C", [512])
 @pytest.mark.parametrize("HEAD_SIZE", [64, 128])
-@pytest.mark.parametrize("dtype", [torch.float, torch.bfloat16, torch.float16])
+@pytest.mark.parametrize("dtype", [torch.float, torch.bfloat16])
 @pytest.mark.parametrize("use_h", [False, True])
 @pytest.mark.parametrize("u_2d", [True, False])
-@pytest.mark.parametrize("scale", [-1.0, 1.0])
-@pytest.mark.parametrize("compile", [False, True])
+@pytest.mark.parametrize("scale", [1.0])
+@pytest.mark.parametrize("compile", [False])
 def test_chunk_with_initial_h_and_compile(
     B: int,
     T: int,

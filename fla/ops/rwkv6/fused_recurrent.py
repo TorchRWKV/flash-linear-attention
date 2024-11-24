@@ -385,9 +385,9 @@ def fused_recurrent_rwkv6(
     scale: float = 1.0,
     initial_state: torch.Tensor = None,
     output_final_state: bool = False,
+    head_first: bool = True,
     reverse: bool = False,
     training: bool = True,
-    causal: bool = True
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     r"""
     Args:
@@ -408,10 +408,18 @@ def fused_recurrent_rwkv6(
             Initial state of shape `(B, H, K, V)`. Default: `None`.
         output_final_state (Optional[bool]):
             Whether to output the final state of shape `(B, H, K, V)`. Default: `False`.
+        head_first (Optional[bool]):
+            Whether the inputs are in the head-first format. Default: `True`.
     """
     if scale == -1.0:
         scale = r.shape[-1] ** -0.5
     u_2d = True if u.dim() == 2 else False
-    o, final_state = FusedRecurrentRWKV6Function.apply(
-        r, k, v, w, u, scale, initial_state, output_final_state, reverse, u_2d, training)
+    if not head_first:
+        r, k, v, w = map(lambda x: x.transpose(1, 2), (r, k, v, w))
+        o, final_state = FusedRecurrentRWKV6Function.apply(
+            r, k, v, w, u, scale, initial_state, output_final_state, reverse, u_2d, training)
+        o = o.transpose(1, 2)
+    else:
+        o, final_state = FusedRecurrentRWKV6Function.apply(
+            r, k, v, w, u, scale, initial_state, output_final_state, reverse, u_2d, training)
     return o, final_state

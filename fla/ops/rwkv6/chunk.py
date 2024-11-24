@@ -930,6 +930,7 @@ def chunk_rwkv6(
     scale: float = 1.0,
     initial_state: torch.Tensor = None,
     output_final_state: bool = False,
+    head_first: bool = True,
     checkpoint_level: Optional[int] = 0,
     training: bool = True,
     use_tf32: Optional[bool] = None,
@@ -959,6 +960,8 @@ def chunk_rwkv6(
             Default: `0`:
             - Level `0`: store forward hidden states for backprop.
             - Level `1`: recompute the forward hidden states during backward.
+        head_first (Optional[bool]):
+            Whether the inputs are in the head-first format. Default: `True`.
     """
     global _detect_use_tf32
     assert checkpoint_level in [0, 1]
@@ -968,8 +971,14 @@ def chunk_rwkv6(
         _detect_use_tf32 = detect_tf32()
     else:
         _detect_use_tf32 = use_tf32
-    o, final_state = ChunkRWKV6Function.apply(r, k, v, g, u, scale, initial_state,
-                                              output_final_state, checkpoint_level, u_2d, training, _detect_use_tf32, chunk_size)
+    if not head_first:
+        r, k, v, w = map(lambda x: x.transpose(1, 2), (r, k, v, w))
+        o, final_state = ChunkRWKV6Function.apply(r, k, v, g, u, scale, initial_state,
+                                                output_final_state, checkpoint_level, u_2d, training, _detect_use_tf32, chunk_size)
+        o = o.transpose(1, 2)
+    else:
+        o, final_state = ChunkRWKV6Function.apply(r, k, v, g, u, scale, initial_state,
+                                                output_final_state, checkpoint_level, u_2d, training, _detect_use_tf32, chunk_size)
     return o, final_state
 
 

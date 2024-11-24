@@ -49,15 +49,11 @@ def get_available_device():
         return 'cuda'
 
     try:
-        if version.parse(torch.__version__) >= version.parse('2.4'):
-            if torch.xpu.is_available():
-                return 'xpu'
-        else:
-            import intel_extension_for_pytorch as ipex
-            if torch.xpu.is_available():
-                return 'xpu'
+        import intel_extension_for_pytorch as ipex
     except ImportError:
         pass
+    if torch.xpu.is_available():
+        return 'xpu'
 
     try:
         import torch_musa

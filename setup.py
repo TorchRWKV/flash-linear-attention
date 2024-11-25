@@ -146,33 +146,55 @@ def check_conflicts():
 
 def rename2rwkvfla():
     packages = find_packages()
-
-    import os
-    import fileinput
-
+    
     if os.path.exists('fla'):
-        shutil.rmtree('rwkvfla') if os.path.exists('rwkvfla') else None
-        shutil.copytree('fla', 'rwkvfla')
+        # 移除已存在的 rwkvfla 目录
+        shutil.rmtree('rwkvfla', ignore_errors=True)
+        
+        # 复制整个目录结构
+        def copy_with_structure(src, dst):
+            if not os.path.exists(dst):
+                os.makedirs(dst)
+            
+            for item in os.listdir(src):
+                s = os.path.join(src, item)
+                d = os.path.join(dst, item)
+                if os.path.isdir(s):
+                    copy_with_structure(s, d)
+                else:
+                    if item.endswith('.py'):
+                        with open(s, 'r', encoding='utf-8') as f:
+                            content = f.read()
+                        content = content.replace('from fla', 'from rwkvfla')
+                        content = content.replace('import fla', 'import rwkvfla')
+                        with open(d, 'w', encoding='utf-8') as f:
+                            f.write(content)
+                    else:
+                        shutil.copy2(s, d)
 
-        # 递归遍历 rwkvfla 目录下的所有 .py 文件
+        # 复制并重命名整个目录结构
+        copy_with_structure('fla', 'rwkvfla')
+        
+        print("\nVerifying directory structure:")
         for root, dirs, files in os.walk('rwkvfla'):
-            for file in files:
-                if file.endswith('.py'):
-                    filepath = os.path.join(root, file)
-                    # 读取文件内容
-                    with open(filepath, 'r') as f:
-                        content = f.read()
-                    
-                    # 替换 import 语句
-                    content = content.replace('from fla', 'from rwkvfla')
-                    content = content.replace('import fla', 'import rwkvfla')
-                    
-                    # 写回文件
-                    with open(filepath, 'w') as f:
-                        f.write(content)
+            print(f"\nDirectory: {root}")
+            if dirs:
+                print(f"Subdirs: {dirs}")
+            if files:
+                print(f"Files: {files}")
 
+    # 更新包名映射
     package_map = {'fla': 'rwkvfla'}
-    new_packages = [package_map.get(p, p) for p in packages]
+    new_packages = []
+    for p in packages:
+        if p == 'fla':
+            new_packages.append('rwkvfla')
+        elif p.startswith('fla.'):
+            new_packages.append('rwkvfla' + p[3:])
+        else:
+            new_packages.append(p)
+    
+    print("\nPackages to be included:", new_packages)
     return new_packages
 
 check_conflicts()

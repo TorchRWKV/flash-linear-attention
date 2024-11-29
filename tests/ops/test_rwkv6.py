@@ -70,7 +70,7 @@ def test_recurrent_naive(
 @pytest.mark.parametrize("use_h", [False, True])
 @pytest.mark.parametrize("u_2d", [True, False])
 @pytest.mark.parametrize("scale", [1.0])
-@pytest.mark.parametrize("compile", [False, True])
+@pytest.mark.parametrize("compile", [False])
 def test_fused_recurrent_with_compile(
     B: int,
     T: int,

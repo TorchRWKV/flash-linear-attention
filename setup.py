@@ -138,7 +138,8 @@ def get_package_version():
 def check_conflicts():
     try:
         result = subprocess.run(['pip', 'list'], capture_output=True, text=True)
-        if 'fla' in result.stdout and 'rwkv-fla' not in result.stdout:
+        installed_packages = [line.split()[0] for line in result.stdout.split('\n') if line]
+        if 'fla' in installed_packages and 'rwkv-fla' not in installed_packages:  # 精确匹配包名
             print("Error: fla package is already installed. Please uninstall it first with 'pip uninstall fla'")
             sys.exit(1)
     except Exception:
@@ -184,8 +185,10 @@ def rename2rwkvfla():
                 print(f"Files: {files}")
 
     # 更新包名映射
-    package_map = {'fla': 'rwkvfla'}
+    original_packages = packages.copy()  # 保留原始的fla包
     new_packages = []
+    
+    # 添加rwkvfla对应的包
     for p in packages:
         if p == 'fla':
             new_packages.append('rwkvfla')
@@ -194,8 +197,11 @@ def rename2rwkvfla():
         else:
             new_packages.append(p)
     
-    print("\nPackages to be included:", new_packages)
-    return new_packages
+    # 合并两个列表，同时包含fla和rwkvfla
+    combined_packages = original_packages + new_packages
+    
+    print("\nPackages to be included:", combined_packages)
+    return combined_packages
 
 check_conflicts()
 

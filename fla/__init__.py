@@ -10,21 +10,23 @@ For more information, please visit your Graphics Card's official website."""
     )
 
 from fla.layers import (ABCAttention, Attention, BasedLinearAttention,
-                        DeltaNet, GatedLinearAttention, GatedSlotAttention,
-                        HGRN2Attention, HGRNAttention, LinearAttention,
-                        MultiScaleRetention, ReBasedLinearAttention)
-from fla.models import (ABCForCausalLM, ABCModel, DeltaNetForCausalLM,
-                        DeltaNetModel, GLAForCausalLM, GLAModel,
-                        GSAForCausalLM, GSAModel, HGRN2ForCausalLM, HGRN2Model,
-                        HGRNForCausalLM, LinearAttentionForCausalLM,
-                        LinearAttentionModel, RetNetForCausalLM, RetNetModel,
-                        RWKV6ForCausalLM, RWKV6Model, TransformerForCausalLM,
-                        TransformerModel)
+                        BitAttention, DeltaNet, GatedLinearAttention,
+                        GatedSlotAttention, HGRN2Attention, HGRNAttention,
+                        LinearAttention, MultiScaleRetention,
+                        ReBasedLinearAttention)
+from fla.models import (ABCForCausalLM, ABCModel, BitNetForCausalLM,
+                        BitNetModel, DeltaNetForCausalLM, DeltaNetModel,
+                        GLAForCausalLM, GLAModel, GSAForCausalLM, GSAModel,
+                        HGRN2ForCausalLM, HGRN2Model, HGRNForCausalLM,
+                        LinearAttentionForCausalLM, LinearAttentionModel,
+                        RetNetForCausalLM, RetNetModel, RWKV6ForCausalLM,
+                        RWKV6Model, TransformerForCausalLM, TransformerModel)
 
 __all__ = [
     'ABCAttention',
     'Attention',
     'BasedLinearAttention',
+    'BitAttention',
     'DeltaNet',
     'HGRNAttention',
     'HGRN2Attention',
@@ -35,6 +37,8 @@ __all__ = [
     'ReBasedLinearAttention',
     'ABCForCausalLM',
     'ABCModel',
+    'BitNetForCausalLM',
+    'BitNetModel',
     'DeltaNetForCausalLM',
     'DeltaNetModel',
     'HGRNForCausalLM',

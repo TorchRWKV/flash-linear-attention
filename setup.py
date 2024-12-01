@@ -10,6 +10,12 @@ from pathlib import Path
 from datetime import datetime
 from packaging.version import Version, parse
 from setuptools import find_packages, setup
+from setuptools.command.install import install
+from setuptools.command.develop import develop
+import shutil
+import subprocess
+import sys
+
 
 with open('README.md') as f:
     long_description = f.read()
@@ -129,6 +135,76 @@ def get_package_version():
         return f"{version}.dev{build_date}"
 
 
+def check_conflicts():
+    try:
+        result = subprocess.run(['pip', 'list'], capture_output=True, text=True)
+        installed_packages = [line.split()[0] for line in result.stdout.split('\n') if line]
+        if 'fla' in installed_packages and 'rwkv-fla' not in installed_packages:  # 精确匹配包名
+            print("Error: fla package is already installed. Please uninstall it first with 'pip uninstall fla'")
+            sys.exit(1)
+    except Exception:
+        pass
+
+def rename2rwkvfla():
+    packages = find_packages()
+    
+    if os.path.exists('fla'):
+        # 移除已存在的 rwkvfla 目录
+        shutil.rmtree('rwkvfla', ignore_errors=True)
+        
+        # 复制整个目录结构
+        def copy_with_structure(src, dst):
+            if not os.path.exists(dst):
+                os.makedirs(dst)
+            
+            for item in os.listdir(src):
+                s = os.path.join(src, item)
+                d = os.path.join(dst, item)
+                if os.path.isdir(s):
+                    copy_with_structure(s, d)
+                else:
+                    if item.endswith('.py'):
+                        with open(s, 'r', encoding='utf-8') as f:
+                            content = f.read()
+                        content = content.replace('from fla', 'from rwkvfla')
+                        content = content.replace('import fla', 'import rwkvfla')
+                        with open(d, 'w', encoding='utf-8') as f:
+                            f.write(content)
+                    else:
+                        shutil.copy2(s, d)
+
+        # 复制并重命名整个目录结构
+        copy_with_structure('fla', 'rwkvfla')
+        
+        print("\nVerifying directory structure:")
+        for root, dirs, files in os.walk('rwkvfla'):
+            print(f"\nDirectory: {root}")
+            if dirs:
+                print(f"Subdirs: {dirs}")
+            if files:
+                print(f"Files: {files}")
+
+    # 更新包名映射
+    original_packages = packages.copy()  # 保留原始的fla包
+    new_packages = []
+    
+    # 添加rwkvfla对应的包
+    for p in packages:
+        if p == 'fla':
+            new_packages.append('rwkvfla')
+        elif p.startswith('fla.'):
+            new_packages.append('rwkvfla' + p[3:])
+        else:
+            new_packages.append(p)
+    
+    # 合并两个列表，同时包含fla和rwkvfla
+    combined_packages = original_packages + new_packages
+    
+    print("\nPackages to be included:", combined_packages)
+    return combined_packages
+
+check_conflicts()
+
 setup(
     name=PACKAGE_NAME,
     version=get_package_version(),
@@ -138,7 +214,7 @@ setup(
     author='Zhiyuan Li, Songlin Yang, Yu Zhang',
     author_email='uniartisan2017@gmail.com',
     url='https://github.com/TorchRWKV/flash-linear-attention',
-    packages=find_packages(),
+    packages=rename2rwkvfla(),
     license='MIT',
     classifiers=[
         'Programming Language :: Python :: 3',
@@ -149,6 +225,7 @@ setup(
     python_requires='>=3.7',
     install_requires=[
         'transformers',
+        'datasets',
         'einops',
         'ninja'
     ],
@@ -158,8 +235,5 @@ setup(
         'cuda': ['triton'],
         'xpu': ['pytorch-triton-xpu'],
         'rocm': ['pytorch-triton-rocm'],
-    },
-    conflict=[
-        "fla"
-    ]
+    }
 )

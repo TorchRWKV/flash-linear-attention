@@ -10,6 +10,9 @@ from packaging import version
 
 
 def contiguous(fn):
+    """
+    Make sure all input tensors are contiguous.
+    """
     @functools.wraps(fn)
     def wrapper(ctx, *args, **kwargs):
         return fn(ctx,
@@ -19,6 +22,9 @@ def contiguous(fn):
 
 
 def require_version(version, hint):
+    """
+    Perform a runtime check of the dependency versions, using the exact same syntax used by pip.
+    """
     def decorator(fn):
         @functools.wraps(fn)
         def wrapper(ctx, *args, **kwargs):
@@ -43,15 +49,11 @@ def get_available_device():
         return 'cuda'
 
     try:
-        if version.parse(torch.__version__) >= version.parse('2.4'):
-            if torch.xpu.is_available():
-                return 'xpu'
-        else:
-            import intel_extension_for_pytorch as ipex
-            if torch.xpu.is_available():
-                return 'xpu'
+        import intel_extension_for_pytorch as ipex
     except ImportError:
         pass
+    if torch.xpu.is_available():
+        return 'xpu'
 
     try:
         import torch_musa
@@ -84,13 +86,14 @@ def check_compute_capacity():
 
 @lru_cache(maxsize=None)
 def check_pytorch_version(version_s: str):
-    if version.parse(torch.__version__) >= version.parse(version_s):
-        return True
-    else:
-        return False
+    current_parts = torch.__version__.split('.')[:2]  # 只取主版本号和次版本号
+    required_parts = version_s.split('.')
+    current = float(f"{current_parts[0]}.{current_parts[1]}")
+    required = float(f"{required_parts[0]}.{required_parts[1]}")
+    return current >= required
 
 
-device = get_available_device()
+device = 'cuda' if get_available_device() == 'cpu' else get_available_device()
 device_capacity = check_compute_capacity()
 
 

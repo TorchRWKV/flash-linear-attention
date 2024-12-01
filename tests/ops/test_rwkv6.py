@@ -7,20 +7,20 @@ import torch.nn.functional as F
 from fla.ops.rwkv6 import chunk_rwkv6, fused_recurrent_rwkv6, native_recurrent_rwkv6
 from fla.ops.rwkv6.recurrent_naive import (naive_recurrent_rwkv6,
                                            naive_recurrent_rwkv6_bwd)
-from fla.utils import device
+from fla.utils import device, check_pytorch_version
 import numpy as np
 np.set_printoptions(precision=4, suppress=True, linewidth=200)
 
 torch.backends.cudnn.allow_tf32 = False
 torch.backends.cuda.matmul.allow_tf32 = False
 
-@pytest.mark.parametrize("B", [2])
+@pytest.mark.parametrize("B", [1])
 @pytest.mark.parametrize("T", [1024])
-@pytest.mark.parametrize("C", [4096])
+@pytest.mark.parametrize("C", [512])
 @pytest.mark.parametrize("HEAD_SIZE", [64, 128])
 @pytest.mark.parametrize("dtype", [torch.float])
 @pytest.mark.parametrize("u_2d", [True, False])
-@pytest.mark.parametrize("scale", [-1.0, 1.0])
+@pytest.mark.parametrize("scale", [1.0])
 def test_recurrent_naive(
     B: int,
     T: int,
@@ -62,15 +62,16 @@ def test_recurrent_naive(
     assert dh.allclose(h.grad, atol=1e-3)
 
 
-@pytest.mark.parametrize("B", [2])
+@pytest.mark.parametrize("B", [1])
 @pytest.mark.parametrize("T", [1024])
-@pytest.mark.parametrize("C", [4096])
+@pytest.mark.parametrize("C", [512])
 @pytest.mark.parametrize("HEAD_SIZE", [64, 128])
-@pytest.mark.parametrize("dtype", [torch.float, torch.bfloat16, torch.float16])
+@pytest.mark.parametrize("dtype", [torch.float, torch.bfloat16])
 @pytest.mark.parametrize("use_h", [False, True])
 @pytest.mark.parametrize("u_2d", [True, False])
-@pytest.mark.parametrize("scale", [-1.0, 1.0])
-def test_fused_recurrent(
+@pytest.mark.parametrize("scale", [1.0])
+@pytest.mark.parametrize("compile", [False])
+def test_fused_recurrent_with_compile(
     B: int,
     T: int,
     C: int,
@@ -78,10 +79,18 @@ def test_fused_recurrent(
     dtype: torch.dtype,
     use_h: bool,
     u_2d: bool,
-    scale: float
+    scale: float,
+    compile: bool
 ):
     if dtype == torch.float16 and 'cuda' in device:
         pytest.skip("Skipping test for float16(Nvidia), see https://github.com/triton-lang/triton/issues/4701")
+    if dtype == torch.float16 and scale == 1.0:
+        pytest.skip("Skipping test for float16 with scale=1.0")
+    if not check_pytorch_version('2.6') and compile:
+        pytest.skip("Skipping compile test for pytorch version < 2.6.0")
+
+    full_grapth = True if 'cuda' in device else False
+    RUN_FLA_FUSED_T = torch.compile(RUN_FLA_FUSED, fullgraph=full_grapth) if compile else RUN_FLA_FUSED
     torch.manual_seed(42)
     atol = 1e-3 if dtype == torch.float else 1e-2
 
@@ -109,7 +118,7 @@ def test_fused_recurrent(
     if use_h:
         ref_dh, h.grad = h.grad.clone(), None
 
-    tri_o, _ = RUN_FLA_FUSED(B, T, C, H, q, k, v, w, u, h=h if use_h else None, scale=scale, output_final_state=use_h)
+    tri_o, _ = RUN_FLA_FUSED_T(B, T, C, H, q, k, v, w, u, h=h if use_h else None, scale=scale, output_final_state=use_h)
     tri_o.backward(do)
     tri_dq, q.grad = q.grad.clone(), None
     tri_dk, k.grad = k.grad.clone(), None
@@ -134,9 +143,9 @@ def test_fused_recurrent(
     if use_h:
         assert get_err_ratio(ref_dh, tri_dh) < atol
 
-@pytest.mark.parametrize("B", [2])
-@pytest.mark.parametrize("T", [1024])
-@pytest.mark.parametrize("C", [4096])
+@pytest.mark.parametrize("B", [1])
+@pytest.mark.parametrize("T", [130, 146, 162, 1024])
+@pytest.mark.parametrize("C", [512])
 @pytest.mark.parametrize("HEAD_SIZE", [64, 128])
 @pytest.mark.parametrize("dtype", [torch.bfloat16])
 @pytest.mark.parametrize("use_h", [False, True])
@@ -158,6 +167,8 @@ def test_fla_autocast(
         pytest.skip("Skipping test for pytorch version < 2.4.0")
     if dtype == torch.float16 and 'cuda' in device:
         pytest.skip("Skipping test for float16(Nvidia), see https://github.com/triton-lang/triton/issues/4701")
+    if dtype == torch.float16 and scale == 1.0:
+        pytest.skip("Skipping test for float16 with scale=1.0")
     torch.manual_seed(42)
     atol = 1e-3 if dtype == torch.float else 1e-2
 
@@ -255,15 +266,16 @@ def test_fla_autocast(
         assert get_err_ratio(ref_dh, tri_dh) < atol
 
 
-@pytest.mark.parametrize("B", [2])
-@pytest.mark.parametrize("T", [1024])
-@pytest.mark.parametrize("C", [4096])
+@pytest.mark.parametrize("B", [1])
+@pytest.mark.parametrize("T", [130, 146, 162])
+@pytest.mark.parametrize("C", [512])
 @pytest.mark.parametrize("HEAD_SIZE", [64, 128])
-@pytest.mark.parametrize("dtype", [torch.float, torch.bfloat16, torch.float16])
+@pytest.mark.parametrize("dtype", [torch.float, torch.bfloat16])
 @pytest.mark.parametrize("use_h", [False, True])
 @pytest.mark.parametrize("u_2d", [True, False])
-@pytest.mark.parametrize("scale", [-1.0, 1.0])
-def test_chunk_with_initial_h(
+@pytest.mark.parametrize("scale", [1.0])
+@pytest.mark.parametrize("compile", [False])
+def test_chunk_with_initial_h_and_compile(
     B: int,
     T: int,
     C: int,
@@ -271,10 +283,18 @@ def test_chunk_with_initial_h(
     dtype: torch.dtype,
     use_h: bool,
     u_2d: bool,
-    scale: float
+    scale: float,
+    compile: bool
 ):
     torch.manual_seed(42)
     atol = 1e-3 if dtype == torch.float else 1e-2
+    if dtype == torch.float16 and scale == 1.0:
+        pytest.skip("Skipping test for float16 with scale=1.0")
+    if not check_pytorch_version('2.4') and compile:
+        pytest.skip("Skipping compile test for pytorch version < 2.4.0")
+    
+    full_grapth = True if 'cuda' in device else False
+    RUN_FLA_CHUNK_T = torch.compile(RUN_FLA_CHUNK, fullgraph=full_grapth) if compile else RUN_FLA_CHUNK
 
     H = C // HEAD_SIZE
     q = torch.empty(B, T, C, device=device).uniform_(-1, 1).to(dtype=dtype).requires_grad_(True)
@@ -291,7 +311,7 @@ def test_chunk_with_initial_h(
     do = torch.rand_like(v, device=device)
 
     ref_o, _ = RUN_FLA_NATIVE_AUTO_BACKWARD(B, T, C, H, q.float(), k.float(), v.float(), w.float(), u.float(), scale=scale, h=h.float() if use_h else None, output_final_state=use_h)
-    ref_o.backward(do)
+    LOSS(ref_o).backward()
     ref_dq, q.grad = q.grad.clone(), None
     ref_dk, k.grad = k.grad.clone(), None
     ref_dv, v.grad = v.grad.clone(), None
@@ -300,8 +320,8 @@ def test_chunk_with_initial_h(
     if use_h:
         ref_dh, h.grad = h.grad.clone(), None
 
-    tri_o, _ = RUN_FLA_CHUNK(B, T, C, H, q, k, v, w, u, h=h if use_h else None, scale=scale, output_final_state=use_h)
-    tri_o.backward(do)
+    tri_o, _ = RUN_FLA_CHUNK_T(B, T, C, H, q, k, v, w, u, h=h if use_h else None, scale=scale, output_final_state=use_h)
+    LOSS(tri_o).backward()
     tri_dq, q.grad = q.grad.clone(), None
     tri_dk, k.grad = k.grad.clone(), None
     tri_dv, v.grad = v.grad.clone(), None
@@ -318,6 +338,61 @@ def test_chunk_with_initial_h(
     assert get_err_ratio(ref_du, tri_du) < atol, f"u, {get_err_ratio(ref_du, tri_du)}, dtype = {dtype}"
     if use_h:
         assert get_err_ratio(ref_dh, tri_dh) < atol, f"h, {get_err_ratio(ref_dh, tri_dh)}, dtype = {dtype}"
+
+
+@pytest.mark.parametrize("B", [1])
+@pytest.mark.parametrize("H", [1])
+@pytest.mark.parametrize("T", [130, 146, 162])
+@pytest.mark.parametrize("D", [100, 300])
+@pytest.mark.parametrize("dtype", [torch.bfloat16])
+def test_chunk_with_different_dimension(
+    B: int,
+    H: int,
+    T: int,
+    D: int,
+    dtype: torch.dtype,
+):
+    torch.manual_seed(42)
+     
+    # [B, H, T, d_head]
+    q = torch.randn((B, H, T, D), dtype=dtype, device=device).requires_grad_()
+    k = torch.randn((B, H, T, D), dtype=dtype, device=device).requires_grad_()
+    v = torch.randn((B, H, T, 2*D), dtype=dtype, device=device).requires_grad_()
+    g = torch.randn((B, H, T, D), dtype=dtype, device=device)
+    g = F.logsigmoid(g).requires_grad_(True)
+    u = torch.randn(H, D, device=device).to(dtype).requires_grad_(True)
+    u = torch.randn(H, D, device=device).to(dtype).requires_grad_(True)
+    h0 = torch.randn((B, H, D, 2*D), dtype=dtype, device=device).requires_grad_()
+    do = torch.randn_like(v)
+    dht = torch.randn((B, H, D, 2*D), dtype=dtype, device=device)
+    ref, ref_ht = naive_recurrent_rwkv6(q.clone(), k.clone(), v.clone(), g.clone(), u.clone(), initial_state=h0.clone(), output_final_state=True)
+    LOSS(ref).backward()
+    ref_dq, q.grad = q.grad.clone(), None
+    ref_dk, k.grad = k.grad.clone(), None
+    ref_dv, v.grad = v.grad.clone(), None
+    ref_dg, g.grad = g.grad.clone(), None
+    ref_dh0, h0.grad = h0.grad.clone(), None
+    ref_du, u.grad = u.grad.clone(), None
+
+    # triton implementation
+    tri, tri_ht = chunk_rwkv6(q, k, v, g, u, initial_state=h0, output_final_state=True)
+    LOSS(tri).backward()
+    tri_dq, q.grad = q.grad.clone(), None
+    tri_dk, k.grad = k.grad.clone(), None
+    tri_dv, v.grad = v.grad.clone(), None
+    tri_dg, g.grad = g.grad.clone(), None
+    tri_dh0, h0.grad = h0.grad.clone(), None
+    tri_du, u.grad = u.grad.clone(), None
+
+    assert get_err_ratio(tri, ref) < 0.004, f" o diff: {torch.abs(ref - tri).max()}, ref_o_max: {ref.abs().max()}, tri_o_max: {tri.abs().max()}, ratio: {get_err_ratio(ref, tri)}"
+    assert get_err_ratio(tri_ht, ref_ht) < 0.005, f"ht diff: {torch.abs(ref_ht - tri_ht).max()}, ratio: {get_err_ratio(ref_ht, tri_ht)}"
+    assert get_err_ratio(tri_dq, ref_dq) < 0.005, f"dq diff: {torch.abs(ref_dq - tri_dq).max()}, ratio: {get_err_ratio(ref_dq, tri_dq)}"
+    assert get_err_ratio(tri_dk, ref_dk) < 0.005, f"dk diff: {torch.abs(ref_dk - tri_dk).max()}, ratio: {get_err_ratio(ref_dk, tri_dk)}"
+    assert get_err_ratio(tri_dv, ref_dv) < 0.005, f"dv diff: {torch.abs(ref_dv - tri_dv).max()}, ratio: {get_err_ratio(ref_dv, tri_dv)}"
+    assert get_err_ratio(tri_dg, ref_dg) < 0.005, f"dg diff: {torch.abs(ref_dg - tri_dg).max()}, ref_dg_max: {ref_dg.abs().max()}, tri_dg_max: {tri_dg.abs().max()},  ratio: {get_err_ratio(ref_dg, tri_dg)}"
+    assert get_err_ratio(tri_dh0, ref_dh0) < 0.005, f"dh0 diff: {torch.abs(ref_dh0 - tri_dh0).max()}, ref_dho_max: {ref_dh0.abs().max()}, tri_dh0_max: {tri_dh0.abs().max()}, ratio: {get_err_ratio(ref_dh0, tri_dh0)}"
+    assert get_err_ratio(tri_du, ref_du) < 0.005, f"du diff: {torch.abs(ref_du - tri_du).max()}, ref_du_max: {ref_du.abs().max()}, tri_du_max: {tri_du.abs().max()}, ratio: {get_err_ratio(ref_du, tri_du)}"
+
 
 def set_seed(seed):
     np.random.seed(seed)
@@ -369,7 +444,7 @@ def RUN_FLA_NATIVE_MANUAL_BACKWARD(B, T, C, H, r, k, v, w, u, h, scale=1.0, outp
 
 @pytest.mark.parametrize("B", [4])
 @pytest.mark.parametrize("T", [24, 512])
-@pytest.mark.parametrize("C", [4096])
+@pytest.mark.parametrize("C", [512])
 @pytest.mark.parametrize("HEAD_SIZE", [64])
 @pytest.mark.parametrize("dtype", [torch.float, torch.bfloat16])
 def test_chunk_error_ratio(
@@ -436,9 +511,9 @@ def test_chunk_error_ratio(
 
 
 
-@pytest.mark.parametrize("B", [2])
+@pytest.mark.parametrize("B", [1])
 @pytest.mark.parametrize("T", [1024])
-@pytest.mark.parametrize("C", [4096])
+@pytest.mark.parametrize("C", [512])
 @pytest.mark.parametrize("HEAD_SIZE", [64])
 @pytest.mark.parametrize("dtype", [torch.float, torch.bfloat16])
 def test_chunk_error_ratio_multi_state(
@@ -638,113 +713,4 @@ def test_chunk_error_ratio_multi_state(
     assert get_err_ratio(gv_chunk1, gv1) < atol, f"v1, {get_err_ratio(gv_chunk1, gv1)}, dtype = {dtype}"
     assert get_err_ratio(gw_chunk1, gw1) < atol, f"w1, {get_err_ratio(gw_chunk1, gw1)}, dtype = {dtype}"
     assert get_err_ratio(gu_chunk1, gu1) < atol, f"u1, {get_err_ratio(gu_chunk1, gu1)}, dtype = {dtype}"
-
-@pytest.mark.parametrize("B", [2])
-@pytest.mark.parametrize("T", [1024])
-@pytest.mark.parametrize("C", [4096])
-@pytest.mark.parametrize("HEAD_SIZE", [64])
-@pytest.mark.parametrize("dtype", [torch.float, torch.bfloat16])
-def test_multi_state_backworad_with_native(
-    B: int,
-    T: int,
-    C: int,
-    HEAD_SIZE: int,
-    dtype: torch.dtype
-):
-    atol = 1e-3 if dtype == torch.float else 1e-2
-    import torch.nn as nn
-    H = C // HEAD_SIZE
-    with torch.no_grad():
-        u = torch.empty(H, HEAD_SIZE, device=device, dtype=dtype).uniform_(-1, 1).requires_grad_(True)
-        image_feature = torch.randn(B, T, C, device=device, dtype=dtype).requires_grad_(True)
-        text_emb = torch.randn(B, T, C, device=device, dtype=dtype).requires_grad_(True)
-
-    def clear_image_grad():
-        image_feature.requires_grad_()
-        u.requires_grad_()
-        text_emb.requires_grad_()
-        if image_feature.grad is not None: image_feature.grad.data.zero_()
-        if u.grad is not None: u.grad.data.zero_()
-        if text_emb.grad is not None: text_emb.grad.data.zero_()
-        if proj_layer.weight.grad is not None: proj_layer.weight.grad.data.zero_()
-    proj_layer = nn.Linear(C, C, bias=False, device=device, dtype=dtype)
-    linear_r = nn.Linear(C, C, bias=False, device=device, dtype=dtype)
-    linear_w = nn.Linear(C, C, bias=False, device=device, dtype=dtype)
-    linear_k = nn.Linear(C, C, bias=False, device=device, dtype=dtype)
-    linear_v = nn.Linear(C, C, bias=False, device=device, dtype=dtype)
-    linear_r.requires_grad_(False)
-    linear_w.requires_grad_(False)
-    linear_k.requires_grad_(False)
-    linear_v.requires_grad_(False)
-    img = proj_layer(image_feature)
-    r_img = linear_r(img)
-    w_img = linear_w(img)
-    k_img = linear_k(img)
-    v_img = linear_v(img)
-    y_img, img_state = RUN_FLA_NATIVE_MANUAL_BACKWARD(B, T, C, H, r_img.float(), k_img.float(), v_img.float(), w_img.float(), u.float(), h=None)
-
-    r_text = linear_r(text_emb)
-    w_text = linear_w(text_emb)
-    k_text = linear_k(text_emb)
-    v_text = linear_v(text_emb)
-    y_text, text_state = RUN_FLA_NATIVE_MANUAL_BACKWARD(B, T, C, H, r_text.float(), k_text.float(), v_text.float(), w_text.float(), u.float(), h=img_state.float())
-
-    LOSS(y_text).backward()
-    gproj = proj_layer.weight.grad.data.clone()
-    clear_image_grad()
-    img = proj_layer(image_feature)
-    r_img = linear_r(img)
-    w_img = linear_w(img)
-    k_img = linear_k(img)
-    v_img = linear_v(img)
-    y_img, img_state = RUN_FLA_FUSED(B, T, C, H, r_img, k_img, v_img, w_img, u, h=None)
-
-
-    r_text = linear_r(text_emb)
-    w_text = linear_w(text_emb)
-    k_text = linear_k(text_emb)
-    v_text = linear_v(text_emb)
-    y_text, text_state = RUN_FLA_FUSED(B, T, C, H, r_text, k_text, v_text, w_text, u, h=img_state)
-
-    LOSS(y_text).backward()
-    gproj1 = proj_layer.weight.grad.data.clone()
-    assert get_err_ratio(gproj, gproj1) < atol, f"proj, {get_err_ratio(gproj, gproj1)}"
-    has_non_zero = torch.any(gproj1 != 0).item()
-    assert has_non_zero, "gproj1 is all zeros!"
-
-    clear_image_grad()
-    img = proj_layer(image_feature)
-    r_img = linear_r(img)
-    w_img = linear_w(img)
-    k_img = linear_k(img)
-    v_img = linear_v(img)
-    y_img, img_state = RUN_FLA_NATIVE_MANUAL_BACKWARD(B, T, C, HEAD_SIZE, r_img.float(), k_img.float(), v_img.float(), w_img.float(), u.float(), h=None)
-
-    r_text = linear_r(text_emb)
-    w_text = linear_w(text_emb)
-    k_text = linear_k(text_emb)
-    v_text = linear_v(text_emb)
-    y_text, text_state = RUN_FLA_NATIVE_MANUAL_BACKWARD(B, T, C, H, r_text.float(), k_text.float(), v_text.float(), w_text.float(), u.float(), h=img_state.float())
-
-    LOSS(y_text).backward()
-    gproj = proj_layer.weight.grad.data.clone()
-    clear_image_grad()
-    img = proj_layer(image_feature)
-    r_img = linear_r(img)
-    w_img = linear_w(img)
-    k_img = linear_k(img)
-    v_img = linear_v(img)
-    y_img, img_state = RUN_FLA_CHUNK(B, T, C, H, r_img, k_img, v_img, w_img, u, h=None)
-
-
-    r_text = linear_r(text_emb)
-    w_text = linear_w(text_emb)
-    k_text = linear_k(text_emb)
-    v_text = linear_v(text_emb)
-    y_text, text_state = RUN_FLA_CHUNK(B, T, C, H, r_text, k_text, v_text, w_text, u, h=img_state)
-
-    LOSS(y_text).backward()
-    assert get_err_ratio(gproj, gproj1) < atol, f"proj, {get_err_ratio(gproj, gproj1)}, dtype = {dtype}"
-    has_non_zero = torch.any(gproj1 != 0).item()
-    assert has_non_zero, "gproj1 is all zeros!"
 

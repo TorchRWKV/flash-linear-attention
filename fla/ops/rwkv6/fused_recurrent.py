@@ -9,7 +9,7 @@ import torch
 import triton
 import triton.language as tl
 
-from fla.ops.utils import chunk_global_reversed_cumsum
+from fla.ops.utils import chunk_global_cumsum
 from fla.utils import autocast_custom_bwd, autocast_custom_fwd, contiguous
 from fla.utils import check_pytorch_version, device
 
@@ -367,7 +367,7 @@ class FusedRecurrentRWKV6Function(torch.autograd.Function):
 
         dw = (dq_aux * q * scale)[:, :, 1:] - (dk_aux * k * scale)[:, :, 0:-1]
         dw = torch.nn.functional.pad(dw, (0, 0, 0, 1, 0, 0, 0, 0), value=0)
-        dw = chunk_global_reversed_cumsum(dw).to(w)
+        dw = chunk_global_cumsum(dw, reverse=True).to(w)
 
         if u_2d:
             du = ((do * v).sum(-1)[..., None] * k * (scale**2) * q).sum([0, -2]).to(u)
@@ -385,9 +385,9 @@ def fused_recurrent_rwkv6(
     scale: float = 1.0,
     initial_state: torch.Tensor = None,
     output_final_state: bool = False,
+    head_first: bool = True,
     reverse: bool = False,
     training: bool = True,
-    causal: bool = True
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     r"""
     Args:
@@ -408,10 +408,18 @@ def fused_recurrent_rwkv6(
             Initial state of shape `(B, H, K, V)`. Default: `None`.
         output_final_state (Optional[bool]):
             Whether to output the final state of shape `(B, H, K, V)`. Default: `False`.
+        head_first (Optional[bool]):
+            Whether the inputs are in the head-first format. Default: `True`.
     """
     if scale == -1.0:
         scale = r.shape[-1] ** -0.5
     u_2d = True if u.dim() == 2 else False
-    o, final_state = FusedRecurrentRWKV6Function.apply(
-        r, k, v, w, u, scale, initial_state, output_final_state, reverse, u_2d, training)
+    if not head_first:
+        r, k, v, w = map(lambda x: x.transpose(1, 2), (r, k, v, w))
+        o, final_state = FusedRecurrentRWKV6Function.apply(
+            r, k, v, w, u, scale, initial_state, output_final_state, reverse, u_2d, training)
+        o = o.transpose(1, 2)
+    else:
+        o, final_state = FusedRecurrentRWKV6Function.apply(
+            r, k, v, w, u, scale, initial_state, output_final_state, reverse, u_2d, training)
     return o, final_state

@@ -55,7 +55,53 @@ def RUN_FLA_CHUNK(B, T, C, H, r, k, v, w, u, h, scale=1.0, chunk_size=32):
   <img width="400" alt="image" src="https://github.com/sustcsonglin/flash-linear-attention/assets/18402347/02ff2e26-1495-4088-b701-e72cd65ac6cf">
 </div>
 
-# Installation
+## Table of Contents
+
+- [News](#news)
+- [Models](#models)
+- [Installation](#installation)
+- [Usage](#usage)
+  - [Token Mixing](#token-mixing)
+  - [Fused Modules](#fused-modules)
+  - [Generation](#generation)
+  - [Hybrid Models](#hybrid-models)
+- [Evaluations](#evaluations)
+- [Benchmarks](#benchmarks)
+- [Citation](#citation)
+
+## News
+
+- [2024-12]: :loudspeaker: `fla` now officially supports kernels with variable-length inputs.
+- [2024-11]: The inputs are now switched from head-first to seq-first format.
+- [2024-11]: :rocket: `fla` now provides a flexible way for training hybrid models.
+- [2024-10]: :fire: Announcing `flame`, a minimal and scalable framework for training `fla` models. Check out the details [here](training/README.md).
+- [2024-09]: `fla` now includes a fused linear and cross-entropy layer, significantly reducing memory usage during training.
+- [2024-09]: :tada: Add GSA implementation to `fla` ([paper](https://arxiv.org/abs/2409.07146)).
+- [2024-05]: :tada: Add DeltaNet implementation to `fla` ([paper](https://arxiv.org/abs/2102.11174)).
+- [2024-05]: :rocket: `fla` v0.1: a variety of subquadratic kernels/layers/models integrated (RetNet/GLA/Mamba/HGRN/HGRN2/RWKV6, etc., see [Models](#models)).
+- [2023-12]: :tada: Launched `fla`, offering a collection of implementations for state-of-the-art linear attention models.
+
+## Models
+
+Roughly sorted according to the timeline supported in `fla`
+
+| Date    | Model     | Title                                                                                                     |                                  Paper                                   |                                            Code                                             |                                                  `fla` impl                                                   |
+| :------ | :-------- | :-------------------------------------------------------------------------------------------------------- | :----------------------------------------------------------------------: | :-----------------------------------------------------------------------------------------: | :---------------------------------------------------------------------------------------------------------: |
+| 2023-07 | RetNet    | Retentive network: a successor to transformer for large language models                                   |                [arxiv](https://arxiv.org/abs/2307.08621)                 |                [official](https://github.com/microsoft/torchscale/tree/main)                | [code](https://github.com/sustcsonglin/flash-linear-attention/blob/main/fla/layers/multiscale_retention.py) |
+| 2023-12 | GLA       | Gated Linear Attention Transformers with Hardware-Efficient Training                                      |                [arxiv](https://arxiv.org/abs/2312.06635)                 |                [official](https://github.com/berlino/gated_linear_attention)                |         [code](https://github.com/sustcsonglin/flash-linear-attention/blob/main/fla/layers/gla.py)          |
+| 2023-12 | Based     | An Educational and Effective Sequence Mixer                                                               | [blog](https://hazyresearch.stanford.edu/blog/2023-12-11-zoology2-based) |                     [official](https://github.com/HazyResearch/zoology)                     |        [code](https://github.com/sustcsonglin/flash-linear-attention/blob/main/fla/layers/based.py)         |
+| 2024-01 | Rebased   | Linear Transformers with Learnable Kernel Functions are Better In-Context Models                          |                [arxiv](https://arxiv.org/abs/2402.10644)                 |                      [official](https://github.com/corl-team/rebased/)                      |       [code](https://github.com/sustcsonglin/flash-linear-attention/blob/main/fla/layers/rebased.py)        |
+| 2021-02 | Delta Net | Linear Transformers Are Secretly Fast Weight Programmers                                                  |                [arxiv](https://arxiv.org/abs/2102.11174)                 |                     [official](https://github.com/IDSIA/recurrent-fwp)                      |      [code](https://github.com/sustcsonglin/flash-linear-attention/blob/main/fla/layers/delta_net.py)       |
+| 2021-10 | ABC       | Attention with Bounded-memory Control                                                                     |                [arxiv](https://arxiv.org/abs/2110.02488)                 |                                                                                             |         [code](https://github.com/sustcsonglin/flash-linear-attention/blob/main/fla/layers/abc.py)          |
+| 2023-09 | HGRN      | Hierarchically Gated Recurrent Neural Network for Sequence Modeling                                       |         [openreview](https://openreview.net/forum?id=P1TCHxJwLB)         |                       [official](https://github.com/OpenNLPLab/HGRN)                        |         [code](https://github.com/sustcsonglin/flash-linear-attention/blob/main/fla/layers/hgrn.py)         |
+| 2024-04 | HGRN2     | HGRN2: Gated Linear RNNs with State Expansion                                                             |                [arxiv](https://arxiv.org/abs/2404.07904)                 |                       [official](https://github.com/OpenNLPLab/HGRN2)                       |        [code](https://github.com/sustcsonglin/flash-linear-attention/blob/main/fla/layers/hgrn2.py)         |
+| 2024-04 | RWKV6     | Eagle and Finch: RWKV with Matrix-Valued States and Dynamic Recurrence                                    |                [arxiv](https://arxiv.org/abs/2404.05892)                 |                         [official](https://github.com/RWKV/RWKV-LM)                         |        [code](https://github.com/sustcsonglin/flash-linear-attention/blob/main/fla/layers/rwkv6.py)         |
+| 2024-06 | Samba     | Samba: Simple Hybrid State Space Models for Efficient Unlimited Context Language Modeling                 |                [arxiv](https://arxiv.org/abs/2406.07522)                 |                       [official](https://github.com/microsoft/Samba)                        |          [code](https://github.com/sustcsonglin/flash-linear-attention/blob/main/fla/models/samba)          |
+| 2024-05 | Mamba2    | Transformers are SSMs: Generalized Models and Efficient Algorithms Through Structured State Space Duality |                [arxiv](https://arxiv.org/abs/2405.21060)                 |                      [official](https://github.com/state-spaces/mamba)                      |         [code](https://github.com/sustcsonglin/flash-linear-attention/blob/main/fla/models/mamba2)          |
+| 2024-09 | GSA       | Gated Slot Attention for Efficient Linear-Time Sequence Modeling                                          |                [arxiv](https://arxiv.org/abs/2409.07146)                 | [official](https://github.com/sustcsonglin/flash-linear-attention/tree/main/fla/models/gsa) |           [code](https://github.com/sustcsonglin/flash-linear-attention/tree/main/fla/models/gsa)           |
+
+
+## Installation
 
 The following requirements should be satisfied
 - [PyTorch](https://pytorch.org/) >= 2.0 (>=2.4 is the best choice)
@@ -130,9 +176,9 @@ Their innovative work and expertise laid the foundation for the development of r
 
 
 
-# Usage
+## Usage
 
-## Token Mixing
+### Token Mixing
 
 We provide "token mixing" linear attention layers in `fla.layers` for you to use.
 You can replace the standard multihead attention layer in your model with other linear attention layers.
@@ -235,7 +281,7 @@ GLAForCausalLM(
 
 ```
 
-## Fused Modules
+### Fused Modules
 
 We offer a collection of fused modules in `fla.modules` to facilitate faster training:
 
@@ -248,7 +294,7 @@ We offer a collection of fused modules in `fla.modules` to facilitate faster tra
 * [`Linear Cross Entropy`](fla/modules/fused_linear_cross_entropy.py): fused linear layer and cross entropy loss to avoid the materialization of large logits tensors. Also refer to implementations by [mgmalek](https://github.com/mgmalek/efficient_cross_entropy) and [Liger-Kernel](https://github.com/linkedin/Liger-Kernel/blob/main/src/liger_kernel/ops/fused_linear_cross_entropy.py).
 * [`Linear KL Divergence`](fla/modules/fused_kl_div.py): fused linear layer and KL divergence loss in a similar vein as CE loss.
 
-## Generation
+### Generation
 
 Upon successfully pretraining a model, it becomes accessible for generating text using the 🤗 text generation APIs.
 In the following, we give a generation example:
@@ -288,7 +334,7 @@ All of the pretrained models currently available can be found in [`fla-hub`](htt
 >>> for model in list_models(author='fla-hub'): print(model.id)
 ```
 
-## Hybrid Models
+### Hybrid Models
 
 `fla` provides a flexible method to incorporate standard attention layers into existing linear attention models. 
 This is easily achieved by specifying the `attn` argument in the model configuration.
@@ -396,7 +442,7 @@ SambaForCausalLM(
 During inference, you **DO NOT** need to revise anything for generation!
 The model will produce output as-is, without any need for additional configurations or modifications.
 
-# Evaluations
+## Evaluations
 
 The [lm-evaluation-harness](https://github.com/EleutherAI/lm-evaluation-harness) library allows you to easily perform (zero-shot) model evaluations.
 Follow the steps below to use this library:
@@ -424,7 +470,7 @@ Running the command above will provide the task results reported in the GLA pape
 >>> from lm_eval.tasks import TaskManager; TaskManager().initialize_tasks()
 ```
 
-# Benchmarks
+## Benchmarks
 
 We compared our Triton-based RetNet implementation with CUDA-based FlashAttention2, using a batch size of 8, 32 heads, and a head dimension of 128, across different sequence lengths.
 These tests were conducted on a single A100 80GB GPU, as illustrated in the following graph
@@ -444,16 +490,6 @@ Performance:
 ```
 
 ![Performance](https://github.com/sustcsonglin/flash-linear-attention/assets/30831390/36961182-da39-48ba-96a6-84c572ce51d7)
-
-
-# Different forms of linear attention
-
-Please refer to Sectiton 2.3 of [GLA paper](https://arxiv.org/pdf/2312.06635.pdf) for hardware considerations of different forms of linear attention.
-
-* `Parallel`: Self-attention-styled computation in $O(L^2)$ time with sequence parallelism.
-* `FusedRecurrent`: Recurrent computation in $O(L)$ time. Hidden states are computed on-the-fly in shared memory without any materialization to global memory (see Algorithm1 of [this paper](https://arxiv.org/pdf/2006.16236.pdf) for more details!). This saves a lot of I/O cost and should be a strong baseline for speed comparison.
-* `FusedChunk`: Chunkwise computation in $O(LC)$ time where $C$ is the chunk size. Hidden states are computed on-the-fly without any materialization to global memory likewise **FusedRecurrent**. This version is usually better than FusedReuccurent because tensor cores can be used for sequence level "reduction", whilst FusedRecurrent cannot use tensor cores at all.  Note that there is no sequence level parallelism in this implementation, so this impl is not suitable for the very small batch size setting. Should be more memory efficient than ParallelChunk. 
-* `ParallelChunk`: Chunkwise computation with sequence parallelism. Need to materialize hidden states to global memory for each chunk. $C$ is needed to set properly to achieve good performance because when $C$ is small there are too many hidden states to load/store to global memory; and when $C$ is too large the FLOPs are high. Recommened $C$ is [64, 128, 256]
 
 
 # Citation

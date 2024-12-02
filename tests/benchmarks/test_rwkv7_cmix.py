@@ -146,17 +146,18 @@ def main():
     print(f"Forward (ms): {torch_fwd_mean:>12.2f} {triton_fwd_mean:>12.2f} {torch_fwd_mean/triton_fwd_mean:>12.2f}x")
     print(f"Backward (ms): {torch_bwd_mean:>12.2f} {triton_bwd_mean:>12.2f} {torch_bwd_mean/triton_bwd_mean:>12.2f}x")
 
-    print("\n=== Memory Usage (MB) ===")
-    print(f"{'':20} {'PyTorch':>12} {'Triton':>12} {'Ratio':>12}")
-    print("-" * 56)
-    print(f"Initial: {torch_mem['initial']:>12.2f} {triton_mem['initial']:>12.2f}")
-    print(f"Forward (no_grad): {torch_mem['forward_only']:>12.2f} {triton_mem['forward_only']:>12.2f} {
-          torch_mem['forward_only']/triton_mem['forward_only']:>12.2f}x")
-    print(f"Forward (with_grad): {torch_mem['forward_with_grad']:>12.2f} {triton_mem['forward_with_grad']:>12.2f} {
-          torch_mem['forward_with_grad']/triton_mem['forward_with_grad']:>12.2f}x")
-    print(f"Total Peak: {torch_mem['total']:>12.2f} {triton_mem['total']
-          :>12.2f} {torch_mem['total']/triton_mem['total']:>12.2f}x")
-
+    print(
+    "\n=== Memory Usage (MB) ===\n"
+    f"{'':20} {'PyTorch':>12} {'Triton':>12} {'Ratio':>12}\n"
+    + "-" * 56 + "\n"
+    f"Initial: {torch_mem['initial']:>12.2f} {triton_mem['initial']:>12.2f}\n"
+    f"Forward (no_grad): {torch_mem['forward_only']:>12.2f} {triton_mem['forward_only']:>12.2f} "
+    f"{torch_mem['forward_only']/triton_mem['forward_only']:>12.2f}x\n"
+    f"Forward (with_grad): {torch_mem['forward_with_grad']:>12.2f} {triton_mem['forward_with_grad']:>12.2f} "
+    f"{torch_mem['forward_with_grad']/triton_mem['forward_with_grad']:>12.2f}x\n" 
+    f"Total Peak: {torch_mem['total']:>12.2f} {triton_mem['total']:>12.2f} "
+    f"{torch_mem['total']/triton_mem['total']:>12.2f}x"
+    )
 
 if __name__ == "__main__":
     main()

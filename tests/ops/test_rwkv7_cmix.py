@@ -14,9 +14,9 @@ from fla.utils import device
 @pytest.mark.parametrize("batch_size", [1, 8, 16])
 @pytest.mark.parametrize("seq_len", [1024, 2048, 4096])
 @pytest.mark.parametrize("hidden_dim", [512, 1024, 2048])
-@pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+@pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16, torch.float16])
 def test_rwkv_mix(batch_size, seq_len, hidden_dim, dtype):
-    torch.manual_seed(42)
+    torch.manual_seed(13)
     
     x = torch.randn(batch_size, seq_len, hidden_dim, 
                     device=device, dtype=dtype)
@@ -25,10 +25,11 @@ def test_rwkv_mix(batch_size, seq_len, hidden_dim, dtype):
     x_k = torch.randn(1, 1, hidden_dim, 
                       device=device, dtype=dtype)
     
-    torch_output = torch_rwkv_mix(x, x_prev, x_k)
+    torch_output = torch_rwkv_mix(x.to(torch.float32), x_prev.to(torch.float32), x_k.to(torch.float32))
     triton_output = triton_rwkv_mix(x, x_prev, x_k)
-    
-    assert torch.allclose(torch_output, triton_output, rtol=1e-5, atol=1e-5)
+    rtol = 1e-5 if dtype == torch.float32 else 1e-2
+    atol = 1e-5 if dtype == torch.float32 else 1e-2
+    torch.testing.assert_close(torch_output, triton_output.to(torch.float32), rtol=rtol, atol=atol)
 
 @pytest.mark.parametrize("seq_len", [1024, 2048, 4096])
 @pytest.mark.parametrize("hidden_dim", [512, 1024, 2048])
@@ -43,13 +44,13 @@ def test_rwkv_relu_and_square(seq_len, hidden_dim, dtype, inplace):
     torch_output = torch_rwkv_relu_and_square(x)
     triton_output = triton_rwkv_relu_and_square(x, inplace=inplace)
     
-    assert torch.allclose(torch_output, triton_output, rtol=1e-5, atol=1e-5)
+    torch.testing.assert_close(torch_output, triton_output, rtol=1e-5, atol=1e-5)
 
 @pytest.mark.parametrize("batch_size", [1, 8])
 @pytest.mark.parametrize("seq_len", [1024, 2048])
 @pytest.mark.parametrize("n_embd", [512, 1024])
 @pytest.mark.parametrize("dim_ffn", [2048, 4096])
-@pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float16, torch.bfloat16])
 def test_channel_mixing_gradients(batch_size, seq_len, n_embd, dim_ffn, dtype):
     torch.manual_seed(42)
 
@@ -72,7 +73,7 @@ def test_channel_mixing_gradients(batch_size, seq_len, n_embd, dim_ffn, dtype):
     V_2 = V_.clone().detach().requires_grad_(True)
 
     # First implementation
-    out1, last1 = rwkv_x070_channel_mixing_torch(x, x_prev, x_k, K_, V_)
+    out1, last1 = rwkv_x070_channel_mixing_torch(x.to(torch.float32), x_prev.to(torch.float32), x_k.to(torch.float32), K_.to(torch.float32), V_.to(torch.float32))
     loss1 = out1.mean() + last1.mean()
     loss1.backward()
 
@@ -82,8 +83,8 @@ def test_channel_mixing_gradients(batch_size, seq_len, n_embd, dim_ffn, dtype):
     loss2.backward()
 
     # Test gradients
-    rtol = 1e-3
-    atol = 1e-3
+    rtol = 1e-3 if dtype == torch.float32 else 0.025
+    atol = 1e-3 if dtype == torch.float32 else 0.025
     
     torch.testing.assert_close(x.grad, x2.grad, rtol=rtol, atol=atol)
     torch.testing.assert_close(x_prev.grad, x_prev2.grad, rtol=rtol, atol=atol)

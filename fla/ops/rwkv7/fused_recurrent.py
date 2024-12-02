@@ -9,9 +9,9 @@ import torch
 import triton
 import triton.language as tl
 
-from fla.ops.utils import chunk_global_reversed_cumsum
+from fla.ops.utils import chunk_global_cumsum
 from fla.utils import autocast_custom_bwd, autocast_custom_fwd, contiguous
-from fla.utils import check_pytorch_version, device
+from fla.utils import device
 
 
 @triton.jit

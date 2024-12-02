@@ -1,6 +1,13 @@
 import triton
 import triton.language as tl
 import torch
+from fla.utils import check_pytorch_version
+import logging
+
+logger = logging.getLogger(__name__)
+
+if not check_pytorch_version('2.4'):
+   logger.warning('PyTorch < 2.4 detected - computations may be slower due to lack of optimizations')
 
 
 @triton.autotune(

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 
 import math
-from typing import Optional
+from typing import Dict, Optional
 
 from transformers.configuration_utils import PretrainedConfig
 
@@ -33,10 +33,13 @@ class SambaConfig(PretrainedConfig):
         time_step_max: float = 0.1,
         time_step_init_scheme: str = "random",
         time_step_floor: float = 1e-4,
-        num_heads: int = 18,
-        num_kv_heads: int = 18,
-        window_size: int = 2048,
         max_position_embeddings: int = 2048,
+        attn: Optional[Dict] = {
+            'layers': (1, 3, 5, 7, 9, 11, 13, 15, 17),
+            'num_heads': 18,
+            'num_kv_heads': 18,
+            'window_size': 2048
+        },
         hidden_ratio: Optional[int] = 4,
         rescale_prenorm_residual: bool = False,
         use_cache: bool = True,
@@ -66,10 +69,8 @@ class SambaConfig(PretrainedConfig):
         self.time_step_max = time_step_max
         self.time_step_init_scheme = time_step_init_scheme
         self.time_step_floor = time_step_floor
-        self.num_heads = num_heads
-        self.num_kv_heads = num_kv_heads
-        self.window_size = window_size
         self.max_position_embeddings = max_position_embeddings
+        self.attn = attn
         self.hidden_ratio = hidden_ratio
         self.rescale_prenorm_residual = rescale_prenorm_residual
         self.residual_in_fp32 = residual_in_fp32

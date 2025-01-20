@@ -1,102 +1,305 @@
 # -*- coding: utf-8 -*-
 
+import os
+
 import pytest
 import torch
+import torch.nn.functional as F
 
-from fla.ops.delta_rule import (chunk_delta_rule, fused_chunk_delta_rule,
-                                fused_recurrent_delta_rule)
+from fla.ops.delta_rule import chunk_delta_rule, fused_recurrent_delta_rule
+from fla.utils import device
+
+def get_abs_err(x, y):
+    return (x-y).flatten().abs().max().item()
 
 
-@pytest.mark.parametrize("B", [2])
-@pytest.mark.parametrize("H", [2])
-@pytest.mark.parametrize("T", [256, 486])
-@pytest.mark.parametrize("D", [64, 100])
-@pytest.mark.parametrize("scale", [1, 0.5])
-@pytest.mark.parametrize("dtype", [torch.bfloat16])
-def test_fused_chunk_equivalence(B: int, H: int, T: int, D: int, dtype: torch.dtype, scale: float):
-    q = torch.randn(B, H, T, D, dtype=dtype)
-    k = torch.nn.functional.normalize(torch.randn(B, H, T, D, dtype=torch.float32), p=2, dim=-1).to(dtype)
-    v = torch.randn(B, H, T, D, dtype=dtype)
-    beta = torch.rand(B, H, T, dtype=dtype).sigmoid().fill_(1)
-    h0 = torch.randn(B, H, D, D, dtype=torch.float32)
-    q, k, v, beta, h0 = map(lambda x: x.cuda().requires_grad_(True), (q, k, v, beta, h0))
-    do = torch.rand_like(v)
-    dh0 = torch.rand_like(h0)
+def get_err_ratio(x, y):
+    err = (x-y).flatten().square().mean().sqrt().item()
+    base = (x).flatten().square().mean().sqrt().item()
+    return err / base
 
-    o2, h2 = fused_chunk_delta_rule(q.clone(), k.clone(), v.clone(), beta.clone(),scale=scale, output_final_state=True, initial_state=h0.clone())
-    ((o2 * do).sum() + (h2 * dh0).sum()).backward(retain_graph=True)
-    q_grad2, k_grad2, v_grad2, beta_grad2, h0_grad2 = q.grad, k.grad, v.grad, beta.grad, h0.grad
-    q.grad = k.grad = v.grad = beta.grad = h0.grad = None
-    o, h1 = fused_recurrent_delta_rule(q.clone(), k.clone(), v.clone(), beta.clone(), scale=scale, output_final_state=True, initial_state=h0.clone())
-    ((o * do).sum() + (h1 * dh0).sum()).backward(retain_graph=True)
-    assert torch.abs(o - o2).max() < 5
-    assert torch.abs(h1 - h2).max() < 5
-    assert torch.abs(q.grad - q_grad2).max() < 5
-    assert torch.abs(k.grad - k_grad2).max() < 5
-    assert torch.abs(v.grad - v_grad2).max() < 5
-    assert torch.abs(beta.grad - beta_grad2).max() < 5
-    assert torch.abs(h0_grad2 - h0.grad).max() < 5
+
+def assert_close(prefix, ref, tri, ratio):
+    msg = f"{prefix} diff: {get_abs_err(ref, tri):.6f} ratio: {get_err_ratio(ref, tri):.6f}"
+    print(msg)
+    assert get_err_ratio(ref, tri) < ratio, msg
 
 
 @pytest.mark.parametrize("B", [2])
-@pytest.mark.parametrize("H", [2])
-@pytest.mark.parametrize("T", [256, 486])
-@pytest.mark.parametrize("D", [64, 100])
-@pytest.mark.parametrize("scale", [1, 0.5])
+@pytest.mark.parametrize("T", [1, 7, 15, 63, 286, 300])
+@pytest.mark.parametrize("H", [2, 16])
+@pytest.mark.parametrize("D", [50, 100, 200])
+@pytest.mark.parametrize("scale", [1])
 @pytest.mark.parametrize("dtype", [torch.bfloat16])
-def test_chunk_equivalence(B: int, H: int, T: int, D: int, dtype: torch.dtype, scale: float):
-    q = torch.randn(B, H, T, D, dtype=dtype)
-    k = torch.nn.functional.normalize(torch.randn(B, H, T, D, dtype=torch.float32), p=2, dim=-1).to(dtype)
-    v = torch.randn(B, H, T, D, dtype=dtype)
-    beta = torch.rand(B, H, T, dtype=dtype).sigmoid().fill_(1)
-    h0 = torch.randn(B, H, D, D, dtype=torch.float32)
-    q, k, v, beta, h0 = map(lambda x: x.cuda().requires_grad_(True), (q, k, v, beta, h0))
+@pytest.mark.parametrize("head_first", [True, False])
+def test_chunk(
+    B: int,
+    T: int,
+    H: int,
+    D: int,
+    dtype: torch.dtype,
+    scale: float,
+    head_first: bool
+):
+    if head_first:
+        q = torch.randn(B, H, T, D, dtype=dtype)
+        k = F.normalize(torch.randn(B, H, T, D, dtype=torch.float32), p=2, dim=-1).to(dtype)
+        v = torch.randn(B, H, T, D, dtype=dtype)
+        beta = torch.rand(B, H, T, dtype=dtype).sigmoid()
+        h0 = torch.randn(B, H, D, D, dtype=torch.float32)
+    else:
+        q = torch.randn(B, T, H, D, dtype=dtype)
+        k = F.normalize(torch.randn(B, T, H, D, dtype=torch.float32), p=2, dim=-1).to(dtype)
+        v = torch.randn(B, T, H, D, dtype=dtype)
+        beta = torch.rand(B, T, H, dtype=dtype).sigmoid()
+        h0 = torch.randn(B, H, D, D, dtype=torch.float32)
+    q, k, v, beta, h0 = map(lambda x: x.to(device).requires_grad_(True), (q, k, v, beta, h0))
     do = torch.rand_like(v)
-    dh0 = torch.rand_like(h0)
+    dht = torch.rand_like(h0)
 
-    o2, h2 = chunk_delta_rule(q.clone(), k.clone(), v.clone(), beta.clone(),scale=scale, output_final_state=True, initial_state=h0.clone())
-    ((o2 * do).sum() + (h2 * dh0).sum()).backward(retain_graph=True)
-    q_grad2, k_grad2, v_grad2, beta_grad2, h0_grad2 = q.grad, k.grad, v.grad, beta.grad, h0.grad
+    tri, tri_ht = chunk_delta_rule(
+        q.clone(),
+        k.clone(),
+        v.clone(),
+        beta.clone(),
+        scale=scale,
+        output_final_state=True,
+        initial_state=h0.clone(),
+        head_first=head_first
+    )
+    ((tri * do).sum() + (tri_ht * dht).sum()).backward(retain_graph=True)
+    tri_dq, tri_dk, tri_dv, tri_dbeta, tri_dh0 = q.grad, k.grad, v.grad, beta.grad, h0.grad
     q.grad = k.grad = v.grad = beta.grad = h0.grad = None
-    o, h1 = fused_recurrent_delta_rule(q.clone(), k.clone(), v.clone(), beta.clone(), scale=scale, output_final_state=True, initial_state=h0.clone())
-    ((o * do).sum() + (h1 * dh0).sum()).backward(retain_graph=True)
-    assert torch.abs(o - o2).max() < 5
-    assert torch.abs(h1 - h2).max() < 5
-    assert torch.abs(q.grad - q_grad2).max() < 5
-    assert torch.abs(k.grad - k_grad2).max() < 5
-    assert torch.abs(v.grad - v_grad2).max() < 5
-    assert torch.abs(beta.grad - beta_grad2).max() < 5
-    assert torch.abs(h0_grad2 - h0.grad).max() < 5
+
+    ref, ref_ht = fused_recurrent_delta_rule(
+        q.clone(),
+        k.clone(),
+        v.clone(),
+        beta.clone(),
+        scale=scale,
+        output_final_state=True,
+        initial_state=h0.clone(),
+        head_first=head_first
+    )
+    ((ref * do).sum() + (ref_ht * dht).sum()).backward(retain_graph=True)
+    ref_dq, ref_dk, ref_dv, ref_dbeta, ref_dh0 = q.grad, k.grad, v.grad, beta.grad, h0.grad
+
+    assert_close("  o", ref, tri, 0.005)
+    assert_close(" ht", ref_ht, tri_ht, 0.005)
+    assert_close(" dq", ref_dq, tri_dq, 0.007)
+    assert_close(" dk", ref_dk, tri_dk, 0.008)
+    assert_close(" dv", ref_dv, tri_dv, 0.007)
+    assert_close(" db", ref_dbeta, tri_dbeta, 0.007)
+    assert_close("dh0", ref_dh0, tri_dh0, 0.007)
 
 
-# @pytest.mark.parametrize("B", [8])
-# @pytest.mark.parametrize("H", [4])
-# @pytest.mark.parametrize("T", [1024])
-# @pytest.mark.parametrize("D", [128])
-# @pytest.mark.parametrize("dtype", [torch.float])
-# def test_beta_scalar_vector_equivalence(B: int, H: int, T: int, D: int, dtype: torch.dtype):
-#     torch.manual_seed(17)
-#     q = torch.randn(B, H, T, D, dtype=dtype)
-#     k = torch.nn.functional.normalize(torch.randn(B, H, T, D, dtype=dtype), p=2, dim=-1)
-#     v = torch.randn(B, H, T, D, dtype=dtype)
-#     beta = torch.rand(B, H, T, D, dtype=dtype).sigmoid()
-#     q, k, v, beta = map(lambda x: x.cuda().requires_grad_(True), (q, k, v, beta))
-#     do = torch.rand_like(v)
+@pytest.mark.parametrize("N", [4])
+@pytest.mark.parametrize("T", [64, 128, 200, 250, 256, 300, 400, 512, 1000, 2048])
+@pytest.mark.parametrize("H", [2, 16])
+@pytest.mark.parametrize("D", [50, 100, 200])
+@pytest.mark.parametrize("scale", [1])
+@pytest.mark.parametrize("dtype", [torch.bfloat16])
+def test_chunk_varlen(
+    N: int,
+    T: int,
+    H: int,
+    D: int,
+    scale: float,
+    dtype: torch.dtype,
+):
+    torch.manual_seed(42)
+    os.environ['TRITON_F32_DEFAULT'] = 'ieee'
+    # randomly split the sequence into N segments
+    offsets = torch.cat([
+        torch.tensor([0], dtype=torch.long),
+        torch.arange(16, T)[torch.randperm(T - 1)[:N-1]],
+        torch.tensor([T], dtype=torch.long)
+    ], 0).to(device).sort()[0]
+    # seq-first required for inputs with variable lengths
+    q = torch.randn((1, T, H, D), dtype=dtype)
+    k = F.normalize(torch.randn(1, T, H, D, dtype=torch.float32), p=2, dim=-1).to(dtype)
+    v = torch.randn((1, T, H, D), dtype=dtype)
+    beta = torch.rand(1, T, H, dtype=dtype).sigmoid()
+    h0 = torch.randn((N, H, D, D), dtype=dtype)
+    q, k, v, beta, h0 = map(lambda x: x.to(device).requires_grad_(), (q, k, v, beta, h0))
+    do = torch.randn_like(v)
+    dht = torch.rand_like(h0)
 
-#     o = delta_rule_recurrence(q.clone(), k.clone(), v.clone(), beta.clone())
-#     o.backward(do, retain_graph=True)
-#     q_grad, k_grad, v_grad, beta_grad = q.grad, k.grad, v.grad, beta.grad
-#     q.grad = k.grad = v.grad = beta.grad = None
+    tri, tri_ht = chunk_delta_rule(
+        q.clone(),
+        k.clone(),
+        v.clone(),
+        beta.clone(),
+        scale=scale,
+        output_final_state=True,
+        initial_state=h0.clone(),
+        offsets=offsets,
+        head_first=False
+    )
+    ((tri * do).sum() + (tri_ht * dht).sum()).backward(retain_graph=True)
+    tri_dq, tri_dk, tri_dv, tri_dbeta, tri_dh0 = q.grad, k.grad, v.grad, beta.grad, h0.grad
+    q.grad = k.grad = v.grad = beta.grad = h0.grad = None
 
-#     o2, _ = fused_recurrent_delta_rule(q.clone(), k.clone(), v.clone(), beta.clone())
-#     o2.backward(do, retain_graph=True)
-#     q_grad2, k_grad2, v_grad2, beta_grad2 = q.grad, k.grad, v.grad, beta.grad
-#     q.grad = k.grad = v.grad = beta.grad = None
+    ref, ref_ht = fused_recurrent_delta_rule(
+        q.clone(),
+        k.clone(),
+        v.clone(),
+        beta.clone(),
+        scale=scale,
+        output_final_state=True,
+        initial_state=h0.clone(),
+        offsets=offsets,
+        head_first=False
+    )
+    ((ref * do).sum() + (ref_ht * dht).sum()).backward(retain_graph=True)
+    ref_dq, ref_dk, ref_dv, ref_dbeta, ref_dh0 = q.grad, k.grad, v.grad, beta.grad, h0.grad
 
-#     assert o.allclose(o2, rtol=0, atol=2e-5), f"Diff: {torch.abs(o - o2).max()}"
-#     assert q_grad.allclose(q_grad2, rtol=0, atol=2e-5), f"Diff: {torch.abs(q_grad - q_grad2).max()}"
-#     assert k_grad.allclose(k_grad2, rtol=0, atol=2e-5), f"Diff: {torch.abs(k_grad - k_grad2).max()}"
-#     assert v_grad.allclose(v_grad2, rtol=0, atol=2e-5), f"Diff: {torch.abs(v_grad - v_grad2).max()}"
-#     # FIXME: this gradient does not match when beta a vector. matches when a scalar.
-#     assert beta_grad.allclose(beta_grad2, rtol=0, atol=1e-3), f"Diff: {torch.abs(beta_grad - beta_grad2).max()}"
+    assert_close("  o", ref, tri, 0.005)
+    assert_close(" ht", ref_ht, tri_ht, 0.005)
+    assert_close(" dq", ref_dq, tri_dq, 0.007)
+    assert_close(" dk", ref_dk, tri_dk, 0.008)
+    assert_close(" dv", ref_dv, tri_dv, 0.007)
+    assert_close(" db", ref_dbeta, tri_dbeta, 0.007)
+    assert_close("dh0", ref_dh0, tri_dh0, 0.007)
 
+
+
+@pytest.mark.parametrize("B", [2])
+@pytest.mark.parametrize("T", [300])
+@pytest.mark.parametrize("H", [16])
+@pytest.mark.parametrize("D", [100, 200])
+@pytest.mark.parametrize("scale", [0.1])
+@pytest.mark.parametrize("dtype", [torch.bfloat16])
+def test_l2_in_kernel(
+    B: int,
+    T: int,
+    H: int,
+    D: int,
+    dtype: torch.dtype,
+    scale: float,
+):
+    q = torch.randn(B, H, T, D, dtype=dtype)
+    k = torch.randn(B, H, T, D, dtype=dtype)
+    v = torch.randn(B, H, T, D, dtype=dtype)
+    beta = torch.rand(B, H, T, dtype=dtype).sigmoid()
+    h0 = torch.randn(B, H, D, D, dtype=torch.float32)
+
+    q, k, v, beta, h0 = map(lambda x: x.to(device).requires_grad_(True), (q, k, v, beta, h0))
+    do = torch.rand_like(v)
+    dht = torch.rand_like(h0)
+
+    tri, tri_ht = chunk_delta_rule(
+        F.normalize(q.clone(), p=2, dim=-1).to(dtype),
+        F.normalize(k.clone(), p=2, dim=-1).to(dtype),
+        v.clone(),
+        beta.clone(),
+        scale=scale,
+        output_final_state=True,
+        initial_state=h0.clone(),
+        head_first=True
+    )
+    ((tri * do).sum() + (tri_ht * dht).sum()).backward(retain_graph=True)
+    tri_dq, tri_dk, tri_dv, tri_dbeta, tri_dh0 = q.grad, k.grad, v.grad, beta.grad, h0.grad
+    q.grad = k.grad = v.grad = beta.grad = h0.grad = None
+
+
+    ref, ref_ht = chunk_delta_rule(
+        q.clone(),
+        k.clone(),
+        v.clone(),
+        beta.clone(),
+        scale=scale,
+        output_final_state=True,
+        initial_state=h0.clone(),
+        head_first=True,
+        use_qk_l2norm_in_kernel=True
+    )
+    ((ref * do).sum() + (ref_ht * dht).sum()).backward(retain_graph=True)
+    ref_dq, ref_dk, ref_dv, ref_dbeta, ref_dh0 = q.grad, k.grad, v.grad, beta.grad, h0.grad
+    q.grad = k.grad = v.grad = beta.grad = h0.grad = None
+    assert_close("  o", ref, tri, 0.01)
+    assert_close(" ht", ref_ht, tri_ht, 0.01)
+    assert_close(" dq", ref_dq, tri_dq, 0.01)
+    assert_close(" dk", ref_dk, tri_dk, 0.01)
+    assert_close(" dv", ref_dv, tri_dv, 0.01)
+    assert_close(" db", ref_dbeta, tri_dbeta, 0.01)
+    assert_close("dh0", ref_dh0, tri_dh0, 0.01)
+
+    
+
+    tri, tri_ht = fused_recurrent_delta_rule(
+        F.normalize(q.clone().float(), p=2, dim=-1).to(dtype),
+        F.normalize(k.clone().float(), p=2, dim=-1).to(dtype),
+        v.clone(),
+        beta.clone(),
+        scale=scale,
+        output_final_state=True,
+        initial_state=h0.clone(),
+        head_first=True
+    )
+    ((tri * do).sum() + (tri_ht * dht).sum()).backward(retain_graph=True)
+    tri_dq, tri_dk, tri_dv, tri_dbeta, tri_dh0 = q.grad, k.grad, v.grad, beta.grad, h0.grad
+    q.grad = k.grad = v.grad = beta.grad = h0.grad = None
+
+
+    ref, ref_ht = fused_recurrent_delta_rule(
+        q.clone(),
+        k.clone(),
+        v.clone(),
+        beta.clone(),
+        scale=scale,
+        output_final_state=True,
+        initial_state=h0.clone(),
+        head_first=True,
+        use_qk_l2norm_in_kernel=True
+    )
+    ((ref * do).sum() + (ref_ht * dht).sum()).backward(retain_graph=True)
+    ref_dq, ref_dk, ref_dv, ref_dbeta, ref_dh0 = q.grad, k.grad, v.grad, beta.grad, h0.grad
+    q.grad = k.grad = v.grad = beta.grad = h0.grad = None
+
+    assert_close("  o", ref, tri, 0.002)
+    assert_close(" ht", ref_ht, tri_ht, 0.002)
+    assert_close(" dq", ref_dq, tri_dq, 0.002)
+    assert_close(" dk", ref_dk, tri_dk, 0.002)
+    assert_close(" dv", ref_dv, tri_dv, 0.002)
+    assert_close(" db", ref_dbeta, tri_dbeta, 0.002)
+    assert_close("dh0", ref_dh0, tri_dh0, 0.002)
+
+    
+
+    tri, tri_ht = fused_recurrent_delta_rule(
+        F.normalize(q.float().clone(), p=2, dim=-1).to(dtype),
+        F.normalize(k.float().clone(), p=2, dim=-1).to(dtype),
+        v.clone(),
+        beta.clone(),
+        scale=scale,
+        output_final_state=True,
+        initial_state=h0.clone(),
+        head_first=True
+    )
+    ((tri * do).sum() + (tri_ht * dht).sum()).backward(retain_graph=True)
+    tri_dq, tri_dk, tri_dv, tri_dbeta, tri_dh0 = q.grad, k.grad, v.grad, beta.grad, h0.grad
+    q.grad = k.grad = v.grad = beta.grad = h0.grad = None
+
+
+    ref, ref_ht = fused_recurrent_delta_rule(
+        q.clone(),
+        k.clone(),
+        v.clone(),
+        beta.clone(),
+        scale=scale,
+        output_final_state=True,
+        initial_state=h0.clone(),
+        head_first=True,
+        use_qk_l2norm_in_kernel=True
+    )
+    ((ref * do).sum() + (ref_ht * dht).sum()).backward(retain_graph=True)
+    ref_dq, ref_dk, ref_dv, ref_dbeta, ref_dh0 = q.grad, k.grad, v.grad, beta.grad, h0.grad
+    q.grad = k.grad = v.grad = beta.grad = h0.grad = None
+    assert_close("  o", ref, tri, 0.002)
+    assert_close(" ht", ref_ht, tri_ht, 0.002)
+    assert_close(" dq", ref_dq, tri_dq, 0.002)
+    assert_close(" dk", ref_dk, tri_dk, 0.002)
+    assert_close(" dv", ref_dv, tri_dv, 0.002)
+    assert_close(" db", ref_dbeta, tri_dbeta, 0.002)
+    assert_close("dh0", ref_dh0, tri_dh0, 0.002)

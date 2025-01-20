@@ -7,1022 +7,1456 @@ import torch
 import triton
 import triton.language as tl
 
-from fla.ops.utils import chunk_global_reversed_cumsum
-from fla.utils import contiguous, device_capacity, check_pytorch_version, device, detect_tf32
+from fla.ops.common.chunk_h import chunk_fwd_h
+from fla.ops.gla.chunk import (chunk_gla_bwd_dA, chunk_gla_bwd_dv,
+                               chunk_gla_fwd_o_gk)
+from fla.utils import (contiguous, device_capacity, set_torch_device,
+                       autocast_custom_bwd, autocast_custom_fwd)
 
+BK_LIST = [32, 64] if device_capacity else [16, 32]
+BV_LIST = [32, 64] if device_capacity else [16, 32]
 
+@triton.heuristics({
+    'USE_OFFSETS': lambda args: args['offsets'] is not None
+})
 @triton.autotune(
     configs=[
-        triton.Config({'BS': 16}, num_warps=2, num_stages=1),
-        triton.Config({'BS': 16}, num_warps=2, num_stages=2),
-        triton.Config({'BS': 16}, num_warps=4, num_stages=1),
-        triton.Config({'BS': 16}, num_warps=4, num_stages=2),
-        triton.Config({'BS': 16}, num_warps=8, num_stages=1),
-        triton.Config({'BS': 16}, num_warps=8, num_stages=2),
-        triton.Config({'BS': 32}, num_warps=2, num_stages=1),
-        triton.Config({'BS': 32}, num_warps=2, num_stages=2),
-        triton.Config({'BS': 32}, num_warps=4, num_stages=1),
-        triton.Config({'BS': 32}, num_warps=4, num_stages=2),
-        triton.Config({'BS': 32}, num_warps=8, num_stages=1),
-        triton.Config({'BS': 32}, num_warps=8, num_stages=2),
-        triton.Config({'BS': 64}, num_warps=2, num_stages=1),
-        triton.Config({'BS': 64}, num_warps=2, num_stages=2),
-        triton.Config({'BS': 64}, num_warps=4, num_stages=1),
-        triton.Config({'BS': 64}, num_warps=4, num_stages=2),
-        triton.Config({'BS': 64}, num_warps=8, num_stages=1),
-        triton.Config({'BS': 64}, num_warps=8, num_stages=2),
+        triton.Config({'BS': 16}, num_warps=2),
+        triton.Config({'BS': 16}, num_warps=4),
+        triton.Config({'BS': 16}, num_warps=8),
+        triton.Config({'BS': 32}, num_warps=2),
+        triton.Config({'BS': 32}, num_warps=4),
+        triton.Config({'BS': 32}, num_warps=8),
+        triton.Config({'BS': 64}, num_warps=2),
+        triton.Config({'BS': 64}, num_warps=4),
+        triton.Config({'BS': 64}, num_warps=8),
     ],
-    key=['S']
+    key=['S', 'BT']
 )
 @triton.jit
-def chunk_rwkv6_fwd_kernel_cum(
+def chunk_rwkv6_fwd_cumsum_kernel(
     s,
-    o,
-    o_minus_s,
-    s_s_h,
-    s_s_t,
-    s_s_d,
+    oi,
+    oe,
+    offsets,
+    indices,
     T: tl.constexpr,
+    H: tl.constexpr,
     S: tl.constexpr,
     BT: tl.constexpr,
     BS: tl.constexpr,
-    USE_TF32: tl.constexpr
+    HEAD_FIRST: tl.constexpr,
+    USE_OFFSETS: tl.constexpr
 ):
     i_s, i_t, i_bh = tl.program_id(0), tl.program_id(1), tl.program_id(2)
-    o_i = tl.arange(0, BT)
-    m_s = tl.where(o_i[:, None] >= o_i[None, :], 1., 0.)
+    i_b, i_h = i_bh // H, i_bh % H
+    if USE_OFFSETS:
+        i_n, i_t = tl.load(indices + i_t * 2).to(tl.int32), tl.load(indices + i_t * 2 + 1).to(tl.int32)
+        bos, eos = tl.load(offsets + i_n).to(tl.int32), tl.load(offsets + i_n + 1).to(tl.int32)
+        T = eos - bos
+    else:
+        bos, eos = i_b * T, i_b * T + T
 
-    p_s = tl.make_block_ptr(s + i_bh * s_s_h, (T, S), (s_s_t, s_s_d), (i_t * BT, i_s * BS), (BT, BS), (1, 0))
-    p_o = tl.make_block_ptr(o + i_bh * s_s_h, (T, S), (s_s_t, s_s_d), (i_t * BT, i_s * BS), (BT, BS), (1, 0))
-    p_o_minus_s = tl.make_block_ptr(o_minus_s + i_bh * s_s_h, (T, S), (s_s_t, s_s_d), (i_t * BT, i_s * BS), (BT, BS), (1, 0))
+    o_i = tl.arange(0, BT)
+    m_i = tl.where(o_i[:, None] >= o_i[None, :], 1., 0.)
+    m_e = tl.where(o_i[:, None] > o_i[None, :], 1., 0.)
+
+    if HEAD_FIRST:
+        p_s = tl.make_block_ptr(s + i_bh * T*S, (T, S), (S, 1), (i_t * BT, i_s * BS), (BT, BS), (1, 0))
+        p_oi = tl.make_block_ptr(oi + i_bh * T*S, (T, S), (S, 1), (i_t * BT, i_s * BS), (BT, BS), (1, 0))
+        p_oe = tl.make_block_ptr(oe + i_bh * T*S, (T, S), (S, 1), (i_t * BT, i_s * BS), (BT, BS), (1, 0))
+    else:
+        p_s = tl.make_block_ptr(s + (bos * H + i_h) * S, (T, S), (H*S, 1), (i_t * BT, i_s * BS), (BT, BS), (1, 0))
+        p_oi = tl.make_block_ptr(oi + (bos * H + i_h) * S, (T, S), (H*S, 1), (i_t * BT, i_s * BS), (BT, BS), (1, 0))
+        p_oe = tl.make_block_ptr(oe + (bos * H + i_h) * S, (T, S), (H*S, 1), (i_t * BT, i_s * BS), (BT, BS), (1, 0))
     # [BT, BS]
     b_s = tl.load(p_s, boundary_check=(0, 1)).to(tl.float32)
-    b_o = tl.dot(m_s, b_s, allow_tf32=USE_TF32)
-    tl.store(p_o, b_o.to(p_o.dtype.element_ty), boundary_check=(0, 1))
-    tl.store(p_o_minus_s, (b_o - b_s).to(p_o_minus_s.dtype.element_ty), boundary_check=(0, 1))
+    b_oi = tl.dot(m_i, b_s, allow_tf32=False)
+    b_oe = tl.dot(m_e, b_s, allow_tf32=False)
+    tl.store(p_oi, b_oi.to(p_oi.dtype.element_ty), boundary_check=(0, 1))
+    tl.store(p_oe, b_oe.to(p_oe.dtype.element_ty), boundary_check=(0, 1))
 
 
+def chunk_rwkv6_fwd_cumsum(
+    g: torch.Tensor,
+    chunk_size: int,
+    offsets: Optional[torch.Tensor] = None,
+    indices: Optional[torch.Tensor] = None,
+    head_first: bool = True
+) -> torch.Tensor:
+    if head_first:
+        B, H, T, S = g.shape
+    else:
+        B, T, H, S = g.shape
+    BT = chunk_size
+    NT = triton.cdiv(T, BT) if offsets is None else len(indices)
 
-@triton.jit
-def post_process_grad(
-    q,
-    k,
-    v,
-    u,
-    do,
-    dk,
-    dq,
-    du,
-    scale: tl.constexpr,
-    s_k_h,
-    s_k_t,
-    s_k_d,
-    s_v_h,
-    s_v_t,
-    s_v_d,
-    H: tl.constexpr,
-    T: tl.constexpr,
-    BT: tl.constexpr,
-    K: tl.constexpr,
-    V: tl.constexpr,
-    BK: tl.constexpr,
-    BV: tl.constexpr,
-    U_2D: tl.constexpr,
-    TLTYPE: tl.constexpr
-):
-    i_t, i_bh = tl.program_id(0), tl.program_id(1)
-    i_u = i_bh if not U_2D else i_bh % H
-    # Note that BK = tl.next_power_of_2(K), BV = tl.next_power_of_2(V)
-    p_q = tl.make_block_ptr(q + i_bh * s_k_h, (T, K), (s_k_t, s_k_d), (i_t * BT, 0), (BT, BK), (1, 0))
-    p_dq = tl.make_block_ptr(dq + i_bh * s_k_h, (T, K), (s_k_t, s_k_d), (i_t * BT, 0), (BT, BK), (1, 0))
-    p_k = tl.make_block_ptr(k + i_bh * s_k_h, (T, K), (s_k_t, s_k_d), (i_t * BT, 0), (BT, BK), (1, 0))
-    p_dk = tl.make_block_ptr(dk + i_bh * s_k_h, (T, K), (s_k_t, s_k_d), (i_t * BT, 0), (BT, BK), (1, 0))
-    p_du = tl.make_block_ptr(du + i_bh * s_k_h, (T, K), (s_k_t, s_k_d), (i_t * BT, 0), (BT, BK), (1, 0))
-    p_v = tl.make_block_ptr(v + i_bh * s_v_h, (T, V), (s_v_t, s_v_d), (i_t * BT, 0), (BT, BV), (1, 0))
-    p_do = tl.make_block_ptr(do + i_bh * s_v_h, (T, V), (s_v_t, s_v_d), (i_t * BT, 0), (BT, BV), (1, 0))
-    p_u = tl.make_block_ptr(u + i_u * K, (K,), (1,), (0,), (BK,), (0,))
-
-    b_q = (tl.load(p_q, boundary_check=(0, 1)) * scale).to(TLTYPE)
-    b_k = (tl.load(p_k, boundary_check=(0, 1)) * scale).to(TLTYPE)
-    b_v = (tl.load(p_v, boundary_check=(0, 1)) * scale).to(TLTYPE)
-    b_do = tl.load(p_do, boundary_check=(0, 1)).to(TLTYPE)
-    b_u = tl.load(p_u, boundary_check=(0,)).to(TLTYPE)
-
-    b_vdo = tl.sum(b_v * b_do, axis=1)
-    b_du = b_vdo[:, None] * b_k * b_q
-    b_dq = b_vdo[:, None] * b_k * b_u[None, :] * scale
-    b_dk = b_vdo[:, None] * b_q * b_u[None, :] * scale
-
-    b_dq += tl.load(p_dq, boundary_check=(0, 1))
-    tl.store(p_dq, b_dq.to(p_dq.dtype.element_ty), boundary_check=(0, 1))
-
-    b_dk += tl.load(p_dk, boundary_check=(0, 1))
-    tl.store(p_dk, b_dk.to(p_dk.dtype.element_ty), boundary_check=(0, 1))
-
-    tl.store(p_du, b_du.to(p_du.dtype.element_ty), boundary_check=(0, 1))
+    gi, ge = torch.empty_like(g, dtype=torch.float), torch.empty_like(g, dtype=torch.float)
+    def grid(meta): return (triton.cdiv(meta['S'], meta['BS']), NT, B * H)
+    # keep cummulative normalizer in fp32
+    chunk_rwkv6_fwd_cumsum_kernel[grid](
+        g,
+        gi,
+        ge,
+        offsets,
+        indices,
+        T=T,
+        H=H,
+        S=S,
+        BT=BT,
+        HEAD_FIRST=head_first
+    )
+    return gi, ge
 
 
+@triton.heuristics({
+    'USE_OFFSETS': lambda args: args['offsets'] is not None
+})
 @triton.autotune(
     configs=[
-        triton.Config({}, num_warps=2, num_stages=1),
-        triton.Config({}, num_warps=4, num_stages=1),
-        triton.Config({}, num_warps=8, num_stages=1),
-        triton.Config({}, num_warps=2, num_stages=2),
-        triton.Config({}, num_warps=4, num_stages=2),
-        triton.Config({}, num_warps=8, num_stages=2),
+        triton.Config({'BK': BK}, num_warps=num_warps, num_stages=num_stages)
+        for BK in [32, 64]
+        for num_warps in [1, 2, 4, 8]
+        for num_stages in [2, 3, 4]
     ],
-    key=['BK']
+    key=["BC"]
 )
 @triton.jit
-def chunk_rwkv6_fwd_kernel_h(
-    k,
-    v,
-    g,
-    h,
-    h0,
-    ht,
-    s_k_h,
-    s_k_t,
-    s_k_d,
-    s_v_h,
-    s_v_t,
-    s_v_d,
-    s_h_h,
-    s_h_t,
-    s_h_d,
-    scale: tl.constexpr,
-    T: tl.constexpr,
-    K: tl.constexpr,
-    V: tl.constexpr,
-    BT: tl.constexpr,
-    BK: tl.constexpr,
-    BV: tl.constexpr,
-    NT: tl.constexpr,
-    USE_INITIAL_STATE: tl.constexpr,
-    STORE_FINAL_STATE: tl.constexpr,
-    TLTYPE: tl.constexpr
-):
-    i_v, i_k, i_bh = tl.program_id(0), tl.program_id(1), tl.program_id(2)
-    b_h = tl.zeros([BK, BV], dtype=TLTYPE)
-
-    if USE_INITIAL_STATE:
-        p_h0 = tl.make_block_ptr(h0 + i_bh * K * V, (K, V), (V, 1), (i_k * BK, i_v * BV), (BK, BV), (1, 0))
-        b_h += tl.load(p_h0, boundary_check=(0, 1))
-
-    for i_t in range(NT):
-        o_t = min(i_t * BT + BT, T)
-
-        p_k = tl.make_block_ptr(k + i_bh * s_k_h, (K, T), (s_k_d, s_k_t), (i_k * BK, i_t * BT), (BK, BT), (0, 1))
-        p_v = tl.make_block_ptr(v + i_bh * s_v_h, (T, V), (s_v_t, s_v_d), (i_t * BT, i_v * BV), (BT, BV), (1, 0))
-        p_h = tl.make_block_ptr(h + i_bh * s_h_h + i_t * K * V, (K, V), (s_h_t, s_h_d), (i_k * BK, i_v * BV), (BK, BV), (1, 0))
-        p_g = tl.make_block_ptr(g + i_bh * s_k_h, (K, T), (s_k_d, s_k_t), (i_k * BK, i_t * BT), (BK, BT), (0, 1))
-        p_gn = tl.make_block_ptr(g + i_bh * s_k_h, (T * K,), (s_k_d,), ((o_t - 1) * K + i_k * BK,), (BK,), (0,))
-
-        tl.store(p_h, b_h.to(p_h.dtype.element_ty), boundary_check=(0, 1))
-        # [BK, BT]
-        b_k = (tl.load(p_k, boundary_check=(0, 1)) * scale).to(TLTYPE)
-        # [BT, BV]
-        b_v = (tl.load(p_v, boundary_check=(0, 1)) * scale).to(TLTYPE)
-        # [BK, BT]
-        b_g = tl.load(p_g, boundary_check=(0, 1))
-        if i_t < NT - 1:
-            # [BK,]
-            b_gn = tl.load(p_gn, boundary_check=(0,)).to(tl.float32)
-        else:
-            b_gn = tl.min(b_g, axis=1).to(tl.float32)
-        b_h *= tl.exp(b_gn)[:, None].to(TLTYPE)
-        b_k = b_k * tl.exp(b_gn[:, None] - b_g).to(TLTYPE)
-        b_h += tl.dot(b_k, b_v, allow_tf32=False).to(TLTYPE)  # must be false
-
-    if STORE_FINAL_STATE:
-        p_h = tl.make_block_ptr(ht + i_bh * K * V, (K, V), (V, 1), (i_k * BK, i_v * BV), (BK, BV), (1, 0))
-        tl.store(p_h, b_h.to(p_h.dtype.element_ty), boundary_check=(0, 1))
-
-
-def generate_configs(group_sizes, num_warps_options, num_stages_options):
-    configs = []
-    for group_size in group_sizes:
-        for num_warps in num_warps_options:
-            for num_stages in num_stages_options:
-                configs.append(triton.Config({'GROUP_SIZE': group_size}, num_warps=num_warps, num_stages=num_stages))
-    return configs
-
-
-group_sizes = [64, 128, 256]
-num_warps_options = [2, 4, 8]
-num_stages_options = [1, 2]
-configs = generate_configs(group_sizes, num_warps_options, num_stages_options)
-
-
-@triton.autotune(
-    configs=configs,
-    key=['BK']
-)
-@triton.jit
-def chunk_rwkv6_fwd_kernel_intra(
+def chunk_rwkv6_fwd_A_kernel_intra_sub_inter(
     q,
     k,
-    g,
-    gs,
-    u,
+    gi,  # cumulative decay inclusive
+    ge,  # cumulative decay exclusive
     A,
-    s_k_h,
-    s_k_t,
-    s_k_d,
-    scale: tl.constexpr,
-    H: tl.constexpr,
+    offsets,
+    indices,
+    scale,
     T: tl.constexpr,
+    H: tl.constexpr,
     K: tl.constexpr,
     BT: tl.constexpr,
     BC: tl.constexpr,
     BK: tl.constexpr,
     NC: tl.constexpr,
-    DK: tl.constexpr,
-    GROUP_SIZE: tl.constexpr,
-    U_2D: tl.constexpr,
-    TLTYPE: tl.constexpr,
-    USE_TF32: tl.constexpr
+    USE_OFFSETS: tl.constexpr,
+    HEAD_FIRST: tl.constexpr
 ):
-    i_k, i_c, i_bh = tl.program_id(0), tl.program_id(1), tl.program_id(2)
-    i_u = i_bh if not U_2D else i_bh % H
-    # Group ID and position within group
-    group_id = i_c // GROUP_SIZE
-    local_id = i_c % GROUP_SIZE
+    i_t, i_c, i_bh = tl.program_id(0), tl.program_id(1), tl.program_id(2)
+    i_b, i_h = i_bh // H, i_bh % H
+    i_i, i_j = i_c // NC, i_c % NC
+    if USE_OFFSETS:
+        i_n, i_t = tl.load(indices + i_t * 2).to(tl.int32), tl.load(indices + i_t * 2 + 1).to(tl.int32)
+        bos, eos = tl.load(offsets + i_n).to(tl.int32), tl.load(offsets + i_n + 1).to(tl.int32)
+        T = eos - bos
+    else:
+        bos, eos = i_b * T, i_b * T + T
 
-    # Calculate i_t, i_i, i_j using group-based ordering
-    group_start = group_id * GROUP_SIZE
-    i_c_ordered = group_start + local_id
+    if i_t * BT + i_i * BC >= T:
+        return
+    if i_i <= i_j:
+        return
 
-    i_t = i_c_ordered // (NC * NC)
-    i_i = (i_c_ordered % (NC * NC)) // NC
-    i_j = i_c_ordered % NC
+    m_i = i_t * BT + i_i * BC + tl.arange(0, BC) < T
 
-    n_bh = tl.num_programs(2)
+    b_A = tl.zeros([BC, BC], dtype=tl.float32)
+    for i_k in range(tl.cdiv(K, BK)):
+        o_k = i_k * BK + tl.arange(0, BK)
+        m_k = o_k < K
 
-    o_k = i_k * BK + tl.arange(0, BK)
-    o_q = i_t * BT + i_i * BC
-    m_k = o_k < K
+        if HEAD_FIRST:
+            p_q = tl.make_block_ptr(q + i_bh * T*K, (T, K), (K, 1), (i_t * BT + i_i * BC, i_k * BK), (BC, BK), (1, 0))
+            p_gq = tl.make_block_ptr(ge + i_bh * T*K, (T, K), (K, 1), (i_t * BT + i_i * BC, i_k * BK), (BC, BK), (1, 0))
+            p_k = tl.make_block_ptr(k + i_bh * T*K, (K, T), (1, K), (i_k * BK, i_t * BT + i_j * BC), (BK, BC), (0, 1))
+            p_gk = tl.make_block_ptr(gi + i_bh * T*K, (K, T), (1, K), (i_k * BK, i_t * BT + i_j * BC), (BK, BC), (0, 1))
+            p_gn = tl.max_contiguous(tl.multiple_of(gi + (i_bh * T + i_t * BT + i_i * BC - 1) * K + o_k, BK), BK)
+        else:
+            p_q = tl.make_block_ptr(q + (bos*H+i_h)*K, (T, K), (H*K, 1), (i_t * BT + i_i * BC, i_k * BK), (BC, BK), (1, 0))
+            p_gq = tl.make_block_ptr(ge + (bos*H+i_h)*K, (T, K), (H*K, 1), (i_t * BT + i_i * BC, i_k * BK), (BC, BK), (1, 0))
+            p_k = tl.make_block_ptr(k + (bos*H+i_h)*K, (K, T), (1, H*K), (i_k * BK, i_t * BT + i_j * BC), (BK, BC), (0, 1))
+            p_gk = tl.make_block_ptr(gi + (bos*H+i_h)*K, (K, T), (1, H*K), (i_k * BK, i_t * BT + i_j * BC), (BK, BC), (0, 1))
+            p_gn = tl.max_contiguous(tl.multiple_of(gi + (bos + i_t * BT + i_i * BC - 1) * H*K + i_h * K + o_k, BK), BK)
 
-    if i_i > i_j:
-        p_q = tl.make_block_ptr(q + i_bh * s_k_h, (T, K), (s_k_t, s_k_d), (i_t * BT + i_i * BC, i_k * BK), (BC, BK), (1, 0))
-        p_k = tl.make_block_ptr(k + i_bh * s_k_h, (K, T), (s_k_d, s_k_t), (i_k * BK, i_t * BT + i_j * BC), (BK, BC), (0, 1))
-        p_gs = tl.make_block_ptr(gs + i_bh * s_k_h, (T, K), (s_k_t, s_k_d), (i_t * BT + i_i * BC, i_k * BK), (BC, BK), (1, 0))
-        p_gk = tl.make_block_ptr(g + i_bh * s_k_h, (K, T), (s_k_d, s_k_t), (i_k * BK, i_t * BT + i_j * BC), (BK, BC), (0, 1))
-        p_A = tl.make_block_ptr(A + (i_k * n_bh + i_bh) * T * BT, (T, BT), (BT, 1),
-                                (i_t * BT + i_i * BC, i_j * BC), (BC, BC), (1, 0))
         # [BK,]
-        b_gn = tl.load(g + i_bh * T * K + (o_q - 1) * K + o_k, mask=(m_k & (i_i > 0) & (o_q <= T)), other=0)
+        b_gn = tl.load(p_gn, mask=m_k, other=0)
         # [BC, BK]
-        b_q = tl.load(p_q, boundary_check=(0, 1)) * scale
-        b_gs = tl.load(p_gs, boundary_check=(0, 1))
-        b_qg = (b_q * tl.exp((b_gs - b_gn[None, :]))).to(b_q.dtype)
+        b_q = tl.load(p_q, boundary_check=(0, 1))
+        b_gq = tl.where(m_i[:, None] & m_k, tl.load(p_gq, boundary_check=(0, 1)), float('-inf'))
+        b_qg = b_q * tl.exp(b_gq - b_gn[None, :]) * scale
         # [BK, BC]
-        b_k = tl.load(p_k, boundary_check=(0, 1)) * scale
+        b_k = tl.load(p_k, boundary_check=(0, 1))
         b_gk = tl.load(p_gk, boundary_check=(0, 1))
-        b_kg = (b_k * tl.exp((b_gn[:, None] - b_gk))).to(b_k.dtype)
-        # [BC, BC]
-        b_A = tl.dot(b_qg, b_kg, allow_tf32=USE_TF32)
-        tl.store(p_A, b_A.to(A.dtype.element_ty), boundary_check=(0, 1))
-    elif i_i == i_j:
-        p_q = tl.make_block_ptr(q + i_bh * s_k_h, (T, K), (s_k_t, s_k_d), (i_t * BT + i_i * BC, i_k * BK), (BC, BK), (1, 0))
-        p_gs = tl.make_block_ptr(gs + i_bh * s_k_h, (T, K), (s_k_t, s_k_d), (i_t * BT + i_i * BC, i_k * BK), (BC, BK), (1, 0))
-        p_k = tl.make_block_ptr(k + i_bh * s_k_h, (T * K,), (s_k_d,), ((i_t * BT + i_j * BC) * K + i_k * BK,), (BK,), (0,))
-        p_q_u = tl.make_block_ptr(q + i_bh * s_k_h, (T * K,), (s_k_d,), ((i_t * BT + i_j * BC) * K + i_k * BK,), (BK,), (0,))
+        b_kg = b_k * tl.exp(b_gn[:, None] - b_gk)
+        # [BC, BC] using tf32 to improve precision here.
+        b_A += tl.dot(b_qg, b_kg)
 
-        # [BC, BK]
-        b_q = tl.load(p_q, boundary_check=(0, 1)) * scale
-        b_gs = tl.load(p_gs, boundary_check=(0, 1)).to(tl.float32)
-        o_i = tl.arange(0, BC)
-        o_g = i_bh * T * K + (i_t * BT + i_j * BC) * K + o_k
-        o_A = (i_bh + i_k * n_bh) * T * BT + (i_t * BT + i_i * BC + tl.arange(0, BC)) * BT + i_j * BC
-        m_A = (i_t * BT + i_i * BC + tl.arange(0, BC)) < T
-        p_u = tl.make_block_ptr(u + i_u * DK, (DK,), (1,), (i_k * BK), (BK,), (0,))
-        b_u = tl.load(p_u, boundary_check=(0,))
-        for j in range(BC):
-            # [BK,]
-            b_k = tl.load(p_k, boundary_check=(0,)) * scale
-            b_gk = tl.load(g + o_g + j * K, mask=(m_k & ((i_t * BT + i_j * BC + j) < T)), other=0).to(tl.float32)
-            # [BC,]
-            b_A = tl.sum(b_q.to(TLTYPE) * b_k[None, :] * (tl.exp(b_gs - b_gk[None, :]).to(TLTYPE)), 1)
-            b_A = tl.where(o_i > j, b_A, 0.)
-            # self
-            b_q_u = tl.load(p_q_u, boundary_check=(0,)) * scale
-            b_A_u = tl.sum(b_q_u * b_k * b_u, axis=0)
-            m_u = tl.arange(0, BC) == j
-            b_A = tl.where(m_u, b_A_u, b_A)
-            tl.store(A + o_A + j, b_A.to(A.dtype.element_ty), mask=m_A)
-            p_k = tl.advance(p_k, (K,))
-            p_q_u = tl.advance(p_q_u, (K,))
+    if HEAD_FIRST:
+        p_A = tl.make_block_ptr(A + i_bh*T*BT, (T, BT), (BT, 1), (i_t * BT + i_i * BC, i_j * BC), (BC, BC), (1, 0))
+    else:
+        p_A = tl.make_block_ptr(A + (bos*H + i_h)*BT, (T, BT), (H*BT, 1), (i_t * BT + i_i * BC, i_j * BC), (BC, BC), (1, 0))
+    tl.store(p_A, b_A.to(A.dtype.element_ty), boundary_check=(0, 1))
 
 
+@triton.heuristics({
+    'USE_OFFSETS': lambda args: args['offsets'] is not None
+})
 @triton.autotune(
     configs=[
-        triton.Config({}, num_warps=2, num_stages=1),
-        triton.Config({}, num_warps=4, num_stages=1),
-        triton.Config({}, num_warps=8, num_stages=1),
-        triton.Config({}, num_warps=2, num_stages=2),
-        triton.Config({}, num_warps=4, num_stages=2),
-        triton.Config({}, num_warps=8, num_stages=2),
+        triton.Config({}, num_warps=1),
+        triton.Config({}, num_warps=2),
+        triton.Config({}, num_warps=4),
+        triton.Config({}, num_warps=8),
     ],
-    key=['BK']
+    key=["BK", "BT"]
 )
 @triton.jit
-def chunk_rwkv6_fwd_kernel_inter(
+def chunk_rwkv6_fwd_A_kernel_intra_sub_intra(
     q,
-    v,
-    gs,
-    h,
-    o,
+    k,
+    gi,
+    ge,
+    u,
     A,
-    s_k_h,
-    s_k_t,
-    s_k_d,
-    s_v_h,
-    s_v_t,
-    s_v_d,
-    s_h_h,
-    s_h_t,
-    s_h_d,
-    scale: tl.constexpr,
+    offsets,
+    indices,
+    scale,
     T: tl.constexpr,
+    H: tl.constexpr,
     K: tl.constexpr,
-    V: tl.constexpr,
     BT: tl.constexpr,
+    BC: tl.constexpr,
     BK: tl.constexpr,
-    BV: tl.constexpr,
-    TLTYPE: tl.constexpr,
-    USE_TF32: tl.constexpr
+    USE_OFFSETS: tl.constexpr,
+    HEAD_FIRST: tl.constexpr
 ):
-    i_v, i_t, i_bh = tl.program_id(0), tl.program_id(1), tl.program_id(2)
+    i_t, i_i, i_bh = tl.program_id(0), tl.program_id(1), tl.program_id(2)
+    i_b, i_h = i_bh // H, i_bh % H
+    i_j = i_i
+    if USE_OFFSETS:
+        i_n, i_t = tl.load(indices + i_t * 2).to(tl.int32), tl.load(indices + i_t * 2 + 1).to(tl.int32)
+        bos, eos = tl.load(offsets + i_n).to(tl.int32), tl.load(offsets + i_n + 1).to(tl.int32)
+        T = eos - bos
+    else:
+        bos, eos = i_b * T, i_b * T + T
 
-    b_o = tl.zeros([BT, BV], dtype=TLTYPE)
-    for i_k in range(tl.cdiv(K, BK)):
-        p_q = tl.make_block_ptr(q + i_bh * s_k_h, (T, K), (s_k_t, s_k_d), (i_t * BT, i_k * BK), (BT, BK), (1, 0))
-        p_gs = tl.make_block_ptr(gs + i_bh * s_k_h, (T, K), (s_k_t, s_k_d), (i_t * BT, i_k * BK), (BT, BK), (1, 0))
-        p_h = tl.make_block_ptr(h + i_bh * s_h_h + i_t * K * V, (K, V), (s_h_t, s_h_d), (i_k * BK, i_v * BV), (BK, BV), (1, 0))
+    if i_t * BT + i_i * BC >= T:
+        return
 
-        # [BT, BK]
-        b_q = tl.load(p_q, boundary_check=(0, 1)).to(TLTYPE)
-        b_q = (b_q * scale).to(b_q.dtype)
-        # [BT, BK]
-        b_gs = tl.load(p_gs, boundary_check=(0, 1)).to(tl.float32)
-        # [BT, BK]
-        b_qg = (b_q * tl.exp(b_gs)).to(b_q.dtype)
-        # [BK, BV]
-        b_h = tl.load(p_h, boundary_check=(0, 1)).to(TLTYPE)
-        # works but dkw, owing to divine benevolence
-        # [BT, BV]
-        # if i_k >= 0:
-        b_o += tl.dot(b_qg, b_h, allow_tf32=USE_TF32).to(TLTYPE)
-    p_v = tl.make_block_ptr(v + i_bh * s_v_h, (T, V), (s_v_t, s_v_d), (i_t * BT, i_v * BV), (BT, BV), (1, 0))
-    p_o = tl.make_block_ptr(o + i_bh * s_v_h, (T, V), (s_v_t, s_v_d), (i_t * BT, i_v * BV), (BT, BV), (1, 0))
-    p_A = tl.make_block_ptr(A + i_bh * T * BT, (T, BT), (BT, 1), (i_t * BT, 0), (BT, BT), (1, 0))
-    # [BT, BV]
-    b_v = (tl.load(p_v, boundary_check=(0, 1)) * scale).to(TLTYPE)
-    # [BT, BT]
-    b_A = tl.load(p_A, boundary_check=(0, 1)).to(TLTYPE)
-    b_o += tl.dot(b_A, b_v, allow_tf32=USE_TF32).to(TLTYPE)
-    tl.store(p_o, b_o.to(p_o.dtype.element_ty), boundary_check=(0, 1))
+    o_i = tl.arange(0, BC)
+    o_k = tl.arange(0, BK)
+    m_k = o_k < K
+    m_A = (i_t * BT + i_i * BC + tl.arange(0, BC)) < T
+    if HEAD_FIRST:
+        o_A = i_bh * T*BT + (i_t * BT + i_i * BC + tl.arange(0, BC)) * BT + i_j * BC
+        p_q = tl.make_block_ptr(q + i_bh * T*K, (T, K), (K, 1), (i_t * BT + i_i * BC, 0), (BC, BK), (1, 0))
+        p_g = tl.make_block_ptr(ge + i_bh * T*K, (T, K), (K, 1), (i_t * BT + i_i * BC, 0), (BC, BK), (1, 0))
+        p_qj = tl.max_contiguous(tl.multiple_of(q + (i_bh * T + i_t * BT + i_j * BC) * K + o_k, BK), BK)
+        p_kj = tl.max_contiguous(tl.multiple_of(k + (i_bh * T + i_t * BT + i_j * BC) * K + o_k, BK), BK)
+        p_gk = tl.max_contiguous(tl.multiple_of(gi + (i_bh * T + i_t * BT + i_j * BC) * K + o_k, BK), BK)
+    else:
+        o_A = (bos + i_t * BT + i_i * BC + tl.arange(0, BC)) * H*BT + i_h * BT + i_j * BC
+        p_q = tl.make_block_ptr(q + (bos * H + i_h) * K, (T, K), (H*K, 1), (i_t * BT + i_i * BC, 0), (BC, BK), (1, 0))
+        p_g = tl.make_block_ptr(ge + (bos * H + i_h) * K, (T, K), (H*K, 1), (i_t * BT + i_i * BC, 0), (BC, BK), (1, 0))
+        p_qj = tl.max_contiguous(tl.multiple_of(q + (bos + i_t * BT + i_j * BC) * H*K + i_h * K + o_k, BK), BK)
+        p_kj = tl.max_contiguous(tl.multiple_of(k + (bos + i_t * BT + i_j * BC) * H*K + i_h * K + o_k, BK), BK)
+        p_gk = tl.max_contiguous(tl.multiple_of(gi + (bos + i_t * BT + i_j * BC) * H*K + i_h * K + o_k, BK), BK)
+
+    b_q = tl.load(p_q, boundary_check=(0, 1))
+    b_g = tl.load(p_g, boundary_check=(0, 1))
+
+    p_u = tl.make_block_ptr(u + i_h * K, (K,), (1,), (0,), (BK,), (0,))
+    b_u = tl.load(p_u, boundary_check=(0,))
+    for j in range(0, min(BC, T - i_t * BT - i_i * BC)):
+        b_qj = tl.load(p_qj, mask=m_k, other=0).to(tl.float32)
+        b_kj = tl.load(p_kj, mask=m_k, other=0).to(tl.float32)
+        b_gk = tl.load(p_gk, mask=m_k, other=0).to(tl.float32)
+        b_A = tl.sum(b_q * b_kj[None, :] * tl.exp(b_g - b_gk[None, :]), 1)
+        b_A = tl.where(o_i > j, b_A * scale, 0.)
+        b_A = tl.where(o_i != j, b_A, tl.sum(b_qj * b_kj * b_u * scale))
+        tl.store(A + o_A + j, b_A, mask=m_A)
+        p_qj += K if HEAD_FIRST else H*K
+        p_kj += K if HEAD_FIRST else H*K
+        p_gk += K if HEAD_FIRST else H*K
 
 
+@triton.heuristics({
+    'USE_OFFSETS': lambda args: args['offsets'] is not None
+})
 @triton.autotune(
     configs=[
-        triton.Config({}, num_warps=2, num_stages=1),
-        triton.Config({}, num_warps=4, num_stages=1),
-        triton.Config({}, num_warps=8, num_stages=1),
+        triton.Config({}, num_warps=1),
+        triton.Config({}, num_warps=2),
+        triton.Config({}, num_warps=4),
+        triton.Config({}, num_warps=8),
     ],
-    key=['BK']
+    key=["BC", "BK"]
+)
+@triton.jit
+def chunk_rwkv6_fwd_A_kernel_intra_sub_intra_split(
+    q,
+    k,
+    gi,
+    ge,
+    u,
+    A,
+    offsets,
+    indices,
+    scale,
+    B: tl.constexpr,
+    T: tl.constexpr,
+    H: tl.constexpr,
+    K: tl.constexpr,
+    BT: tl.constexpr,
+    BC: tl.constexpr,
+    BK: tl.constexpr,
+    NC: tl.constexpr,
+    USE_OFFSETS: tl.constexpr,
+    HEAD_FIRST: tl.constexpr
+):
+    i_k, i_tc, i_bh = tl.program_id(0), tl.program_id(1), tl.program_id(2)
+    i_b, i_h = i_bh // H, i_bh % H
+    i_t, i_i = i_tc // NC, i_tc % NC
+    i_j = i_i
+    if USE_OFFSETS:
+        i_n, i_t = tl.load(indices + i_t * 2).to(tl.int32), tl.load(indices + i_t * 2 + 1).to(tl.int32)
+        bos, eos = tl.load(offsets + i_n).to(tl.int32), tl.load(offsets + i_n + 1).to(tl.int32)
+        all = T
+        T = eos - bos
+    else:
+        bos, eos = i_b * T, i_b * T + T
+        all = B * T
+
+    if i_t * BT + i_i * BC >= T:
+        return
+
+    o_i = tl.arange(0, BC)
+    o_k = i_k * BK + tl.arange(0, BK)
+    m_k = o_k < K
+    m_A = (i_t * BT + i_i * BC + tl.arange(0, BC)) < T
+
+    if HEAD_FIRST:
+        o_A = (i_k * B*H + i_bh) * T * BC + (i_t * BT + i_i * BC + tl.arange(0, BC)) * BC
+        p_q = tl.make_block_ptr(q + i_bh * T*K, (T, K), (K, 1), (i_t * BT + i_i * BC, i_k * BK), (BC, BK), (1, 0))
+        p_g = tl.make_block_ptr(ge + i_bh * T*K, (T, K), (K, 1), (i_t * BT + i_i * BC, i_k * BK), (BC, BK), (1, 0))
+        p_qj = tl.max_contiguous(tl.multiple_of(q + (i_bh * T + i_t * BT + i_j * BC) * K + o_k, BK), BK)
+        p_kj = tl.max_contiguous(tl.multiple_of(k + (i_bh * T + i_t * BT + i_j * BC) * K + o_k, BK), BK)
+        p_gk = tl.max_contiguous(tl.multiple_of(gi + (i_bh * T + i_t * BT + i_j * BC) * K + o_k, BK), BK)
+    else:
+        o_A = (i_k * all + bos + i_t * BT + i_i * BC + tl.arange(0, BC)) * H*BC + i_h * BC
+        p_q = tl.make_block_ptr(q + (bos * H + i_h) * K, (T, K), (H*K, 1), (i_t * BT + i_i * BC, i_k * BK), (BC, BK), (1, 0))
+        p_g = tl.make_block_ptr(ge + (bos * H + i_h) * K, (T, K), (H*K, 1), (i_t * BT + i_i * BC, i_k * BK), (BC, BK), (1, 0))
+        p_qj = tl.max_contiguous(tl.multiple_of(q + (bos + i_t * BT + i_j * BC) * H*K + i_h * K + o_k, BK), BK)
+        p_kj = tl.max_contiguous(tl.multiple_of(k + (bos + i_t * BT + i_j * BC) * H*K + i_h * K + o_k, BK), BK)
+        p_gk = tl.max_contiguous(tl.multiple_of(gi + (bos + i_t * BT + i_j * BC) * H*K + i_h * K + o_k, BK), BK)
+
+    b_q = tl.load(p_q, boundary_check=(0, 1))
+    b_g = tl.load(p_g, boundary_check=(0, 1))
+
+    p_u = tl.make_block_ptr(u + i_h * K, (K,), (1,), (i_k * BK), (BK,), (0,))
+    b_u = tl.load(p_u, boundary_check=(0,))
+    for j in range(0, min(BC, T - i_t * BT - i_i * BC)):
+        b_qj = tl.load(p_qj, mask=m_k, other=0).to(tl.float32)
+        b_kj = tl.load(p_kj, mask=m_k, other=0).to(tl.float32)
+        b_gk = tl.load(p_gk, mask=m_k, other=0).to(tl.float32)
+        b_A = tl.sum(b_q * b_kj[None, :] * tl.exp(b_g - b_gk[None, :]), 1)
+        b_A = tl.where(o_i > j, b_A * scale, 0.)
+        b_A = tl.where(o_i != j, b_A, tl.sum(b_qj * b_kj * b_u * scale))
+        tl.store(A + o_A + j, b_A, mask=m_A)
+        p_qj += K if HEAD_FIRST else H*K
+        p_kj += K if HEAD_FIRST else H*K
+        p_gk += K if HEAD_FIRST else H*K
+
+
+@triton.heuristics({
+    'USE_OFFSETS': lambda args: args['offsets'] is not None
+})
+@triton.autotune(
+    configs=[
+        triton.Config({}, num_warps=1),
+        triton.Config({}, num_warps=2),
+        triton.Config({}, num_warps=4),
+        triton.Config({}, num_warps=8),
+    ],
+    key=["BC"]
+)
+@triton.jit
+def chunk_rwkv6_fwd_A_kernel_intra_sub_intra_merge(
+    A,
+    A2,
+    offsets,
+    indices,
+    B: tl.constexpr,
+    T: tl.constexpr,
+    H: tl.constexpr,
+    BT: tl.constexpr,
+    BC: tl.constexpr,
+    NK: tl.constexpr,
+    USE_OFFSETS: tl.constexpr,
+    HEAD_FIRST: tl.constexpr
+):
+    i_t, i_c, i_bh = tl.program_id(0), tl.program_id(1), tl.program_id(2)
+    i_b, i_h = i_bh // H, i_bh % H
+    if USE_OFFSETS:
+        i_n, i_t = tl.load(indices + i_t * 2).to(tl.int32), tl.load(indices + i_t * 2 + 1).to(tl.int32)
+        bos, eos = tl.load(offsets + i_n).to(tl.int32), tl.load(offsets + i_n + 1).to(tl.int32)
+        all = T
+        T = eos - bos
+    else:
+        bos, eos = i_b * T, i_b * T + T
+        all = B * T
+
+    if i_t * BT + i_c * BC >= T:
+        return
+
+    b_A = tl.zeros([BC, BC], dtype=tl.float32)
+    for i_k in range(0, NK):
+        if HEAD_FIRST:
+            p_A = tl.make_block_ptr(A + (i_k*B*H+i_bh)*T*BC, (T, BC), (BC, 1), (i_t*BT + i_c*BC, 0), (BC, BC), (1, 0))
+        else:
+            p_A = tl.make_block_ptr(A + (i_k*all+bos)*H*BC+i_h*BC, (T, BC), (H*BC, 1), (i_t*BT + i_c*BC, 0), (BC, BC), (1, 0))
+        b_A += tl.load(p_A, boundary_check=(0, 1))
+    if HEAD_FIRST:
+        p_A2 = tl.make_block_ptr(A2 + i_bh*T*BT, (T, BT), (BT, 1), (i_t * BT + i_c * BC, i_c * BC), (BC, BC), (1, 0))
+    else:
+        p_A2 = tl.make_block_ptr(A2 + (bos*H+i_h)*BT, (T, BT), (H*BT, 1), (i_t * BT + i_c * BC, i_c * BC), (BC, BC), (1, 0))
+    tl.store(p_A2, b_A.to(A2.dtype.element_ty), boundary_check=(0, 1))
+
+
+@triton.heuristics({
+    'STORE_INITIAL_STATE_GRADIENT': lambda args: args['dh0'] is not None,
+    'USE_FINAL_STATE_GRADIENT': lambda args: args['dht'] is not None,
+    'USE_OFFSETS': lambda args: args['offsets'] is not None
+})
+@triton.autotune(
+    configs=[
+        triton.Config({'BK': BK, 'BV': BV}, num_warps=num_warps, num_stages=num_stages)
+        for BK in BK_LIST
+        for BV in BV_LIST
+        for num_warps in [1, 2, 4, 8]
+        for num_stages in [2, 3, 4]
+    ],
+    key=['BT']
 )
 @triton.jit
 def chunk_rwkv6_bwd_kernel_dh(
     q,
-    g,
-    gs,
+    gi,
+    ge,
     do,
     dh,
+    dht,
     dh0,
-    s_k_h,
-    s_k_t,
-    s_k_d,
-    s_v_h,
-    s_v_t,
-    s_v_d,
-    s_h_h,
-    s_h_t,
-    s_h_d,
-    scale: tl.constexpr,
+    offsets,
+    chunk_offsets,
+    scale,
     T: tl.constexpr,
+    HQ: tl.constexpr,
+    H: tl.constexpr,
     K: tl.constexpr,
     V: tl.constexpr,
     BT: tl.constexpr,
     BK: tl.constexpr,
     BV: tl.constexpr,
-    NT: tl.constexpr,
-    USE_INITIAL_STATE: tl.constexpr,
-    TLTYPE: tl.constexpr
+    NG: tl.constexpr,
+    STORE_INITIAL_STATE_GRADIENT: tl.constexpr,
+    USE_FINAL_STATE_GRADIENT: tl.constexpr,
+    USE_OFFSETS: tl.constexpr,
+    HEAD_FIRST: tl.constexpr
 ):
-    i_k, i_v, i_bh = tl.program_id(0), tl.program_id(1), tl.program_id(2)
+    i_k, i_v, i_nh = tl.program_id(0), tl.program_id(1), tl.program_id(2)
+    i_bg = i_nh // NG
+    i_n, i_hq = i_nh // HQ, i_nh % HQ
+    i_h = i_hq // NG
+    if USE_OFFSETS:
+        bos, eos = tl.load(offsets + i_n).to(tl.int32), tl.load(offsets + i_n + 1).to(tl.int32)
+        T = eos - bos
+        NT = tl.cdiv(T, BT)
+        boh = tl.load(chunk_offsets + i_n).to(tl.int32)
+    else:
+        bos, eos = i_n * T, i_n * T + T
+        NT = tl.cdiv(T, BT)
+        boh = i_n * NT
 
-    p_dh_last = tl.make_block_ptr(dh + i_bh * s_h_h + (NT-1) * K * V, (K, V),
-                                  (s_h_t, s_h_d), (i_k * BK, i_v * BV), (BK, BV), (1, 0))
-    b_dh = tl.load(p_dh_last, boundary_check=(0, 1)).to(TLTYPE)
+    # [BK, BV]
+    b_dh = tl.zeros([BK, BV], dtype=tl.float32)
+    if USE_FINAL_STATE_GRADIENT:
+        p_dht = tl.make_block_ptr(dht + i_nh * K*V, (K, V), (V, 1), (i_k * BK, i_v * BV), (BK, BV), (1, 0))
+        b_dh += tl.load(p_dht, boundary_check=(0, 1)).to(tl.float32)
+
     for i_t in range(NT - 1, -1, -1):
-        o_t = min(i_t * BT + BT, T)
-
-        p_q = tl.make_block_ptr(q + i_bh * s_k_h, (K, T), (s_k_d, s_k_t), (i_k * BK, i_t * BT), (BK, BT), (0, 1))
-        p_do = tl.make_block_ptr(do + i_bh * s_v_h, (T, V), (s_v_t, s_v_d), (i_t * BT, i_v * BV), (BT, BV), (1, 0))
-        p_dh = tl.make_block_ptr(dh + i_bh * s_h_h + i_t * K * V, (K, V),
-                                 (s_h_t, s_h_d), (i_k * BK, i_v * BV), (BK, BV), (1, 0))
-        p_gs = tl.make_block_ptr(gs + i_bh * s_k_h, (K, T), (s_k_d, s_k_t), (i_k * BK, i_t * BT), (BK, BT), (0, 1))
-        p_gn = tl.make_block_ptr(g + i_bh * s_k_h, (T * K,), (s_k_d,), ((o_t - 1) * K + i_k * BK,), (BK,), (0,))
-
+        if HEAD_FIRST:
+            p_dh = tl.make_block_ptr(dh + (i_nh * NT + i_t) * K*V, (K, V), (V, 1), (i_k * BK, i_v * BV), (BK, BV), (1, 0))
+        else:
+            p_dh = tl.make_block_ptr(dh + ((boh+i_t) * H + i_h) * K*V, (K, V), (V, 1), (i_k * BK, i_v * BV), (BK, BV), (1, 0))
+        tl.store(p_dh, b_dh.to(p_dh.dtype.element_ty), boundary_check=(0, 1))
+        last_idx = min(i_t * BT + BT, T) - 1
         # [BK, BT]
-        b_q = (tl.load(p_q, boundary_check=(0, 1)) * scale)
+        if HEAD_FIRST:
+            p_q = tl.make_block_ptr(q + i_nh * T*K, (K, T), (1, K), (i_k * BK, i_t * BT), (BK, BT), (0, 1))
+            p_do = tl.make_block_ptr(do + i_nh * T*V, (T, V), (V, 1), (i_t * BT, i_v * BV), (BT, BV), (1, 0))
+        else:
+            p_q = tl.make_block_ptr(q + (bos*HQ + i_hq) * K, (K, T), (1, HQ*K), (i_k * BK, i_t * BT), (BK, BT), (0, 1))
+            p_do = tl.make_block_ptr(do + (bos*HQ + i_hq) * V, (T, V), (HQ*V, 1), (i_t * BT, i_v * BV), (BT, BV), (1, 0))
+        b_q = tl.load(p_q, boundary_check=(0, 1))
         # [BT, BV]
         b_do = tl.load(p_do, boundary_check=(0, 1))
 
-        tl.store(p_dh, b_dh.to(p_dh.dtype.element_ty), boundary_check=(0, 1))
+        if HEAD_FIRST:
+            p_gk = tl.make_block_ptr(ge + i_bg * T*K, (K, T), (1, K), (i_k * BK, i_t * BT), (BK, BT), (0, 1))
+            p_gk_last = gi + (i_bg * T + last_idx) * K + i_k * BK + tl.arange(0, BK)
+        else:
+            p_gk = tl.make_block_ptr(ge + (bos*H + i_h) * K, (K, T), (1, H*K), (i_k * BK, i_t * BT), (BK, BT), (0, 1))
+            p_gk_last = gi + (bos + last_idx) * H*K + i_h * K + i_k * BK + tl.arange(0, BK)
+        p_gk_last = tl.max_contiguous(tl.multiple_of(p_gk_last, BK), BK)
 
-        # [BK,]
-        b_gn = tl.load(p_gn, boundary_check=(0,)).to(tl.float32)
-        # [BK, BV]
-        b_dh = b_dh * tl.exp(b_gn)[:, None].to(TLTYPE)
-        # [BK, BT]
-        b_gs = tl.load(p_gs, boundary_check=(0, 1)).to(tl.float32)
-        b_q = b_q * tl.exp(b_gs)
+        b_gk = tl.load(p_gk, boundary_check=(0, 1))
+        b_q = (b_q * tl.exp(b_gk) * scale).to(b_q.dtype)
+        b_gk_last = tl.load(p_gk_last, mask=(i_k * BK + tl.arange(0, BK) < K), other=0.)
+        b_dh *= tl.exp(b_gk_last)[:, None]
+        b_dh += tl.dot(b_q, b_do)
 
-        # [BK, BV]
-        b_dh += tl.dot(b_q, b_do.to(b_q.dtype), allow_tf32=False).to(TLTYPE)  # must be false
-
-    if USE_INITIAL_STATE:
-        p_dh0 = tl.make_block_ptr(dh0 + i_bh * K * V, (K, V), (V, 1), (i_k * BK, i_v * BV), (BK, BV), (1, 0))
+    if STORE_INITIAL_STATE_GRADIENT:
+        p_dh0 = tl.make_block_ptr(dh0 + i_nh * K*V, (K, V), (V, 1), (i_k * BK, i_v * BV), (BK, BV), (1, 0))
         tl.store(p_dh0, b_dh.to(p_dh0.dtype.element_ty), boundary_check=(0, 1))
 
 
+@triton.heuristics({
+    'USE_OFFSETS': lambda args: args['offsets'] is not None
+})
 @triton.autotune(
     configs=[
-        triton.Config({}, num_warps=2, num_stages=1),
-        triton.Config({}, num_warps=4, num_stages=1),
-        triton.Config({}, num_warps=8, num_stages=1),
-        triton.Config({}, num_warps=16, num_stages=1),
+        triton.Config({}, num_warps=num_warps)
+        for num_warps in [1, 2, 4, 8]
     ],
-    key=['BK']
+    key=["BK", "NC", "BT"],
 )
-@triton.jit
-def chunk_rwkv6_bwd_kernel_inter(
-    k,
-    v,
-    h,
-    g,
-    gs,
-    A,
-    do,
-    dh,
-    dq,
-    dk,
-    dv,
-    dA,
-    s_k_h,
-    s_k_t,
-    s_k_d,
-    s_v_h,
-    s_v_t,
-    s_v_d,
-    s_h_h,
-    s_h_t,
-    s_h_d,
-    scale: tl.constexpr,
-    T: tl.constexpr,
-    K: tl.constexpr,
-    V: tl.constexpr,
-    BT: tl.constexpr,
-    BK: tl.constexpr,
-    BV: tl.constexpr,
-    TLTYPE: tl.constexpr,
-    USE_TF32: tl.constexpr
-):
-    i_k, i_t, i_bh = tl.program_id(0), tl.program_id(1), tl.program_id(2)
-    n_bh = tl.num_programs(2)
-    offset_k = i_t * BT
-    offset_BK = i_k * BK
-    o_t = min(offset_k + BT, T)
-
-    p_k = tl.make_block_ptr(k + i_bh * s_k_h, (T, K), (s_k_t, s_k_d), (offset_k, offset_BK), (BT, BK), (1, 0))
-    p_gk = tl.make_block_ptr(g + i_bh * s_k_h, (T, K), (s_k_t, s_k_d), (offset_k, offset_BK), (BT, BK), (1, 0))
-    p_gq = tl.make_block_ptr(gs + i_bh * s_k_h, (T, K), (s_k_t, s_k_d), (offset_k, offset_BK), (BT, BK), (1, 0))
-    p_gn = tl.make_block_ptr(g + i_bh * s_k_h, (T * K,), (s_k_d,), ((o_t - 1) * K + offset_BK,), (BK,), (0,))
-    p_A = tl.make_block_ptr(A + i_bh * T * BT, (BT, T), (1, BT), (0, offset_k), (BT, BT), (0, 1))
-
-    # [BT, BK]
-    b_k = (tl.load(p_k, boundary_check=(0, 1)) * scale).to(TLTYPE)
-    b_gk = tl.load(p_gk, boundary_check=(0, 1))
-    b_gq = tl.load(p_gq, boundary_check=(0, 1)).to(tl.float32)
-    b_gn = tl.exp(((tl.load(p_gn, boundary_check=(0,))[None, :]) - b_gk).to(tl.float32))
-    b_k = (b_k * b_gn).to(b_k.dtype)
-    # [BT, BT]
-    b_A = tl.load(p_A, boundary_check=(0, 1)).to(TLTYPE)
-
-    b_dq = tl.zeros([BT, BK], dtype=TLTYPE)
-    b_dk = tl.zeros([BT, BK], dtype=TLTYPE)
-    b_dA = tl.zeros([BT, BT], dtype=TLTYPE)
-
-    for i_v in range(tl.cdiv(V, BV)):
-        p_v = tl.make_block_ptr(v + i_bh * s_v_h, (T, V), (s_v_t, s_v_d), (offset_k, i_v * BV), (BT, BV), (1, 0))
-        p_h = tl.make_block_ptr(h + i_bh * s_h_h + i_t * V * K, (V, K), (s_h_d, s_h_t),
-                                (i_v * BV, offset_BK), (BV, BK), (0, 1))
-        p_do = tl.make_block_ptr(do + i_bh * s_v_h, (T, V), (s_v_t, s_v_d), (offset_k, i_v * BV), (BT, BV), (1, 0))
-        p_dh = tl.make_block_ptr(dh + i_bh * s_h_h + i_t * K * V, (K, V),
-                                 (s_h_t, s_h_d), (offset_BK, i_v * BV), (BK, BV), (1, 0))
-        p_dv = tl.make_block_ptr(dv + (i_k * n_bh + i_bh) * s_v_h, (T, V),
-                                 (s_v_t, s_v_d), (offset_k, i_v * BV), (BT, BV), (1, 0))
-
-        # [BT, BV]
-        b_v = (tl.load(p_v, boundary_check=(0, 1)) * scale).to(TLTYPE)
-        # [BV, BK]
-        b_h = tl.load(p_h, boundary_check=(0, 1))
-        # [BT, BV]
-        b_do = tl.load(p_do, boundary_check=(0, 1)).to(TLTYPE)
-        # [BK, BV]
-        b_dh = tl.load(p_dh, boundary_check=(0, 1))
-
-        # [BT, BV]
-        b_dv = tl.dot(b_k, b_dh.to(b_k.dtype), allow_tf32=USE_TF32)
-        if i_k == 0:
-            b_dv += tl.dot(b_A, b_do, allow_tf32=USE_TF32)
-        b_do = (b_do * scale).to(b_do.dtype)
-        b_dv = (b_dv * scale).to(b_dv.dtype)
-
-        tl.store(p_dv, b_dv.to(p_dv.dtype.element_ty), boundary_check=(0, 1))
-        # [BT, BT]
-        b_dA += tl.dot(b_do, tl.trans(b_v), allow_tf32=USE_TF32).to(TLTYPE)
-        # [BT, BK]
-        b_dq += tl.dot(b_do.to(TLTYPE), b_h.to(TLTYPE), allow_tf32=False).to(TLTYPE)  # must be false
-        # [BT, BK]
-        b_dk += (tl.dot(b_v.to(TLTYPE), tl.trans(b_dh).to(TLTYPE), allow_tf32=False) * scale).to(TLTYPE) # must be false
-        # b_dk = (b_dk * scale).to(b_dk.dtype)
-
-    b_dq = b_dq * tl.exp(b_gq).to(TLTYPE)
-    b_dk = b_dk * b_gn
-
-    p_dq = tl.make_block_ptr(dq + i_bh * s_k_h, (T, K), (s_k_t, s_k_d), (offset_k, offset_BK), (BT, BK), (1, 0))
-    p_dk = tl.make_block_ptr(dk + i_bh * s_k_h, (T, K), (s_k_t, s_k_d), (offset_k, offset_BK), (BT, BK), (1, 0))
-    p_dA = tl.make_block_ptr(dA + i_bh * T * BT, (T, BT, ), (BT, 1), (offset_k, 0), (BT, BT), (1, 0))
-    tl.store(p_dq, b_dq.to(p_dq.dtype.element_ty), boundary_check=(0, 1))
-    tl.store(p_dk, b_dk.to(p_dk.dtype.element_ty), boundary_check=(0, 1))
-
-    o_i = tl.arange(0, BT)
-    m_s = o_i[:, None] > o_i[None, :]
-    # [BT, BT]
-    b_dA = tl.where(m_s, b_dA, 0.).to(b_k.dtype)
-    if i_k == 0:
-        tl.store(p_dA, b_dA.to(p_dA.dtype.element_ty), boundary_check=(0, 1))
-
-
 @triton.jit
 def chunk_rwkv6_bwd_kernel_intra(
     q,
     k,
-    g,
-    gs,
+    gi,
+    ge,
     dA,
     dq,
     dk,
-    s_k_h,
-    s_k_t,
-    s_k_d,
-    scale: tl.constexpr,
+    offsets,
+    indices,
     T: tl.constexpr,
+    H: tl.constexpr,
     K: tl.constexpr,
     BT: tl.constexpr,
     BC: tl.constexpr,
     BK: tl.constexpr,
     NC: tl.constexpr,
-    TLTYPE: tl.constexpr
+    USE_OFFSETS: tl.constexpr,
+    HEAD_FIRST: tl.constexpr
 ):
     i_k, i_c, i_bh = tl.program_id(0), tl.program_id(1), tl.program_id(2)
+    i_b, i_h = i_bh // H, i_bh % H
     i_t, i_i = i_c // NC, i_c % NC
-    offset_k = i_t * BT
-    offset_BK = i_k * BK
+    if USE_OFFSETS:
+        i_n, i_t = tl.load(indices + i_t * 2).to(tl.int32), tl.load(indices + i_t * 2 + 1).to(tl.int32)
+        bos, eos = tl.load(offsets + i_n).to(tl.int32), tl.load(offsets + i_n + 1).to(tl.int32)
+    else:
+        bos, eos = i_b * T, i_b * T + T
+    T = eos - bos
+    if i_t * BT + i_i * BC >= T:
+        return
 
-    o_k = offset_BK + tl.arange(0, BK)
-    o_q = offset_k + i_i * BC
+    o_k = i_k * BK + tl.arange(0, BK)
     m_k = o_k < K
 
-    p_gs = tl.make_block_ptr(gs + i_bh * s_k_h, (T, K), (s_k_t, s_k_d), (offset_k + i_i * BC, offset_BK), (BC, BK), (1, 0))
-    # [BK,]
-    b_gn = tl.load(g + i_bh * T * K + (o_q - 1) * K + o_k, mask=(m_k & (i_i > 0) & (o_q <= T)), other=0).to(tl.float32)
+    if HEAD_FIRST:
+        p_ge = tl.make_block_ptr(ge + i_bh * T*K, (T, K), (K, 1), (i_t * BT + i_i * BC, i_k * BK), (BC, BK), (1, 0))
+    else:
+        p_ge = tl.make_block_ptr(ge + (bos*H + i_h) * K, (T, K), (H*K, 1), (i_t * BT + i_i * BC, i_k * BK), (BC, BK), (1, 0))
     # [BC, BK]
-    b_gs = tl.load(p_gs, boundary_check=(0, 1)).to(tl.float32)
-    b_dq_dk_shared = tl.zeros([BC, BK], dtype=TLTYPE)
-
-    for i_j in range(0, i_i):
-        p_k = tl.make_block_ptr(k + i_bh * s_k_h, (T, K), (s_k_t, s_k_d), (offset_k + i_j * BC, offset_BK), (BC, BK), (1, 0))
-        p_gk = tl.make_block_ptr(g + i_bh * s_k_h, (T, K), (s_k_t, s_k_d), (offset_k + i_j * BC, offset_BK), (BC, BK), (1, 0))
-        p_dA = tl.make_block_ptr(dA + i_bh * T * BT, (T, BT), (BT, 1), (offset_k + i_i * BC, i_j * BC), (BC, BC), (1, 0))
-        # [BC, BK]
-        b_k = tl.load(p_k, boundary_check=(0, 1)) * scale
-        b_gk = tl.load(p_gk, boundary_check=(0, 1)).to(tl.float32)
-        b_kg = b_k * tl.exp(b_gn[None, :] - b_gk)
-        # [BC, BC]
-        b_dA = tl.load(p_dA, boundary_check=(0, 1)).to(TLTYPE)
-        # [BC, BK]
-        b_dq_dk_shared += tl.dot(b_dA, b_kg, allow_tf32=False).to(TLTYPE)  # must be false
-    b_dq_dk_shared = b_dq_dk_shared * tl.exp(b_gs - b_gn[None, :]).to(TLTYPE)
+    b_ge = tl.load(p_ge, boundary_check=(0, 1))
+    b_dq = tl.zeros([BC, BK], dtype=tl.float32)
+    if i_i > 0:
+        if HEAD_FIRST:
+            p_gn = tl.max_contiguous(tl.multiple_of(gi + (i_bh * T + i_t * BT + i_i * BC - 1) * K + o_k, BK), BK)
+        else:
+            p_gn = tl.max_contiguous(tl.multiple_of(gi + (bos + i_t * BT + i_i * BC - 1) * H*K + i_h*K + o_k, BK), BK)
+        # [BK,]
+        b_gn = tl.load(p_gn, mask=m_k, other=0)
+        for i_j in range(0, i_i):
+            if HEAD_FIRST:
+                p_k = tl.make_block_ptr(k + i_bh * T*K, (T, K), (K, 1), (i_t * BT + i_j * BC, i_k * BK), (BC, BK), (1, 0))
+                p_gk = tl.make_block_ptr(gi + i_bh * T*K, (T, K), (K, 1), (i_t * BT + i_j * BC, i_k * BK), (BC, BK), (1, 0))
+                p_dA = tl.make_block_ptr(dA + i_bh * T*BT, (T, BT), (BT, 1), (i_t * BT + i_i * BC, i_j * BC), (BC, BC), (1, 0))
+            else:
+                p_k = tl.make_block_ptr(k+(bos*H+i_h)*K, (T, K), (H*K, 1), (i_t*BT+i_j*BC, i_k * BK), (BC, BK), (1, 0))
+                p_gk = tl.make_block_ptr(gi+(bos*H+i_h)*K, (T, K), (H*K, 1), (i_t*BT+i_j*BC, i_k * BK), (BC, BK), (1, 0))
+                p_dA = tl.make_block_ptr(dA+(bos*H+i_h)*BT, (T, BT), (H*BT, 1), (i_t*BT+i_i*BC, i_j * BC), (BC, BC), (1, 0))
+            # [BC, BK]
+            b_k = tl.load(p_k, boundary_check=(0, 1))
+            b_gk = tl.load(p_gk, boundary_check=(0, 1))
+            b_kg = b_k * tl.exp(b_gn[None, :] - b_gk)
+            # [BC, BC]
+            b_dA = tl.load(p_dA, boundary_check=(0, 1))
+            # [BC, BK]
+            b_dq += tl.dot(b_dA, b_kg)
+        b_dq *= tl.exp(b_ge - b_gn[None, :])
 
     o_i = tl.arange(0, BC)
-    o_dA = i_bh * T * BT + (offset_k + i_i * BC + tl.arange(0, BC)) * BT + i_i * BC
-    m_dA = (offset_k + i_i * BC + tl.arange(0, BC)) < T
+    m_dA = (i_t * BT + i_i * BC + tl.arange(0, BC)) < T
+    if HEAD_FIRST:
+        o_dA = i_bh * T*BT + (i_t * BT + i_i * BC + tl.arange(0, BC)) * BT + i_i * BC
+        p_kj = tl.max_contiguous(tl.multiple_of(k + (i_bh * T + i_t * BT + i_i * BC) * K + o_k, BK), BK)
+        p_gkj = tl.max_contiguous(tl.multiple_of(gi + (i_bh * T + i_t * BT + i_i * BC) * K + o_k, BK), BK)
+        p_dq = tl.make_block_ptr(dq + i_bh * T*K, (T, K), (K, 1), (i_t * BT + i_i * BC, i_k * BK), (BC, BK), (1, 0))
+    else:
+        o_dA = bos*H*BT + (i_t * BT + i_i * BC + tl.arange(0, BC)) * H*BT + i_h * BT + i_i * BC
+        p_kj = tl.max_contiguous(tl.multiple_of(k + (bos + i_t * BT + i_i * BC) * H*K + i_h * K + o_k, BK), BK)
+        p_gkj = tl.max_contiguous(tl.multiple_of(gi + (bos + i_t * BT + i_i * BC) * H*K + i_h * K + o_k, BK), BK)
+        p_dq = tl.make_block_ptr(dq + (bos*H + i_h) * K, (T, K), (H*K, 1), (i_t * BT + i_i * BC, i_k * BK), (BC, BK), (1, 0))
 
-    for j in range(0, BC):
-        p_kj = tl.make_block_ptr(k + i_bh * s_k_h, (T * K,), (1,), ((offset_k + i_i * BC + j) * K + offset_BK,), (BK,), (0,))
-
+    for j in range(0, min(BC, T - i_t * BT - i_i * BC)):
         # [BC,]
         b_dA = tl.load(dA + o_dA + j, mask=m_dA, other=0)
         # [BK,]
-        b_kj = tl.load(p_kj, boundary_check=(0,)) * scale
-        b_gkj = tl.load(g + i_bh * T * K + (o_q + j) * K + o_k, mask=(m_k & ((o_q + j) < T)), other=0)
+        b_kj = tl.load(p_kj, mask=m_k, other=0).to(tl.float32)
+        b_gkj = tl.load(p_gkj, mask=m_k, other=0).to(tl.float32)
         # [BC, BK]
         m_i = o_i[:, None] > j
         # [BC, BK]
-        b_dq_dk_shared += tl.where(m_i, b_dA[:, None] * b_kj[None, :] * tl.exp(b_gs - b_gkj[None, :]), 0.)
+        # (SY 09/17) important to not use bf16 here to have a good precision.
+        b_dq += tl.where(m_i, b_dA[:, None] * b_kj[None, :] * tl.exp(b_ge - b_gkj[None, :]), 0.)
+        p_kj += K if HEAD_FIRST else H*K
+        p_gkj += K if HEAD_FIRST else H*K
+    tl.store(p_dq, b_dq.to(p_dq.dtype.element_ty), boundary_check=(0, 1))
 
-    p_dq = tl.make_block_ptr(dq + i_bh * s_k_h, (T, K), (s_k_t, s_k_d), (offset_k + i_i * BC, offset_BK), (BC, BK), (1, 0))
+    tl.debug_barrier()
+    if HEAD_FIRST:
+        p_k = tl.make_block_ptr(k + i_bh * T*K, (T, K), (K, 1), (i_t * BT + i_i * BC, i_k * BK), (BC, BK), (1, 0))
+        p_gk = tl.make_block_ptr(gi + i_bh * T*K, (T, K), (K, 1), (i_t * BT + i_i * BC, i_k * BK), (BC, BK), (1, 0))
+    else:
+        p_k = tl.make_block_ptr(k + (bos*H + i_h) * K, (T, K), (H*K, 1), (i_t * BT + i_i * BC, i_k * BK), (BC, BK), (1, 0))
+        p_gk = tl.make_block_ptr(gi + (bos*H + i_h) * K, (T, K), (H*K, 1), (i_t * BT + i_i * BC, i_k * BK), (BC, BK), (1, 0))
 
-    b_dq_dk_shared = b_dq_dk_shared + tl.load(p_dq, boundary_check=(0, 1))
-    tl.store(p_dq, b_dq_dk_shared.to(p_dq.dtype.element_ty), boundary_check=(0, 1))
-
-    # tl.debug_barrier()
-    p_k = tl.make_block_ptr(k + i_bh * s_k_h, (T, K), (s_k_t, s_k_d), (offset_k + i_i * BC, offset_BK), (BC, BK), (1, 0))
-    p_gk = tl.make_block_ptr(g + i_bh * s_k_h, (T, K), (s_k_t, s_k_d), (offset_k + i_i * BC, offset_BK), (BC, BK), (1, 0))
-    p_gn = tl.make_block_ptr(g + i_bh * s_k_h, (T * K,), (s_k_d,),
-                             ((offset_k + i_i * BC + BC - 1) * K + offset_BK,), (BK,), (0,))
-    # [BK,]
-    b_gn = tl.load(p_gn, boundary_check=(0,)).to(tl.float32)
     # [BC, BK]
-    # b_k = tl.load(p_k, boundary_check=(0, 1))
-    b_gk = tl.load(p_gk, boundary_check=(0, 1)).to(TLTYPE)
-    b_dq_dk_shared = tl.where(True, 0., b_dq_dk_shared).to(TLTYPE)
+    b_k = tl.load(p_k, boundary_check=(0, 1))
+    b_gk = tl.load(p_gk, boundary_check=(0, 1))
+    b_dk = tl.zeros([BC, BK], dtype=tl.float32)
 
-    for i_j in range(i_i + 1, NC):
-        p_q = tl.make_block_ptr(q + i_bh * s_k_h, (T, K), (s_k_t, s_k_d), (offset_k + i_j * BC, offset_BK), (BC, BK), (1, 0))
-        p_gs = tl.make_block_ptr(gs + i_bh * s_k_h, (T, K), (s_k_t, s_k_d), (offset_k + i_j * BC, offset_BK), (BC, BK), (1, 0))
-        p_dA = tl.make_block_ptr(dA + i_bh * T * BT, (T, BT), (BT, 1), (offset_k + i_j * BC, i_i * BC), (BC, BC), (1, 0))
-        # [BC, BK]
-        b_q = tl.load(p_q, boundary_check=(0, 1))
-        b_gs = tl.load(p_gs, boundary_check=(0, 1)).to(TLTYPE)
-        b_qg = (b_q * tl.exp(b_gs - b_gn[None, :]))
-        # [BC, BC]
-        b_dA = tl.load(p_dA, boundary_check=(0, 1))
-        # [BC, BK]
-        b_dq_dk_shared += tl.dot(tl.trans(b_dA), b_qg, allow_tf32=False).to(TLTYPE) * scale
-    b_dq_dk_shared = b_dq_dk_shared * tl.exp(b_gn[None, :] - b_gk).to(TLTYPE)
-
-    o_dA = i_bh * T * BT + (offset_k + i_i * BC) * BT + i_i * BC + tl.arange(0, BC)
-    for j in range(0, BC):
-        p_qj = tl.make_block_ptr(q + i_bh * s_k_h, (T * K,), (1,), ((offset_k + i_i * BC + j) * K + offset_BK,), (BK,), (0,))
-        p_gqj = tl.make_block_ptr(gs + i_bh * s_k_h, (T * K,), (1,), ((offset_k + i_i * BC + j) * K + offset_BK,), (BK,), (0,))
-        # [BC,]
-        b_dA = tl.load(dA + o_dA + j * BT, mask=(offset_k + i_i * BC + j < T), other=0)
+    NC = min(NC, tl.cdiv(T - i_t * BT, BC))
+    if i_i < NC - 1:
+        if HEAD_FIRST:
+            p_gn = gi + i_bh * T*K + (min(i_t * BT + i_i * BC + BC, T) - 1)*K + o_k
+        else:
+            p_gn = gi + (bos + min(i_t * BT + i_i * BC + BC, T) - 1) * H*K + i_h*K + o_k
+        p_gn = tl.max_contiguous(tl.multiple_of(p_gn, BK), BK)
         # [BK,]
-        b_qj = tl.load(p_qj, boundary_check=(0,))
-        b_gqj = tl.load(p_gqj, boundary_check=(0,))
+        b_gn = tl.load(p_gn, mask=m_k, other=0)
+        for i_j in range(i_i + 1, NC):
+            m_j = (i_t * BT + i_j * BC + tl.arange(0, BC)) < T
+            if HEAD_FIRST:
+                p_q = tl.make_block_ptr(q + i_bh * T*K, (T, K), (K, 1), (i_t * BT + i_j * BC, i_k * BK), (BC, BK), (1, 0))
+                p_gq = tl.make_block_ptr(ge + i_bh * T*K, (T, K), (K, 1), (i_t * BT + i_j * BC, i_k*BK), (BC, BK), (1, 0))
+                p_dA = tl.make_block_ptr(dA + i_bh * T*BT, (BT, T), (1, BT), (i_i*BC, i_t*BT + i_j*BC), (BC, BC), (0, 1))
+            else:
+                p_q = tl.make_block_ptr(q + (bos*H+i_h)*K, (T, K), (H*K, 1), (i_t * BT + i_j * BC, i_k*BK), (BC, BK), (1, 0))
+                p_gq = tl.make_block_ptr(ge + (bos*H+i_h)*K, (T, K), (H*K, 1), (i_t * BT + i_j * BC, i_k*BK), (BC, BK), (1, 0))
+                p_dA = tl.make_block_ptr(dA + (bos*H+i_h)*BT, (BT, T), (1, H*BT), (i_i*BC, i_t*BT + i_j*BC), (BC, BC), (0, 1))
+            # [BC, BK]
+            b_q = tl.load(p_q, boundary_check=(0, 1))
+            b_gq = tl.where(m_j[:, None] & m_k, tl.load(p_gq, boundary_check=(0, 1)), float('-inf'))
+            b_qg = b_q * tl.exp(b_gq - b_gn[None, :])
+            # [BC, BC]
+            b_dA = tl.load(p_dA, boundary_check=(0, 1))
+            # [BC, BK]
+            # (SY 09/17) important to not use bf16 here to have a good precision.
+            b_dk += tl.dot(b_dA, b_qg)
+        b_dk *= tl.exp(b_gn[None, :] - b_gk)
+    if HEAD_FIRST:
+        o_dA = i_bh * T*BT + (i_t * BT + i_i * BC) * BT + i_i * BC + tl.arange(0, BC)
+        p_qj = tl.max_contiguous(tl.multiple_of(q + (i_bh * T + i_t * BT + i_i * BC) * K + o_k, BK), BK)
+        p_gqj = tl.max_contiguous(tl.multiple_of(ge + (i_bh * T + i_t * BT + i_i * BC) * K + o_k, BK), BK)
+        p_dk = tl.make_block_ptr(dk + i_bh*T*K, (T, K), (K, 1), (i_t * BT + i_i * BC, i_k * BK), (BC, BK), (1, 0))
+    else:
+        o_dA = bos*H*BT + (i_t * BT + i_i * BC) * H*BT + i_h * BT + i_i * BC + tl.arange(0, BC)
+        p_qj = tl.max_contiguous(tl.multiple_of(q + (bos + i_t * BT + i_i * BC) * H*K + i_h * K + o_k, BK), BK)
+        p_gqj = tl.max_contiguous(tl.multiple_of(ge + (bos + i_t * BT + i_i * BC) * H*K + i_h * K + o_k, BK), BK)
+        p_dk = tl.make_block_ptr(dk + (bos*H+i_h)*K, (T, K), (H*K, 1), (i_t * BT + i_i * BC, i_k * BK), (BC, BK), (1, 0))
+    for j in range(0, min(BC, T - i_t * BT - i_i * BC)):
+        # [BC,]
+        b_dA = tl.load(dA + o_dA + j * (1 if HEAD_FIRST else H) * BT)
+        # [BK,]
+        b_qj = tl.load(p_qj, mask=m_k, other=0).to(tl.float32)
+        b_gqj = tl.load(p_gqj, mask=m_k, other=0).to(tl.float32)
         # [BC, BK]
         m_i = o_i[:, None] < j
-        b_dq_dk_shared += tl.where(m_i, b_dA[:, None] * b_qj[None, :] * tl.exp(b_gqj[None, :] - b_gk), 0.).to(TLTYPE) * scale
+        b_dk += tl.where(m_i, b_dA[:, None] * b_qj[None, :] * tl.exp(b_gqj[None, :] - b_gk), 0.)
+        p_qj += K if HEAD_FIRST else H*K
+        p_gqj += K if HEAD_FIRST else H*K
+    tl.store(p_dk, b_dk.to(p_dk.dtype.element_ty), boundary_check=(0, 1))
 
-    p_dk = tl.make_block_ptr(dk + i_bh * s_k_h, (T, K), (s_k_t, s_k_d), (offset_k + i_i * BC, offset_BK), (BC, BK), (1, 0))
-    b_dq_dk_shared = b_dq_dk_shared + tl.load(p_dk, boundary_check=(0, 1)).to(TLTYPE)
-    tl.store(p_dk, b_dq_dk_shared.to(p_dk.dtype.element_ty), boundary_check=(0, 1))
+
+@triton.heuristics({
+    'USE_OFFSETS': lambda args: args['offsets'] is not None
+})
+@triton.autotune(
+    configs=[
+        triton.Config({'BK': BK, 'BV': BV}, num_warps=num_warps)
+        for BK in BK_LIST
+        for BV in BV_LIST
+        for num_warps in [2, 4, 8]
+    ],
+    key=["BT"]
+)
+@triton.jit
+def chunk_rwkv6_bwd_kernel_inter(
+    q,
+    k,
+    v,
+    h,
+    gi,
+    ge,
+    u,
+    do,
+    dh,
+    dA,
+    dq,
+    dk,
+    dq2,
+    dk2,
+    dg,
+    du,
+    offsets,
+    indices,
+    scale,
+    T: tl.constexpr,
+    H: tl.constexpr,
+    K: tl.constexpr,
+    V: tl.constexpr,
+    BT: tl.constexpr,
+    BK: tl.constexpr,
+    BV: tl.constexpr,
+    USE_OFFSETS: tl.constexpr,
+    HEAD_FIRST: tl.constexpr
+):
+    i_k, i_t, i_bh = tl.program_id(0), tl.program_id(1), tl.program_id(2)
+    i_b, i_h = i_bh // H, i_bh % H
+
+    if USE_OFFSETS:
+        i_tg = i_t
+        i_n, i_t = tl.load(indices + i_t * 2).to(tl.int32), tl.load(indices + i_t * 2 + 1).to(tl.int32)
+        bos, eos = tl.load(offsets + i_n).to(tl.int32), tl.load(offsets + i_n + 1).to(tl.int32)
+        T = eos - bos
+        NT = tl.cdiv(T, BT)
+    else:
+        NT = tl.cdiv(T, BT)
+        i_tg = i_b * NT + i_t
+        bos, eos = i_b * T, i_b * T + T
+    o_k = i_k * BK + tl.arange(0, BK)
+    m_k = o_k < K
+
+    if HEAD_FIRST:
+        p_gk = tl.make_block_ptr(ge + i_bh * T*K, (T, K), (K, 1), (i_t * BT, i_k * BK), (BT, BK), (1, 0))
+        p_gi = tl.make_block_ptr(gi + i_bh * T*K, (T, K), (K, 1), (i_t * BT, i_k * BK), (BT, BK), (1, 0))
+        p_gn = tl.max_contiguous(tl.multiple_of(gi + i_bh * T*K + (min(T, i_t * BT + BT)-1) * K + o_k, BK), BK)
+    else:
+        p_gk = tl.make_block_ptr(ge + (bos*H+i_h)*K, (T, K), (H*K, 1), (i_t * BT, i_k * BK), (BT, BK), (1, 0))
+        p_gi = tl.make_block_ptr(gi + (bos*H+i_h)*K, (T, K), (H*K, 1), (i_t * BT, i_k * BK), (BT, BK), (1, 0))
+        p_gn = tl.max_contiguous(tl.multiple_of(gi + (bos + min(T, i_t * BT + BT)-1) * H*K + i_h * K + o_k, BK), BK)
+    b_gn = tl.load(p_gn, mask=m_k, other=0)
+    b_dq = tl.zeros([BT, BK], dtype=tl.float32)
+    b_dk = tl.zeros([BT, BK], dtype=tl.float32)
+    b_dgk = tl.zeros([BK,], dtype=tl.float32)
+
+    for i_v in range(tl.cdiv(V, BV)):
+        if HEAD_FIRST:
+            p_v = tl.make_block_ptr(v + i_bh * T*V, (T, V), (V, 1), (i_t * BT, i_v * BV), (BT, BV), (1, 0))
+            p_do = tl.make_block_ptr(do + i_bh * T*V, (T, V), (V, 1), (i_t * BT, i_v * BV), (BT, BV), (1, 0))
+            p_h = tl.make_block_ptr(h + i_bh * NT*K*V + i_t * K*V, (V, K), (1, V), (i_v * BV, i_k * BK), (BV, BK), (0, 1))
+            p_dh = tl.make_block_ptr(dh + i_bh * NT*K*V + i_t * K*V, (V, K), (1, V), (i_v * BV, i_k * BK), (BV, BK), (0, 1))
+        else:
+            p_v = tl.make_block_ptr(v + (bos*H + i_h) * V, (T, V), (H*V, 1), (i_t * BT, i_v * BV), (BT, BV), (1, 0))
+            p_do = tl.make_block_ptr(do + (bos*H + i_h) * V, (T, V), (H*V, 1), (i_t * BT, i_v * BV), (BT, BV), (1, 0))
+            p_h = tl.make_block_ptr(h + (i_tg * H + i_h) * K*V, (V, K), (1, V), (i_v * BV, i_k * BK), (BV, BK), (0, 1))
+            p_dh = tl.make_block_ptr(dh + (i_tg * H + i_h) * K*V, (V, K), (1, V), (i_v * BV, i_k * BK), (BV, BK), (0, 1))
+        # [BT, BV]
+        b_v = tl.load(p_v, boundary_check=(0, 1))
+        b_do = tl.load(p_do, boundary_check=(0, 1))
+        # [BV, BK]
+        b_h = tl.load(p_h, boundary_check=(0, 1))
+        b_dh = tl.load(p_dh, boundary_check=(0, 1))
+        # [BK]
+        b_dgk += tl.sum(b_h * b_dh, axis=0)
+        # [BT, BK]
+        b_dq += tl.dot(b_do, b_h.to(b_do.dtype))
+        b_dk += tl.dot(b_v, b_dh.to(b_v.dtype))
+    b_dgk *= tl.exp(b_gn)
+    b_dq *= scale
+    b_gk = tl.load(p_gk, boundary_check=(0, 1))
+    b_gi = tl.load(p_gi, boundary_check=(0, 1))
+    b_dq = b_dq * tl.exp(b_gk)
+    b_dk = b_dk * tl.exp(b_gn[None, :] - b_gi)
+
+    o_i = tl.arange(0, BT)
+    if HEAD_FIRST:
+        p_q = tl.make_block_ptr(q + i_bh * T*K, (T, K), (K, 1), (i_t * BT, i_k * BK), (BT, BK), (1, 0))
+        p_k = tl.make_block_ptr(k + i_bh * T*K, (T, K), (K, 1), (i_t * BT, i_k * BK), (BT, BK), (1, 0))
+        p_dq = tl.make_block_ptr(dq + i_bh * T*K, (T, K), (K, 1), (i_t * BT, i_k * BK), (BT, BK), (1, 0))
+        p_dk = tl.make_block_ptr(dk + i_bh * T*K, (T, K), (K, 1), (i_t * BT, i_k * BK), (BT, BK), (1, 0))
+        p_dA_dig = dA + (i_bh * T + i_t * BT + o_i) * BT + o_i
+    else:
+        p_q = tl.make_block_ptr(q + (bos*H+i_h)*K, (T, K), (H*K, 1), (i_t * BT, i_k * BK), (BT, BK), (1, 0))
+        p_k = tl.make_block_ptr(k + (bos*H+i_h)*K, (T, K), (H*K, 1), (i_t * BT, i_k * BK), (BT, BK), (1, 0))
+        p_dq = tl.make_block_ptr(dq + (bos*H+i_h)*K, (T, K), (H*K, 1), (i_t * BT, i_k * BK), (BT, BK), (1, 0))
+        p_dk = tl.make_block_ptr(dk + (bos*H+i_h)*K, (T, K), (H*K, 1), (i_t * BT, i_k * BK), (BT, BK), (1, 0))
+        p_dA_dig = dA + ((bos + i_t * BT + o_i) * H + i_h) * BT + o_i
+    b_q = tl.load(p_q, boundary_check=(0, 1))
+    b_k = tl.load(p_k, boundary_check=(0, 1))
+    b_dgk += tl.sum(b_dk * b_k, axis=0)
+
+    b_dq += tl.load(p_dq, boundary_check=(0, 1))
+    b_dk += tl.load(p_dk, boundary_check=(0, 1))
+    b_dg = b_q * b_dq - b_k * b_dk
+    b_dg = b_dg - tl.cumsum(b_dg, axis=0) + tl.sum(b_dg, axis=0)[None, :] + b_dgk[None, :] - b_q * b_dq
+    # [BT,]
+    b_dA_dig = tl.load(p_dA_dig, mask=(i_t * BT + o_i) < T, other=0)
+
+    p_u = tl.make_block_ptr(u + i_h * K, (K,), (1,), (i_k * BK,), (BK,), (0,))
+    b_u = tl.load(p_u, boundary_check=(0,))
+    # scale is already applied to b_dA_diag
+    b_dq += (b_dA_dig[:, None] * b_u[None, :] * b_k)
+    b_dk += (b_dA_dig[:, None] * b_u[None, :] * b_q)
+    b_du = tl.sum(b_dA_dig[:, None] * b_q * b_k, axis=0)
+    p_du = tl.make_block_ptr(du + (i_tg * H + i_h) * K, (K,), (1,), (i_k * BK,), (BK,), (0,))
+    tl.store(p_du, b_du, boundary_check=(0,))
+
+    if HEAD_FIRST:
+        p_dq = tl.make_block_ptr(dq2 + i_bh * T*K, (T, K), (K, 1), (i_t * BT, i_k * BK), (BT, BK), (1, 0))
+        p_dk = tl.make_block_ptr(dk2 + i_bh * T*K, (T, K), (K, 1), (i_t * BT, i_k * BK), (BT, BK), (1, 0))
+        p_dg = tl.make_block_ptr(dg + i_bh * T*K, (T, K), (K, 1), (i_t * BT, i_k * BK), (BT, BK), (1, 0))
+    else:
+        p_dq = tl.make_block_ptr(dq2 + (bos * H + i_h) * K, (T, K), (H*K, 1), (i_t * BT, i_k * BK), (BT, BK), (1, 0))
+        p_dk = tl.make_block_ptr(dk2 + (bos * H + i_h) * K, (T, K), (H*K, 1), (i_t * BT, i_k * BK), (BT, BK), (1, 0))
+        p_dg = tl.make_block_ptr(dg + (bos * H + i_h) * K, (T, K), (H*K, 1), (i_t * BT, i_k * BK), (BT, BK), (1, 0))
+    tl.store(p_dq, b_dq.to(p_dq.dtype.element_ty), boundary_check=(0, 1))
+    tl.store(p_dk, b_dk.to(p_dk.dtype.element_ty), boundary_check=(0, 1))
+    tl.store(p_dg, b_dg.to(p_dg.dtype.element_ty), boundary_check=(0, 1))
+
+
+def chunk_rwkv6_fwd_intra(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    gi: torch.Tensor,
+    ge: torch.Tensor,
+    u: torch.Tensor,
+    scale: float,
+    offsets: Optional[torch.LongTensor] = None,
+    indices: Optional[torch.LongTensor] = None,
+    head_first: bool = True,
+    chunk_size: int = 64
+):
+    if head_first:
+        B, H, T, K = k.shape
+    else:
+        B, T, H, K = k.shape
+    BT = min(chunk_size, max(16, triton.next_power_of_2(T)))
+    NT = triton.cdiv(T, BT) if offsets is None else len(indices)
+    BC = min(16, BT)
+    NC = triton.cdiv(BT, BC)
+
+    A = q.new_empty(B, *((H, T) if head_first else (T, H)), BT, dtype=torch.float)
+    grid = (NT, NC * NC, B * H)
+    chunk_rwkv6_fwd_A_kernel_intra_sub_inter[grid](
+        q,
+        k,
+        gi,
+        ge,
+        A,
+        offsets,
+        indices,
+        scale,
+        T=T,
+        H=H,
+        K=K,
+        BT=BT,
+        BC=BC,
+        NC=NC,
+        HEAD_FIRST=head_first
+    )
+
+    grid = (NT, NC, B * H)
+    # load the entire [BC, K] blocks into SRAM at once
+    if K <= 256:
+        BK = triton.next_power_of_2(K)
+        chunk_rwkv6_fwd_A_kernel_intra_sub_intra[grid](
+            q,
+            k,
+            gi,
+            ge,
+            u,
+            A,
+            offsets,
+            indices,
+            scale,
+            T=T,
+            H=H,
+            K=K,
+            BT=BT,
+            BC=BC,
+            BK=BK,
+            HEAD_FIRST=head_first
+        )
+    # split then merge
+    else:
+        BK = min(128, triton.next_power_of_2(K))
+        NK = triton.cdiv(K, BK)
+        A_intra = q.new_empty(NK, B, *((H, T) if head_first else (T, H)), BC, dtype=torch.float)
+
+        grid = (NK, NT * NC, B * H)
+        chunk_rwkv6_fwd_A_kernel_intra_sub_intra_split[grid](
+            q,
+            k,
+            gi,
+            ge,
+            u,
+            A_intra,
+            offsets,
+            indices,
+            scale,
+            B=B,
+            T=T,
+            H=H,
+            K=K,
+            BT=BT,
+            BC=BC,
+            BK=BK,
+            NC=NC,
+            HEAD_FIRST=head_first
+        )
+
+        grid = (NT, NC, B * H)
+        chunk_rwkv6_fwd_A_kernel_intra_sub_intra_merge[grid](
+            A_intra,
+            A,
+            offsets,
+            indices,
+            B=B,
+            T=T,
+            H=H,
+            BT=BT,
+            BC=BC,
+            NK=NK,
+            HEAD_FIRST=head_first
+        )
+    return A
+
+
+def chunk_rwkv6_bwd_dh(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    gi: torch.Tensor,
+    ge: torch.Tensor,
+    do: torch.Tensor,
+    h0: torch.Tensor,
+    dht: torch.Tensor,
+    scale: float,
+    offsets: Optional[torch.Tensor] = None,
+    indices: Optional[torch.Tensor] = None,
+    head_first: bool = True,
+    chunk_size: int = 64,
+    states_in_fp32: bool = False
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    if head_first:
+        B, H, T, K, V = *k.shape, v.shape[-1]
+        HQ = q.shape[1]
+    else:
+        B, T, H, K, V = *k.shape, v.shape[-1]
+        HQ = q.shape[2]
+    BT = min(chunk_size, max(16, triton.next_power_of_2(T)))
+    # N: the actual number of sequences in the batch with either equal or variable lengths
+    # NG: number of groups in GQA
+    if offsets is None:
+        N, NT, chunk_offsets = B, triton.cdiv(T, BT), None
+    else:
+        N, NT = len(offsets) - 1, len(indices)
+        chunk_offsets = torch.cat([offsets.new_tensor([0]), triton.cdiv(offsets[1:] - offsets[:-1], BT)]).cumsum(-1)
+    NG = HQ // H
+
+    if head_first:
+        dh = k.new_empty(B, HQ, NT, K, V, dtype=k.dtype if not states_in_fp32 else torch.float)
+    else:
+        dh = k.new_empty(B, NT, HQ, K, V, dtype=k.dtype if not states_in_fp32 else torch.float)
+    dh0 = torch.empty_like(h0, dtype=torch.float) if h0 is not None else None
+
+    def grid(meta): return (triton.cdiv(K, meta['BK']), triton.cdiv(V, meta['BV']), N * H)
+    chunk_rwkv6_bwd_kernel_dh[grid](
+        q=q,
+        gi=gi,
+        ge=ge,
+        do=do,
+        dh=dh,
+        dht=dht,
+        dh0=dh0,
+        offsets=offsets,
+        chunk_offsets=chunk_offsets,
+        scale=scale,
+        T=T,
+        HQ=HQ,
+        H=H,
+        K=K,
+        V=V,
+        BT=BT,
+        NG=NG,
+        HEAD_FIRST=head_first
+    )
+    return dh, dh0
+
+
+def chunk_rwkv6_bwd_dqk_intra(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    gi: torch.Tensor,
+    ge: torch.Tensor,
+    dA: torch.Tensor,
+    offsets: Optional[torch.LongTensor] = None,
+    indices: Optional[torch.LongTensor] = None,
+    head_first: bool = True,
+    chunk_size: int = 64
+):
+    if head_first:
+        B, H, T, K = q.shape
+    else:
+        B, T, H, K = q.shape
+    BT = min(chunk_size, max(16, triton.next_power_of_2(T)))
+    BC = min(16, BT)
+    BK = min(64, triton.next_power_of_2(K))
+    NT = triton.cdiv(T, BT) if offsets is None else len(indices)
+    NC = triton.cdiv(BT, BC)
+    NK = triton.cdiv(K, BK)
+
+    dq = torch.empty_like(q, dtype=torch.float)
+    dk = torch.empty_like(k, dtype=torch.float)
+    grid = (NK, NT * NC, B * H)
+    chunk_rwkv6_bwd_kernel_intra[grid](
+        q,
+        k,
+        gi,
+        ge,
+        dA,
+        dq,
+        dk,
+        offsets,
+        indices,
+        T=T,
+        H=H,
+        K=K,
+        BT=BT,
+        BC=BC,
+        BK=BK,
+        NC=NC,
+        HEAD_FIRST=head_first
+    )
+    return dq, dk
+
+
+def chunk_rwkv6_bwd_dqkgu(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    h: torch.Tensor,
+    g: torch.Tensor,
+    gi: torch.Tensor,
+    ge: torch.Tensor,
+    u: torch.Tensor,
+    do: torch.Tensor,
+    dh: torch.Tensor,
+    dA: torch.Tensor,
+    dq: torch.Tensor,
+    dk: torch.Tensor,
+    scale: float,
+    offsets: Optional[torch.LongTensor] = None,
+    indices: Optional[torch.LongTensor] = None,
+    head_first: bool = True,
+    chunk_size: int = 64
+):
+    if head_first:
+        B, H, T, K, V = *k.shape, v.shape[-1]
+    else:
+        B, T, H, K, V = *k.shape, v.shape[-1]
+    BT = min(chunk_size, max(16, triton.next_power_of_2(T)))
+    NT = triton.cdiv(T, BT) if offsets is None else len(indices)
+
+    dq2 = torch.empty_like(dq)
+    dk2 = torch.empty_like(dk)
+    dg = torch.empty_like(g)
+    du = u.new_empty(B * NT, H, K, dtype=torch.float)
+    def grid(meta): return (triton.cdiv(K, meta['BK']), NT, B * H)
+    chunk_rwkv6_bwd_kernel_inter[grid](
+        q,
+        k,
+        v,
+        h,
+        gi,
+        ge,
+        u,
+        do,
+        dh,
+        dA,
+        dq,
+        dk,
+        dq2,
+        dk2,
+        dg,
+        du,
+        offsets,
+        indices,
+        scale,
+        T=T,
+        H=H,
+        K=K,
+        V=V,
+        BT=BT,
+        HEAD_FIRST=head_first
+    )
+    du = du.sum(0)
+    return dq2, dk2, dg, du
+
+
+def chunk_rwkv6_fwd(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    g: torch.Tensor,
+    u: torch.Tensor,
+    scale: float,
+    initial_state: torch.Tensor,
+    output_final_state: bool,
+    offsets: Optional[torch.LongTensor] = None,
+    indices: Optional[torch.LongTensor] = None,
+    head_first: bool = True,
+    chunk_size: int = 64
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    gi, ge = chunk_rwkv6_fwd_cumsum(g, chunk_size=chunk_size, offsets=offsets, indices=indices, head_first=head_first)
+    h, ht = chunk_fwd_h(
+        k=k,
+        v=v,
+        g=None,
+        gk=gi,
+        gv=None,
+        h0=initial_state,
+        output_final_state=output_final_state,
+        offsets=offsets,
+        indices=indices,
+        head_first=head_first,
+        chunk_size=chunk_size,
+        states_in_fp32=True
+    )
+    # the intra A is kept in fp32
+    # the computation has very marginal effect on the entire throughput
+    A = chunk_rwkv6_fwd_intra(
+        q=q,
+        k=k,
+        gi=gi,
+        ge=ge,
+        u=u,
+        scale=scale,
+        offsets=offsets,
+        indices=indices,
+        head_first=head_first,
+        chunk_size=chunk_size
+    )
+
+    o = chunk_gla_fwd_o_gk(
+        q=q,
+        v=v,
+        g=ge,
+        A=A,
+        h=h,
+        scale=scale,
+        offsets=offsets,
+        indices=indices,
+        head_first=head_first,
+        chunk_size=chunk_size
+    )
+    return A, h, ht, o
+
+
+def chunk_rwkv6_bwd(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    g: torch.Tensor,
+    u: torch.Tensor,
+    scale: float,
+    initial_state: torch.Tensor,
+    A: torch.Tensor,
+    do: torch.Tensor,
+    dht: torch.Tensor,
+    offsets: Optional[torch.LongTensor] = None,
+    indices: Optional[torch.LongTensor] = None,
+    head_first: bool = True,
+    chunk_size: int = 64
+):
+    gi, ge = chunk_rwkv6_fwd_cumsum(g, chunk_size=chunk_size, offsets=offsets, indices=indices, head_first=head_first)
+    h, _ = chunk_fwd_h(
+        k=k,
+        v=v,
+        g=None,
+        gk=gi,
+        gv=None,
+        h0=initial_state,
+        output_final_state=False,
+        offsets=offsets,
+        indices=indices,
+        head_first=head_first,
+        chunk_size=chunk_size,
+        states_in_fp32=True
+    )
+    dh, dh0 = chunk_rwkv6_bwd_dh(
+        q=q,
+        k=k,
+        v=v,
+        gi=gi,
+        ge=ge,
+        do=do,
+        h0=initial_state,
+        dht=dht,
+        scale=scale,
+        offsets=offsets,
+        indices=indices,
+        head_first=head_first,
+        chunk_size=chunk_size,
+        states_in_fp32=True
+    )
+
+    # dq dk in fp32
+    dA = chunk_gla_bwd_dA(
+        v=v,
+        do=do,
+        scale=scale,
+        offsets=offsets,
+        indices=indices,
+        head_first=head_first,
+        chunk_size=chunk_size
+    )
+    dv = chunk_gla_bwd_dv(
+        k=k,
+        g=gi,
+        A=A,
+        do=do,
+        dh=dh,
+        offsets=offsets,
+        indices=indices,
+        head_first=head_first,
+        chunk_size=chunk_size
+    )
+    dq, dk = chunk_rwkv6_bwd_dqk_intra(
+        q=q,
+        k=k,
+        gi=gi,
+        ge=ge,
+        dA=dA,
+        offsets=offsets,
+        indices=indices,
+        head_first=head_first,
+        chunk_size=chunk_size
+    )
+    dq, dk, dg, du = chunk_rwkv6_bwd_dqkgu(
+        q=q,
+        k=k,
+        v=v,
+        h=h,
+        g=g,
+        gi=gi,
+        ge=ge,
+        u=u,
+        do=do,
+        dh=dh,
+        dA=dA,
+        dq=dq,
+        dk=dk,
+        scale=scale,
+        offsets=offsets,
+        indices=indices,
+        head_first=head_first,
+        chunk_size=chunk_size
+    )
+    return dq, dk, dv, dg, du, dh0
 
 
 class ChunkRWKV6Function(torch.autograd.Function):
 
     @staticmethod
     @contiguous
-    def forward(ctx, r, k, v, g, u, scale, initial_state, output_final_state, checkpoint_level, u_2d: bool = False, training: bool = True, use_tf32: bool = False):
-        q = r  # alias
-        B, H, T, K, V = *q.shape, v.shape[-1]
-        BT, BC = 32, 16
-        BK = min(64, triton.next_power_of_2(K)) if device_capacity else min(32, triton.next_power_of_2(K))
-        BV = min(64, triton.next_power_of_2(V)) if device_capacity else min(32, triton.next_power_of_2(V))
-        NT, NC = triton.cdiv(T, BT), triton.cdiv(BT, BC)
-        NK = triton.cdiv(K, BK)
-        NV = triton.cdiv(V, BV)
-        BH = B * H
+    @autocast_custom_fwd
+    def forward(
+        ctx,
+        q,
+        k,
+        v,
+        g,
+        u,
+        scale,
+        initial_state,
+        output_final_state,
+        offsets,
+        head_first
+    ):
+        T = q.shape[2] if head_first else q.shape[1]
+        chunk_size = min(32, max(32, triton.next_power_of_2(T))) if device_capacity else min(64, max(32, triton.next_power_of_2(T)))
 
-        if (torch.is_autocast_enabled(device) if check_pytorch_version('2.4') else torch.is_autocast_enabled()):
-            torch_dtype = torch.get_autocast_dtype(device) if check_pytorch_version('2.4') else torch.get_autocast_gpu_dtype()
-            q, k, v, g, u = (x.to(dtype=torch_dtype) for x in (q, k, v, g, u))
-            initial_state = initial_state.to(dtype=torch_dtype) if initial_state is not None else initial_state
-        else:
-            torch_dtype = torch.float32 if q.dtype != torch.float16 else torch.float16
+        # 2-d indices denoting the offsets of chunks in each sequence
+        # for example, if the passed `offsets` is [0, 100, 356] and `chunk_size` is 64,
+        # then there are 2 and 4 chunks in the 1st and 2nd sequences respectively, and `indices` will be
+        # [[0, 0], [0, 1], [1, 0], [1, 1], [1, 2], [1, 3]]
+        indices = None
+        if offsets is not None:
+            indices = torch.cat([torch.arange(n) for n in triton.cdiv(offsets[1:] - offsets[:-1], chunk_size).tolist()])
+            indices = torch.stack([indices.eq(0).cumsum(0) - 1, indices], 1).to(offsets)
 
-        tl_dtype = tl.float32 if q.dtype != torch.float16 else tl.float16
-        g_org, g, gs, o, final_state, A, h = g, torch.empty_like(
-            g, dtype=torch.float32), torch.empty_like(
-            g, dtype=torch.float32), torch.empty_like(v), q.new_empty(
-            B, H, K, V, dtype=torch_dtype) if output_final_state is not None else None, torch.zeros(
-                NK, B, H, T, BT, dtype=torch_dtype, device=q.device), torch.zeros(
-                    B, H, NT * K, V, dtype=torch_dtype, device=q.device)
-
-        def grid(meta): return ((triton.cdiv(meta['S'], meta['BS']), NT, BH))
-        # keep cummulative normalizer in fp32
-        # this kernel is equivalent to
-        # g_org = g_org.view(B, H, NT, BT, -1)
-        # g = g_org.cumsum(-2).view(B, H, T, -1)
-        # gs = g - g_org
-        chunk_rwkv6_fwd_kernel_cum[grid](
-            g_org, g, gs,
-            g.stride(1), g.stride(2), g.stride(3),
-            T=T, S=K, BT=BT,
-            USE_TF32=use_tf32
-        )
-
-        # grid = (NV, NK, BH)
-        chunk_rwkv6_fwd_kernel_h[(NV, NK, BH)](
-            k, v, g, h, initial_state, final_state,
-            k.stride(1), k.stride(2), k.stride(3),
-            v.stride(1), v.stride(2), v.stride(3),
-            h.stride(1), h.stride(2), h.stride(3),
+        A, h, ht, o = chunk_rwkv6_fwd(
+            q=q,
+            k=k,
+            v=v,
+            g=g,
+            u=u,
             scale=scale,
-            T=T, K=K, V=V, BT=BT, BK=BK, BV=BV, NT=NT,
-            USE_INITIAL_STATE=initial_state is not None,
-            STORE_FINAL_STATE=final_state is not None,
-            TLTYPE=tl_dtype,
+            initial_state=initial_state,
+            output_final_state=output_final_state,
+            offsets=offsets,
+            indices=indices,
+            head_first=head_first,
+            chunk_size=chunk_size
         )
 
-        # grid = (NK, NT * NC * NC, BH)
-        chunk_rwkv6_fwd_kernel_intra[(NK, NT * NC * NC, BH)](
-            q, k, g, gs, u, A,
-            k.stride(1), k.stride(2), k.stride(3),
-            scale,
-            H=H, T=T, K=K, BT=BT, BC=BC, BK=BK, NC=NC, DK=K,
-            U_2D=u_2d, TLTYPE=tl_dtype, USE_TF32=use_tf32
-        )
-        A = A.sum(0, dtype=A.dtype)
+        ctx.save_for_backward(q, k, v, g, initial_state, A, u)
 
-        # grid = (NV, NT, BH)
-        chunk_rwkv6_fwd_kernel_inter[(NV, NT, BH)](
-            q, v, gs, h, o, A,
-            k.stride(1), k.stride(2), k.stride(3),
-            v.stride(1), v.stride(2), v.stride(3),
-            h.stride(1), h.stride(2), h.stride(3),
-            scale,
-            T=T, K=K, V=V, BT=BT, BK=BK, BV=BV,
-            TLTYPE=tl.float32, USE_TF32=use_tf32
-        )
-
-        if checkpoint_level > 1:
-            del h
-            h_t, initial_state = None, None
-        else:
-            h_t, initial_state = h, (None if initial_state is None else initial_state.clone())
-        del g, gs
-        if training:
-            ctx.save_for_backward(q, k, v, g_org, u, h_t, initial_state, A)
-            ctx.BT, ctx.scale, ctx.checkpoint_level, ctx.u_2d, ctx.use_tf32 = BT, scale, checkpoint_level, u_2d, use_tf32
-        return o, final_state
+        ctx.chunk_size = chunk_size
+        ctx.scale = scale
+        ctx.offsets = offsets
+        ctx.indices = indices
+        ctx.head_first = head_first
+        return o, ht
 
     @staticmethod
     @contiguous
-    def backward(ctx, do, dht=None):
-        q, k, v, g, u, h, initial_state, A = ctx.saved_tensors
-        scale, u_2d, use_tf32 = ctx.scale, ctx.u_2d, ctx.use_tf32
-        dtype = q.dtype
-        B, H, T, K, V = *q.shape, v.shape[-1]
-        BT, BC = ctx.BT, 16
-        next_pk_2 = triton.next_power_of_2(K)
-        next_pv_2 = triton.next_power_of_2(V)
-        BK = min(64, next_pk_2) if device_capacity else min(32, next_pk_2)
-        BV = min(64, next_pv_2) if device_capacity else min(32, next_pv_2)
-        NT, NC = triton.cdiv(T, BT), triton.cdiv(BT, BC)
-        NK = triton.cdiv(K, BK)
-        BH = B * H
-        num_warps = 4 if BK == 64 else 2
-        num_stages = 1
-        tl_dtype = tl.float32 if q.dtype != torch.float16 else tl.float16
-
-        def fwd_inner(q, k, v, g, B, H, T, K, V, BT, BK, BV, NT, h, h0=None, ht=None):
-            NK, NV = triton.cdiv(K, BK), triton.cdiv(V, BV)
-            grid = (NV, NK, BH)
-            chunk_rwkv6_fwd_kernel_h[grid](
-                k, v, g, h, h0, ht,
-                k.stride(1), k.stride(2), k.stride(3),
-                v.stride(1), v.stride(2), v.stride(3),
-                h.stride(1), h.stride(2), h.stride(3),
-                T=T, K=K, V=V, BT=BT, BK=BK, BV=BV, NT=NT, h=h,
-                USE_INITIAL_STATE=h0 is not None,
-                STORE_FINAL_STATE=ht is not None,
-            )
-
-        # recompute cumulative log decays.
-        g_org, g, gs = g, torch.empty_like(g, dtype=torch.float32), torch.empty_like(g, dtype=torch.float32)
-
-        def grid(meta): return ((triton.cdiv(meta['S'], meta['BS']), NT, BH))
-        # keep cummulative normalizer in fp32
-        # this kernel is equivalent to
-        # g = g.view(B, H, NT, BT, -1).cumsum(-2).view(B, H, T, -1)
-        chunk_rwkv6_fwd_kernel_cum[grid](
-            s=g_org, o=g, o_minus_s=gs,
-            s_s_h=g.stride(1), s_s_t=g.stride(2), s_s_d=g.stride(3),
-            T=T, S=K, BT=BT,
-            USE_TF32=use_tf32
-        )
-        del g_org
-
-        # rerun the forward pass to get h if checkpoint_level >= 1
-        if ctx.checkpoint_level == 1:
-            h = torch.zeros(B, H, NT * K, V, dtype=torch.float32, device=q.device)
-            fwd_inner(
-                q=q, k=k, v=v, g=g,
-                B=B, H=H, T=T, K=K, V=V, BT=BT, BK=BK, BV=BV, NT=NT, h=h,
-                h0=initial_state,
-                ht=None
-            )
-        dq, dk, dv, dA, dh, dh0 = torch.empty_like(q, dtype=torch.float), torch.empty_like(k, dtype=torch.float), \
-            v.new_empty(NK, *v.shape), torch.empty(B, H, T, BT, dtype=torch.float, device=q.device), \
-            torch.zeros(B, H, NT * K, V, dtype=torch.float, device=q.device), \
-            torch.empty_like(initial_state) if initial_state is not None else None
-
-        if dht is not None:
-            dh[:, :, -K:, :] += dht.to(dh.dtype)
-
-        # bwd_inner
-        NV = triton.cdiv(V, BV)
-        # grid = (NK, NV, BH)
-        chunk_rwkv6_bwd_kernel_dh[(NK, NV, BH)](
-            q, g, gs, do, dh, dh0,
-            q.stride(1), q.stride(2), q.stride(3),
-            do.stride(1), do.stride(2), do.stride(3),
-            dh.stride(1), dh.stride(2), dh.stride(3),
-            scale,
-            T=T, K=K, V=V, BT=BT, BK=BK, BV=BV, NT=NT,
-            USE_INITIAL_STATE=initial_state is not None,
-            TLTYPE=tl_dtype,
-        )
-
-        # grid = (NK, NT, BH)
-        chunk_rwkv6_bwd_kernel_inter[(NK, NT, BH)](
-            k, v, h, g, gs, A, do, dh, dq, dk, dv, dA,
-            k.stride(1), k.stride(2), k.stride(3),
-            v.stride(1), v.stride(2), v.stride(3),
-            h.stride(1), h.stride(2), h.stride(3),
-            scale,
-            T=T, K=K, V=V, BT=BT, BK=BK, BV=BV,
-            TLTYPE=tl_dtype, USE_TF32=use_tf32
-        )
-        dv = dv.sum(0, dtype=dv.dtype)
-        # grid = (NK, NT * NC, BH)
-        chunk_rwkv6_bwd_kernel_intra[(NK, NT * NC, BH)](
-            q, k, g, gs, dA, dq, dk,
-            k.stride(1), k.stride(2), k.stride(3),
+    @autocast_custom_bwd
+    def backward(ctx, do, dht):
+        q, k, v, g, initial_state, A, u = ctx.saved_tensors
+        chunk_size, scale, offsets, indices, head_first = ctx.chunk_size, ctx.scale, ctx.offsets, ctx.indices, ctx.head_first
+        dq, dk, dv, dg, du, dh0 = chunk_rwkv6_bwd(
+            q=q,
+            k=k,
+            v=v,
+            g=g,
+            u=u,
             scale=scale,
-            T=T, K=K, BT=BT, BC=BC, BK=BK, NC=NC,
-            TLTYPE=tl.float32,
-            num_warps = num_warps,
-            num_stages = num_stages
+            initial_state=initial_state,
+            A=A,
+            do=do,
+            dht=dht,
+            offsets=offsets,
+            indices=indices,
+            head_first=head_first,
+            chunk_size=chunk_size
         )
-
-        du = g
-        del g, gs, dA, A, dh
-
-        # TODO: fuse?
-        dg = (dq * q)[:, :, 1:] - (dk * k)[:, :, 0:-1]
-        dg = torch.nn.functional.pad(dg, (0, 0, 0, 1, 0, 0, 0, 0), value=0)
-        dg = chunk_global_reversed_cumsum(dg)
-        # equivalent to the following pytorch code.
-        # du = ((do * v).sum(-1)[..., None] * k * q * scale).sum(-2).to(u)
-        # dq += ((do * v).sum(-1)[..., None] * k * scale * u[:, :, None, :])
-        # dk += ((do * v).sum(-1)[..., None] * q * scale * u[:, :, None, :])
-
-        # grid = (NT, BH)
-
-        post_process_grad[(NT, BH)](
-            q, k, v, u, do, dk, dq, du, scale,
-            q.stride(1), q.stride(2), q.stride(3),
-            v.stride(1), v.stride(2), v.stride(3), H=H,
-            T=T, BT=BT, K=K, V=V, BK=next_pk_2, BV=next_pv_2, U_2D=u_2d,
-            TLTYPE=tl_dtype,
-            num_warps = num_warps,
-            num_stages = num_stages
-        )
-        du = du.sum([0, 2]) if u_2d else du.sum(2)
-        dh0 = dh0.to(q) if initial_state is not None else None
-        return dq.to(dtype), dk.to(dtype), dv.to(dtype), dg.to(dtype), du.to(dtype), None, \
-                dh0, None, None, None, None, None
+        return dq.to(q), dk.to(k), dv.to(v), dg.to(g), du.to(u), None, dh0, None, None, None
 
 
-_detect_use_tf32 = None
 def chunk_rwkv6(
-    r: torch.Tensor,
+    q: torch.Tensor,
     k: torch.Tensor,
     v: torch.Tensor,
     g: torch.Tensor,
     u: torch.Tensor,
-    scale: float = -1.0,
+    scale: Optional[int] = None,
     initial_state: torch.Tensor = None,
     output_final_state: bool = False,
-    checkpoint_level: Optional[int] = 0,
-    training: bool = True,
-    use_tf32: Optional[bool] = None
+    cu_seqlens: Optional[torch.LongTensor] = None,
+    head_first: bool = True
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     r"""
     Args:
-        r (torch.Tensor):
-            reception of shape `(B, H, T, K)`. Alias: q, query in linear attention.
+        q (torch.Tensor):
+            queries of shape `[B, H, T, K]` if `head_first=True` else `[B, T, H, K]`.
         k (torch.Tensor):
-            keys of shape `(B, H, T, K)`
+            keys of shape `[B, H, T, K]` if `head_first=True` else `[B, T, H, K]`.
         v (torch.Tensor):
-            values of shape `(B, H, T, V)`
-        w (torch.Tensor):
-            data-dependent decays of shape `(B, H, T, K)` in log space! Alias: g.
+            values of shape `[B, H, T, V]` if `head_first=True` else `[B, T, H, V]`.
+        g (torch.Tensor):
+            Forget gates of shape `[B, H, T, K]` if `head_first=True` else `[B, T, H, K]` applied to keys.
         u (torch.Tensor):
-            bonus of shape `(H, K)` or `(B, H, K)` for each head.
+            bonus representations of shape `[H]`.
         scale (Optional[int]):
-            Scale factor for the RWKV6 attention scores.
+            Scale factor for the attention scores.
             If not provided, it will default to `1 / sqrt(K)`. Default: `None`.
         initial_state (Optional[torch.Tensor]):
-            Initial state of shape `(B, H, K, V)`. Default: `None`.
+            Initial state of shape `[N, H, K, V]` for `N` input sequences.
+            For equal-length input sequences, `N` equals the batch size `B`.
+            Default: `None`.
         output_final_state (Optional[bool]):
-            Whether to output the final state of shape `(B, H, K, V)`. Default: `False`.
-        checkpoint_level (Optional[int]):
-            Checkpointing level; higher values will save more memories and do more recomputations during backward.
-            Default: `0`:
-            - Level `0`: store forward hidden states for backprop.
-            - Level `1`: recompute the forward hidden states during backward.
+            Whether to output the final state of shape `[N, H, K, V]`. Default: `False`.
+        cu_seqlens (torch.LongTensor):
+            Cumulative sequence lengths of shape `[N + 1]` used for variable-length training,
+            consistent with the FlashAttention API.
+        head_first (Optional[bool]):
+            Whether the inputs are in the head-first format, which is not supported for variable-length inputs.
+            Default: `True`.
+
+    Returns:
+        o (torch.Tensor):
+            Outputs of shape `[B, H, T, V]` if `head_first=True` else `[B, T, H, V]`.
+        final_state (Optional[torch.Tensor]):
+            Final state of shape `[N, H, K, V]` if `output_final_state=True` else `None`.
+
+    Examples::
+        >>> import torch
+        >>> import torch.nn.functional as F
+        >>> from einops import rearrange
+        >>> from fla.ops.rwkv6 import chunk_rwkv6
+        # inputs with equal lengths
+        >>> B, T, H, K, V = 4, 2048, 4, 512, 512
+        >>> q = torch.randn(B, T, H, K, device='cuda')
+        >>> k = torch.randn(B, T, H, K, device='cuda')
+        >>> v = torch.randn(B, T, H, V, device='cuda')
+        >>> g = F.logsigmoid(torch.randn(B, T, H, K, device='cuda'))
+        >>> u = torch.randn(H, K, device='cuda')
+        >>> h0 = torch.randn(B, H, K, V, device='cuda')
+        >>> o, ht = chunk_rwkv6(q, k, v, g, u,
+                                initial_state=h0,
+                                output_final_state=True,
+                                head_first=False)
+        # for variable-length inputs, the batch size `B` is expected to be 1 and `cu_seqlens` is required
+        >>> q, k, v, g = map(lambda x: rearrange(x, 'b t h d -> 1 (b t) h d'), (q, k, v, g))
+        # for a batch with 4 sequences, cu_seqlens with 5 start/end positions are expected
+        >>> cu_seqlens = q.new_tensor([0, 2048, 4096, 6144, 8192], dtype=torch.long)
+        >>> o_var, ht_var = chunk_rwkv6(q, k, v, g, u,
+                                        initial_state=h0,
+                                        output_final_state=True,
+                                        cu_seqlens=cu_seqlens,
+                                        head_first=False)
+        >>> assert o.allclose(o_var.view(o.shape))
+        >>> assert ht.allclose(ht_var)
     """
-    global _detect_use_tf32
-    assert checkpoint_level in [0, 1]
-    if scale == -1.0:
-        scale = r.shape[-1] ** -0.5
-    u_2d = True if u.dim() == 2 else False
-    if use_tf32 is None:
-        if _detect_use_tf32 is None:
-            _detect_use_tf32 = detect_tf32()
-        use_tf32 = _detect_use_tf32
-    else:
-        _detect_use_tf32 = use_tf32
-    o, final_state = ChunkRWKV6Function.apply(r, k, v, g, u, scale, initial_state,
-                                              output_final_state, checkpoint_level, u_2d, training, _detect_use_tf32)
+    set_torch_device(q)
+    if cu_seqlens is not None:
+        if q.shape[0] != 1:
+            raise ValueError(f"The batch size is expected to be 1 rather than {q.shape[0]} when using `cu_seqlens`."
+                             f"Please flatten variable-length inputs before processing.")
+        if head_first:
+            raise RuntimeError("Sequences with variable lengths are not supported for head-first mode")
+        if initial_state is not None and initial_state.shape[0] != len(cu_seqlens) - 1:
+            raise ValueError(f"The number of initial states is expected to be equal to the number of input sequences, "
+                             f"i.e., {len(cu_seqlens) - 1} rather than {initial_state.shape[0]}.")
+    if scale is None:
+        scale = q.shape[-1] ** -0.5
+    o, final_state = ChunkRWKV6Function.apply(
+        q,
+        k,
+        v,
+        g,
+        u,
+        scale,
+        initial_state,
+        output_final_state,
+        cu_seqlens,
+        head_first
+    )
     return o, final_state
-
-
-if __name__ == "__main__":
-    def get_err_ratio(x, y):
-        err = (x-y).flatten().square().mean().sqrt().item()
-        base = (x).flatten().square().mean().sqrt().item()
-        return err / base
-    from fla.ops.rwkv6 import fused_recurrent_rwkv6, native_recurrent_rwkv6
-    scale = -1.0
-    use_h = True
-    u_2d = False
-    B, H, T, D = 4, 4, 1024, 64
-    dtype = torch.float16
-    from fla.utils import device
-    from torch.nn import functional as F
-    torch.manual_seed(42)
-    atol = 1e-3 if dtype == torch.float else 1e-2
-
-    q = torch.randn(B, H, T, D, device=device).to(dtype).requires_grad_(True)
-    k = torch.randn(B, H, T, D, device=device).to(dtype).requires_grad_(True)
-    v = torch.randn(B, H, T, 2*D, device=device).to(dtype).requires_grad_(True)
-    w = F.logsigmoid(torch.randn(B, H, T, D, device=device)).to(dtype).requires_grad_(True)
-    if u_2d:
-        u = torch.randn(H, D, device=device).to(dtype).requires_grad_(True)
-    else:
-        u = (torch.randn(B, H, D).to(device).to(dtype)).requires_grad_(True)
-    do = torch.rand_like(v, device=device)
-    h = torch.randn(B, H, D, 2*D, device=device, dtype=dtype, requires_grad=True)
-
-    ref_o, _ = native_recurrent_rwkv6(q.float(), k.float(), v.float(), w.float(), u.float(), scale=scale, initial_state=h.float() if use_h else None, output_final_state=use_h)
-    ref_o.backward(do)
-    ref_dq, q.grad = q.grad.clone(), None
-    ref_dk, k.grad = k.grad.clone(), None
-    ref_dv, v.grad = v.grad.clone(), None
-    ref_dw, w.grad = w.grad.clone(), None
-    ref_du, u.grad = u.grad.clone(), None
-    if use_h:
-        ref_dh, h.grad = h.grad.clone(), None
-
-    tri_o, _ = chunk_rwkv6(q, k, v, w, u, scale=scale, initial_state=h if use_h else None, output_final_state=use_h)
-    tri_o.backward(do)
-    tri_dq, q.grad = q.grad.clone(), None
-    tri_dk, k.grad = k.grad.clone(), None
-    tri_dv, v.grad = v.grad.clone(), None
-    tri_dw, w.grad = w.grad.clone(), None
-    tri_du, u.grad = u.grad.clone(), None
-    if use_h:
-        tri_dh, h.grad = h.grad.clone(), None
-
-    assert get_err_ratio(ref_o, tri_o) < atol
-    print(get_err_ratio(ref_dq, tri_dq)) # pass
-    print(get_err_ratio(ref_dk, tri_dk))
-    print(get_err_ratio(ref_dv, tri_dv))
-    print(get_err_ratio(ref_dw, tri_dw))
-    assert get_err_ratio(ref_dq, tri_dq) < atol
-    assert get_err_ratio(ref_dk, tri_dk) < atol
-    assert get_err_ratio(ref_dv, tri_dv) < atol
-    assert get_err_ratio(ref_dw, tri_dw) < atol
-    assert get_err_ratio(ref_du, tri_du) < atol
-    if use_h:
-        assert get_err_ratio(ref_dh, tri_dh) < atol

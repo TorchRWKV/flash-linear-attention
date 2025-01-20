@@ -4,23 +4,28 @@ from __future__ import annotations
 
 import math
 import warnings
-from typing import List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Dict, List, Optional, Tuple, Union
 
 import torch
 import torch.nn as nn
 import torch.utils.checkpoint
 from transformers.activations import ACT2FN
+from transformers.generation import GenerationMixin
 from transformers.modeling_outputs import (BaseModelOutputWithPast,
                                            CausalLMOutputWithPast)
 from transformers.modeling_utils import PreTrainedModel
 from transformers.utils import logging
 
+from fla.layers.attn import Attention
 from fla.layers.hgrn import HGRNAttention
 from fla.models.hgrn.configuration_hgrn import HGRNConfig
 from fla.models.utils import Cache
 from fla.modules import (FusedCrossEntropyLoss, FusedLinearCrossEntropyLoss,
                          RMSNorm)
 from fla.modules.activations import swiglu_linear
+
+if TYPE_CHECKING:
+    from transformers.processing_utils import Unpack
 
 logger = logging.get_logger(__name__)
 
@@ -51,7 +56,11 @@ class HGRNMLP(nn.Module):
         self.down_proj = nn.Linear(self.intermediate_size, self.hidden_size, bias=False)
         self.act_fn = ACT2FN[hidden_act]
 
-    def forward(self, x):
+    def forward(
+        self,
+        x: torch.Tensor,
+        **kwargs: Unpack[Dict],
+    ) -> torch.Tensor:
         y = self.gate_proj(x)
         gate, y = y.chunk(2, -1)
         return swiglu_linear(gate, y, self.down_proj.weight, self.down_proj.bias)
@@ -63,16 +72,26 @@ class HGRNBlock(nn.Module):
         self.hidden_size = config.hidden_size
 
         self.attn_norm = RMSNorm(hidden_size=config.hidden_size, eps=config.norm_eps)
-        self.attn = HGRNAttention(
-            mode=config.attn_mode,
-            hidden_size=config.hidden_size,
-            expand_ratio=config.expand_ratio,
-            use_short_conv=config.use_short_conv,
-            conv_size=config.conv_size,
-            elementwise_affine=config.elementwise_affine,
-            norm_eps=config.norm_eps,
-            layer_idx=layer_idx
-        )
+        if config.attn is not None and layer_idx in config.attn['layers']:
+            self.attn = Attention(
+                hidden_size=config.hidden_size,
+                num_heads=config.attn['num_heads'],
+                num_kv_heads=config.attn['num_kv_heads'],
+                window_size=config.attn['window_size'],
+                max_position_embeddings=config.max_position_embeddings,
+                layer_idx=layer_idx
+            )
+        else:
+            self.attn = HGRNAttention(
+                mode=config.attn_mode,
+                hidden_size=config.hidden_size,
+                expand_ratio=config.expand_ratio,
+                use_short_conv=config.use_short_conv,
+                conv_size=config.conv_size,
+                elementwise_affine=config.elementwise_affine,
+                norm_eps=config.norm_eps,
+                layer_idx=layer_idx
+            )
         self.mlp_norm = RMSNorm(hidden_size=config.hidden_size, eps=config.norm_eps)
         self.mlp = HGRNMLP(
             hidden_size=config.hidden_size,
@@ -85,11 +104,11 @@ class HGRNBlock(nn.Module):
         self,
         hidden_states: torch.Tensor,
         attention_mask: Optional[torch.Tensor] = None,
-        past_key_values: Optional[Tuple[List[torch.Tensor]]] = None,
+        past_key_values: Optional[Union[Cache, List[torch.FloatTensor]]] = None,
         use_cache: Optional[bool] = False,
         output_attentions: Optional[bool] = False,
         lower_bound: Optional[torch.Tensor] = False,
-        **kwargs,
+        **kwargs: Unpack[Dict]
     ) -> Tuple[torch.FloatTensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]]:
         residual = hidden_states
         hidden_states = self.attn_norm(hidden_states)
@@ -99,10 +118,11 @@ class HGRNBlock(nn.Module):
             past_key_values=past_key_values,
             use_cache=use_cache,
             output_attentions=output_attentions,
-            lower_bound=lower_bound
+            lower_bound=lower_bound,
+            **kwargs
         )
         hidden_states, residual = self.mlp_norm(hidden_states, residual, True)
-        hidden_states = self.mlp(hidden_states)
+        hidden_states = self.mlp(hidden_states, **kwargs)
         hidden_states = residual + hidden_states
 
         outputs = (hidden_states, attentions, past_key_values)
@@ -135,6 +155,8 @@ class HGRNPreTrainedModel(PreTrainedModel):
             nn.init.normal_(module.weight, mean=0.0, std=self.config.initializer_range)
             if module.padding_idx is not None:
                 module.weight.data[module.padding_idx].zero_()
+        elif hasattr(module, 'reset_parameters'):
+            module.reset_parameters()
 
         if rescale_prenorm_residual:
             # Reinitialize selected weights subject to the OpenAI GPT-2 Paper Scheme:
@@ -181,11 +203,12 @@ class HGRNModel(HGRNPreTrainedModel):
         input_ids: Optional[torch.LongTensor] = None,
         attention_mask: Optional[torch.Tensor] = None,  # noqa
         inputs_embeds: Optional[torch.FloatTensor] = None,
-        past_key_values: Optional[Tuple[List[torch.Tensor]]] = None,
+        past_key_values: Optional[Union[Cache, List[torch.FloatTensor]]] = None,
         use_cache: Optional[bool] = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
-        return_dict: Optional[bool] = None
+        return_dict: Optional[bool] = None,
+        **kwargs: Unpack[Dict]
     ) -> Union[Tuple, BaseModelOutputWithPast]:
         if output_attentions:
             warnings.warn("`HGRNModel` does not `output_attentions` now, setting it to `False`.")
@@ -198,29 +221,19 @@ class HGRNModel(HGRNPreTrainedModel):
         # retrieve input_ids and inputs_embeds
         if input_ids is not None and inputs_embeds is not None:
             raise ValueError("You cannot specify both input_ids and inputs_embeds at the same time")
-        elif input_ids is not None:
-            batch_size = input_ids.shape[0]
-        elif inputs_embeds is not None:
-            batch_size = inputs_embeds.shape[0]
-        else:
+        if input_ids is None and inputs_embeds is None:
             raise ValueError("You have to specify either input_ids or inputs_embeds")
 
         if inputs_embeds is None:
             inputs_embeds = self.embeddings(input_ids)
         hidden_states = inputs_embeds
 
-        if use_cache:
-            if past_key_values is None:
-                past_key_values = [layer.attn.init_state(batch_size) for layer in self.layers]
-            if not isinstance(past_key_values, Cache):
-                past_key_values = Cache.from_legacy_cache(past_key_values)
+        if use_cache and not isinstance(past_key_values, Cache):
+            past_key_values = Cache.from_legacy_cache(past_key_values)
 
-        if self.gradient_checkpointing and self.training:
-            if use_cache:
-                logger.warning_once(
-                    "`use_cache=True` is incompatible with gradient checkpointing. Setting `use_cache=False`..."
-                )
-                use_cache = False
+        if self.gradient_checkpointing and self.training and use_cache:
+            logger.warning_once("`use_cache=True` is incompatible with gradient checkpointing. Setting `use_cache=False`...")
+            use_cache = False
 
         all_hidden_states = () if output_hidden_states else None
         all_attns = () if output_attentions else None
@@ -241,7 +254,8 @@ class HGRNModel(HGRNPreTrainedModel):
                     past_key_values,
                     use_cache,
                     output_attentions,
-                    lower_bound
+                    lower_bound,
+                    **kwargs
                 )
             else:
                 hidden_states, attentions, past_key_values = layer(
@@ -250,7 +264,8 @@ class HGRNModel(HGRNPreTrainedModel):
                     past_key_values=past_key_values,
                     use_cache=use_cache,
                     output_attentions=output_attentions,
-                    lower_bound=lower_bound
+                    lower_bound=lower_bound,
+                    **kwargs
                 )
 
             if output_attentions:
@@ -272,7 +287,8 @@ class HGRNModel(HGRNPreTrainedModel):
         )
 
 
-class HGRNForCausalLM(HGRNPreTrainedModel):
+class HGRNForCausalLM(HGRNPreTrainedModel, GenerationMixin):
+
     _tied_weights_keys = ["lm_head.weight"]
 
     def __init__(self, config):
@@ -320,16 +336,16 @@ class HGRNForCausalLM(HGRNPreTrainedModel):
     def prepare_inputs_for_generation(
         self,
         input_ids: torch.LongTensor = None,
-        past_key_values: Optional[Tuple[List[torch.Tensor]]] = None,
+        past_key_values: Optional[Union[Cache, List[torch.FloatTensor]]] = None,
         attention_mask: Optional[torch.Tensor] = None,
         inputs_embeds: Optional[torch.Tensor] = None,
-        **kwargs
+        use_cache: bool = True,
+        num_logits_to_keep: Optional[int] = None,
+        **kwargs: Unpack[Dict]
     ):
         # only last token for `inputs_ids` if the `past_key_values` is passed along.
         if past_key_values is not None:
-            if not isinstance(past_key_values, Cache):
-                past_key_values = Cache.from_legacy_cache(past_key_values, input_ids.shape[1] - 1)
-            input_ids, attention_mask = input_ids[:, -1:], attention_mask[:, -1:]
+            input_ids = input_ids[:, -1:]
         # if `inputs_embeds` are passed, we only want to use them in the 1st generation step
         if inputs_embeds is not None and past_key_values is None:
             model_inputs = {'inputs_embeds': inputs_embeds}
@@ -340,10 +356,14 @@ class HGRNForCausalLM(HGRNPreTrainedModel):
             # TODO: use `next_tokens` directly instead.
             model_inputs = {'input_ids': input_ids.contiguous()}
 
+        if num_logits_to_keep is not None:
+            model_inputs['num_logits_to_keep'] = num_logits_to_keep
+
         model_inputs.update({
             'past_key_values': past_key_values,
-            'use_cache': kwargs.get('use_cache'),
+            'use_cache': use_cache,
             'attention_mask': attention_mask,
+            'num_logits_to_keep': num_logits_to_keep,
         })
         return model_inputs
 
@@ -352,12 +372,14 @@ class HGRNForCausalLM(HGRNPreTrainedModel):
         input_ids: torch.LongTensor = None,
         attention_mask: Optional[torch.Tensor] = None,
         inputs_embeds: Optional[torch.Tensor] = None,
-        past_key_values: Optional[Tuple[List[torch.Tensor]]] = None,
+        past_key_values: Optional[Union[Cache, List[torch.FloatTensor]]] = None,
         labels: Optional[torch.LongTensor] = None,
         use_cache: Optional[bool] = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
+        num_logits_to_keep: Optional[int] = 0,
+        **kwargs: Unpack[Dict]
     ) -> Union[Tuple, CausalLMOutputWithPast]:
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
@@ -373,12 +395,13 @@ class HGRNForCausalLM(HGRNPreTrainedModel):
             use_cache=use_cache,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
-            return_dict=return_dict
+            return_dict=return_dict,
+            **kwargs
         )
 
         hidden_states = outputs[0]
         fuse_linear_and_cross_entropy = self.config.fuse_cross_entropy and self.training
-        logits = None if fuse_linear_and_cross_entropy else self.lm_head(hidden_states)
+        logits = None if fuse_linear_and_cross_entropy else self.lm_head(hidden_states[:, -num_logits_to_keep:])
 
         loss = None
         if labels is not None:

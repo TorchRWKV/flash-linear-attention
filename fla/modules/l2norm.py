@@ -1,5 +1,7 @@
 # -*- coding: utf-8 -*-
 
+from typing import Optional
+
 import torch
 import triton
 import triton.language as tl
@@ -7,19 +9,13 @@ import triton.language as tl
 
 @triton.autotune(
     configs=[
-        triton.Config({}, num_warps=1),
-        triton.Config({}, num_warps=2),
-        triton.Config({}, num_warps=4),
-        triton.Config({}, num_warps=8),
-        triton.Config({}, num_warps=16),
-        triton.Config({}, num_warps=32),
+        triton.Config({}, num_warps=num_warps)
+        for num_warps in [1, 2, 4, 8, 16, 32]
     ],
-    key=["N"],
+    key=["N"]
 )
-# @triton.heuristics({"HAS_BIAS": lambda args: args["B"] is not None})
-# @triton.heuristics({"HAS_RESIDUAL": lambda args: args["RESIDUAL"] is not None})
 @triton.jit
-def _l2_norm_fwd_1pass_kernel(
+def l2norm_fwd_kernel(
     X,  # pointer to the input
     Y,  # pointer to the output
     stride_x_row,  # how much to increase the pointer when moving by 1 row
@@ -47,12 +43,8 @@ def _l2_norm_fwd_1pass_kernel(
 
 @triton.autotune(
     configs=[
-        triton.Config({}, num_warps=1),
-        triton.Config({}, num_warps=2),
-        triton.Config({}, num_warps=4),
-        triton.Config({}, num_warps=8),
-        triton.Config({}, num_warps=16),
-        triton.Config({}, num_warps=32),
+        triton.Config({}, num_warps=num_warps)
+        for num_warps in [1, 2, 4, 8, 16, 32]
     ],
     key=["N"],
 )
@@ -61,7 +53,7 @@ def _l2_norm_fwd_1pass_kernel(
 # @triton.heuristics({"STORE_DRESIDUAL": lambda args: args["DRESIDUAL_IN"] is not None})
 # @triton.heuristics({"RECOMPUTE_OUTPUT": lambda args: args["Y"] is not None})
 @triton.jit
-def _l2_norm_bwd_kernel(
+def l2norm_bwd_kernel(
     X,  # pointer to the input
     # Y, # pointer to the output to be recomputed
     DY,  # pointer to the output gradient
@@ -95,8 +87,10 @@ def _l2_norm_bwd_kernel(
     tl.store(DX + cols, dx, mask=mask)
 
 
-def _l2_norm_fwd(
-    x, eps=1e-6
+def l2norm_fwd(
+    x: torch.Tensor,
+    eps: float = 1e-6,
+    output_dtype: Optional[torch.dtype] = None
 ):
     x_shape_og = x.shape
     x = x.reshape(-1, x.shape[-1])
@@ -105,7 +99,10 @@ def _l2_norm_fwd(
         M, N = x.shape
     assert x.stride(-1) == 1
     # allocate output
-    y = torch.empty_like(x)
+    if output_dtype is None:
+        y = torch.empty_like(x)
+    else:
+        y = torch.empty_like(x, dtype=output_dtype)
     assert y.stride(-1) == 1
     N = x.shape[-1]
     M = x.shape[0]
@@ -118,7 +115,7 @@ def _l2_norm_fwd(
             "This layer norm doesn't support feature dim >= 64KB.")
     # heuristics for number of warps
     with torch.cuda.device(x.device.index):
-        _l2_norm_fwd_1pass_kernel[(M,)](
+        l2norm_fwd_kernel[(M,)](
             x,
             y,
             x.stride(0),
@@ -133,8 +130,10 @@ def _l2_norm_fwd(
     return y.reshape(x_shape_og)
 
 
-def _l2_norm_bwd(
-    x, dy, eps=1e-5,
+def l2norm_bwd(
+    x: torch.Tensor,
+    dy: torch.Tensor,
+    eps: float = 1e-5
 ):
     x_shape_og = x.shape
     x = x.reshape(-1, dy.shape[-1])
@@ -157,7 +156,7 @@ def _l2_norm_bwd(
             "This layer norm doesn't support feature dim >= 64KB.")
     # heuristics for number of warps
     with torch.cuda.device(x.device.index):
-        _l2_norm_bwd_kernel[(M,)](
+        l2norm_bwd_kernel[(M,)](
             x,
             dy,
             dx,
@@ -169,16 +168,17 @@ def _l2_norm_bwd(
     return dx.reshape(x_shape_og)
 
 
-class L2NormFN(torch.autograd.Function):
+class L2NormFunction(torch.autograd.Function):
 
     @staticmethod
     def forward(
         ctx,
         x,
         eps=1e-6,
+        output_dtype=None
     ):
         # reshape input data into 2D tensor
-        y = _l2_norm_fwd(x, eps)
+        y = l2norm_fwd(x, eps, output_dtype)
         ctx.eps = eps
         ctx.x_dtype = x.dtype
         ctx.save_for_backward(x)
@@ -187,15 +187,13 @@ class L2NormFN(torch.autograd.Function):
     @staticmethod
     def backward(ctx, dy, *args):
         x, = ctx.saved_tensors
-        dx = _l2_norm_bwd(
-            x,
-            dy,
-            ctx.eps,
-        )
-        return (
-            dx,
-            None
-        )
+        dx = l2norm_bwd(x, dy, ctx.eps)
+        return dx, None, None
 
 
-l2_norm_fn = L2NormFN.apply
+def l2_norm(
+    x: torch.Tensor,
+    eps: float = 1e-6,
+    output_dtype: Optional[torch.dtype] = None
+) -> torch.Tensor:
+    return L2NormFunction.apply(x, eps, output_dtype)

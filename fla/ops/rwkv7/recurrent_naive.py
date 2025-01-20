@@ -303,10 +303,12 @@ def native_recurrent_rwkv7(
     b: torch.Tensor,
     scale: float = 1.0,
     initial_state: torch.Tensor = None,
-    output_final_state: bool = False,
+    output_final_state: bool = True,
+    cu_seqlens: Optional[torch.LongTensor] = None,
+    head_first: bool = True,
+    use_log_w: bool = False,
     training: bool = True,
-    dtype: Optional[torch.dtype] = None,
-    causal: bool = True
+    dtype = torch.float32
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     r"""
     Args:
@@ -328,6 +330,9 @@ def native_recurrent_rwkv7(
         output_final_state (Optional[bool]):
             Whether to output the final state of shape `(B, H, K, V)`. Default: `False`.
     """
+    assert cu_seqlens == None
+    assert head_first == True
+    assert use_log_w == False
     if scale == -1.0:
         scale = r.shape[-1] ** -0.5
     o, h_t = NativeRecurrentRWKV7Function.apply(r, k, v, w, a, b, scale, initial_state, training, dtype)

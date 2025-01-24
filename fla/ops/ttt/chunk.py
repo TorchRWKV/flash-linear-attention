@@ -247,14 +247,18 @@ def chunk_ttt_linear_fwd_h(
     BK = triton.next_power_of_2(K)
     assert BK <= 128, "current kernel does not support head dimension larger than 128."
     # H100 can have larger block size
-    if torch.cuda.get_device_capability()[0] >= 9:
-        BV = triton.next_power_of_2(V)
-        BC = 64
-    # A100
-    elif torch.cuda.get_device_capability() == (8, 0):
-        BV = triton.next_power_of_2(V)
-        BC = 64
-    else:
+    try:
+        if torch.cuda.get_device_capability()[0] >= 9:
+            BV = triton.next_power_of_2(V)
+            BC = 64
+        # A100
+        elif torch.cuda.get_device_capability() == (8, 0):
+            BV = triton.next_power_of_2(V)
+            BC = 64
+        else:
+            BV = triton.next_power_of_2(V)
+            BC = 64 if K <= 128 else 32
+    except BaseException:
         BV = triton.next_power_of_2(V)
         BC = 64 if K <= 128 else 32
     BC = min(BT, BC)

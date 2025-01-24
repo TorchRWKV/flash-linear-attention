@@ -8,7 +8,7 @@ import torch
 from fla.ops.retention import (chunk_retention, fused_recurrent_retention,
                                parallel_retention)
 from fla.ops.retention.naive import naive_retention
-
+from fla.utils import device
 
 def get_abs_err(x, y):
     return (x-y).flatten().abs().max().item()
@@ -100,7 +100,7 @@ def test_chunk_varlen(
         torch.tensor([0], dtype=torch.long),
         torch.arange(16, T)[torch.randperm(T - 1)[:N-1]],
         torch.tensor([T], dtype=torch.long)
-    ], 0).cuda().sort()[0]
+    ], 0).to(device).sort()[0]
     # seq-first required for inputs with variable lengths
     q = torch.randn((1, T, H, K), dtype=dtype, device='cuda').requires_grad_()
     k = torch.randn((1, T, H, K), dtype=dtype, device='cuda').requires_grad_()

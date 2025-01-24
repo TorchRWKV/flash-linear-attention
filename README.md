@@ -1,12 +1,55 @@
 <div align="center">
 
-# :boom: Flash Linear Attention
+# RWKV-FLA
 
 [![hf_model](https://img.shields.io/badge/-Models-gray.svg?logo=huggingface&style=flat-square)](https://huggingface.co/fla-hub)  [![Discord](https://img.shields.io/badge/Discord-%235865F2.svg?&logo=discord&logoColor=white&style=flat-square)](https://discord.gg/vDaJTmKNcS)
 
 </div>
 
-This repo aims at providing a collection of efficient Triton-based implementations for state-of-the-art linear attention models. **Any pull requests are welcome!** 
+This repo aims at providing Triton kernel for RWKV models. RWKV is a brand new network architecture that integrates the advantages of transformers and RNNs, and can be used for a variety of natural language processing tasks. Also, RWKV is the state-of-the-art RNN model.
+
+This project implements multi-level state chain differentiation for RWKV6, efficient differentiation of all input parameters, while maintaining high computational precision (both bf16 and fp32). Currently, it does not consider pure fp16 variants such as RWKV x060c.
+
+Some benchmarks (chunk_rwkv6(fla) vs CUDA kernel)
+
+>Since the project is under active development, the calculated times may differ.
+
+>fused_recurrent_rwkv6 will be much slower!
+
+| Test Case | Implementation | Forward Time | Backward Time |
+|-----------|----------------|--------------|---------------|
+| Test Case 1: B=8, T=4096, C=4096, HEAD_SIZE=64 | CUDA BF16 | 9.69 ms | 46.41 ms |
+| | FLA BF16 | 13.06 ms | 40.79 ms |
+| Test Case 2: B=32, T=4096, C=4096, HEAD_SIZE=64 | CUDA BF16 | 32.80 ms | 148.05 ms |
+| | FLA BF16 | 50.17 ms | 162.42 ms |
+| Test Case 3: B=8, T=4096, C=4096, HEAD_SIZE=128 | CUDA BF16 | 12.01 ms | 65.68 ms |
+| | FLA BF16 | 14.18 ms | 51.36 ms |
+| Test Case 4: B=8, T=4096, C=4096, HEAD_SIZE=256 | CUDA BF16 | 40.82 ms | 225.59 ms |
+| | FLA BF16 | 19.34 ms | 72.03 ms |
+| Test Case 5: B=16, T=4096, C=4096, HEAD_SIZE=128 | CUDA BF16 | 20.56 ms | 109.76 ms |
+| | FLA BF16 | 27.72 ms | 102.35 ms |
+| Test Case 6: B=16, T=4096, C=4096, HEAD_SIZE=256 | CUDA BF16 | 61.54 ms | 344.85 ms |
+| | FLA BF16 | 38.24 ms | 144.12 ms |
+
+
+```
+from fla.ops.rwkv6 import chunk_rwkv6, fused_recurrent_rwkv6, native_recurrent_rwkv6
+@torch.compile(fullgraph=True)
+# torch.compiler introduces errors in numerical precision (torch 2.4)
+def RUN_FLA_CHUNK(B, T, C, H, r, k, v, w, u, h, scale=1.0, chunk_size=32):
+    r = r.view(B,T,H,-1).transpose(1,2)
+    k = k.view(B,T,H,-1).transpose(1,2)
+    v = v.view(B,T,H,-1).transpose(1,2)
+    # u can be 3d or 2d (B, H, -1) or just (H, -1) to save VRAM
+    w = -torch.exp(w.view(B,T,H,-1).transpose(1,2))
+    # change to scale=-1.0 when using fp16, this will apply scale to r and k.
+    o, final_state = chunk_rwkv6(r, k, v, w, u=u, scale=scale, initial_state=h, 
+        output_final_state=True, chunk_size=chunk_size)
+    return o.transpose(1,2).reshape(B,T,C), final_state
+```
+
+
+>This repo aims at providing a collection of efficient Triton-based implementations for state-of-the-art linear attention models. **Any pull requests are welcome!**
 
 <div align="center">
   <img width="400" alt="image" src="https://github.com/fla-org/flash-linear-attention/assets/18402347/02ff2e26-1495-4088-b701-e72cd65ac6cf">
@@ -73,24 +116,31 @@ The following requirements should be satisfied
 - [datasets](https://github.com/huggingface/datasets) >=2.11.0
 - [causal-conv1d](https://github.com/Dao-AILab/causal-conv1d) >=1.4.0
 
-As `fla` is actively developed now, no released packages are provided at this time.
+As `fla` is actively developed now, you should alwayd check for latest version `pip install --upgrade rwkv-fla triton`
+
+Or you can install if with `pip install rwkv-fla[cuda]`, `pip install rwkv-fla[xpu]`, `pip install rwkv-fla[rocm]`
+
 If you do need to use `fla` ops/modules and contemplate further explorations, an alternative way is to install the package from source
 ```sh
-pip install -U git+https://github.com/fla-org/flash-linear-attention
+pip install -U git+https://github.com/TorchRWKV/flash-linear-attention
+```
+or
+```sh
+pip install -U git+https://gitee.com/uniartisan2018/flash-linear-attention
 ```
 or manage `fla` with submodules
 ```sh
-git submodule add https://github.com/fla-org/flash-linear-attention.git 3rdparty/flash-linear-attention
-ln -s 3rdparty/flash-linear-attention/fla fla
+git submodule add https://github.com/TorchRWKV/flash-linear-attention.git 3rdparty/rwkv-fla
+ln -s 3rdparty/rwkv-fla/fla fla
 ```
 
 ## Usage
 
 ### Token Mixing
 
-We provide ``token mixing'' linear attention layers in `fla.layers` for you to use. 
-You can replace the standard multihead attention layer in your model with other linear attention layers. 
-Example usage is as follows: 
+We provide "token mixing" linear attention layers in `fla.layers` for you to use.
+You can replace the standard multihead attention layer in your model with other linear attention layers.
+Example usage is as follows:
 ```py
 >>> import torch
 >>> from fla.layers import MultiScaleRetention
@@ -113,7 +163,7 @@ MultiScaleRetention(
 torch.Size([32, 2048, 1024])
 ```
 
-We provide the implementations of models that are compatible with 🤗 Transformers library. 
+We provide the implementations of models that are compatible with 🤗 Transformers library.
 Here's an example of how to initialize a GLA model from the default configs in `fla`:
 
 ```py
@@ -352,10 +402,10 @@ The model will produce output as-is, without any need for additional configurati
 
 ## Evaluations
 
-The [lm-evaluation-harness](https://github.com/EleutherAI/lm-evaluation-harness) library allows you to easily perform (zero-shot) model evaluations. 
+The [lm-evaluation-harness](https://github.com/EleutherAI/lm-evaluation-harness) library allows you to easily perform (zero-shot) model evaluations.
 Follow the steps below to use this library:
 
-1. Install `lm_eval` following [their instructions](https://github.com/EleutherAI/lm-evaluation-harness/blob/main/README.md). 
+1. Install `lm_eval` following [their instructions](https://github.com/EleutherAI/lm-evaluation-harness/blob/main/README.md).
 
 2. Run evaluation with:
 ```sh
@@ -366,7 +416,7 @@ $ python -m evals.harness --model hf \
     --batch_size 64 \
     --num_fewshot 0 \
     --device cuda \
-    --show_config                  
+    --show_config
 ```
 
 We've made `fla` compatible with hf-style evaluations, you can call [evals.harness](evals/harness.py) to finish the evaluations.
@@ -380,7 +430,7 @@ Running the command above will provide the task results reported in the GLA pape
 
 ## Benchmarks
 
-We compared our Triton-based RetNet implementation with CUDA-based FlashAttention2, using a batch size of 8, 32 heads, and a head dimension of 128, across different sequence lengths. 
+We compared our Triton-based RetNet implementation with CUDA-based FlashAttention2, using a batch size of 8, 32 heads, and a head dimension of 128, across different sequence lengths.
 These tests were conducted on a single A100 80GB GPU, as illustrated in the following graph
 ```py
 # you might have to first install `fla` to enable its import via `pip install -e .`

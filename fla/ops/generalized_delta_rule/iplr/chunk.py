@@ -286,10 +286,14 @@ def chunk_generalized_iplr_delta_rule_fwd_h(
     BK = triton.next_power_of_2(K)
     assert BK <= 256, "current kernel does not support head dimension larger than 256."
     # H100 can have larger block size
-    if torch.cuda.get_device_capability()[0] >= 9:
-        BV = 64
-        BC = 64 if K <= 128 else 32
-    else:
+    try:
+        if torch.cuda.get_device_capability()[0] >= 9:
+            BV = 64
+            BC = 64 if K <= 128 else 32
+        else:
+            BV = 32
+            BC = 32
+    except BaseException:
         BV = 32
         BC = 32
     BC = min(BT, BC)

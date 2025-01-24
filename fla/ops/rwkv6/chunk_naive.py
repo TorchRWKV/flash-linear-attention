@@ -15,7 +15,8 @@ def naive_chunk_rwkv6(
     assert q.shape[-2] % chunk_size == 0
     orig_dtype = q.dtype
     num_chunk = q.shape[-2] // chunk_size
-    u = u.unsqueeze(0)
+    if u.dim() == 2:
+        u = torch.broadcast_to(u.unsqueeze(0), (q.shape[0], *u.shape))
 
     q, k, v, w = map(lambda x: rearrange(x, 'b h (n c) d -> b h n c d', c=chunk_size).float(), (q, k, v, w))
 
@@ -27,7 +28,7 @@ def naive_chunk_rwkv6(
     wkv_new = torch.zeros_like(wkv)
 
     for i in range(num_chunk - 1):
-        wkv_new[:, :, i+1] = (wkv_new[:, :, i] * w_cumsum[:, :, i, -1, :, None].exp()) + wkv[:, :, i]
+        wkv_new[:, :, i + 1] = (wkv_new[:, :, i] * w_cumsum[:, :, i, -1, :, None].exp()) + wkv[:, :, i]
 
     o_inter = torch.einsum('b h n d p, b h n c d -> b h n c p', wkv_new, (q * (w_cumsum - w).exp()))
 

@@ -8,6 +8,7 @@ import torch.nn.functional as F
 
 from fla.ops.hgrn import chunk_hgrn, fused_recurrent_hgrn
 from fla.ops.hgrn.naive import naive_recurrent_hgrn
+from fla.utils import device
 
 
 def get_abs_err(x, y):
@@ -83,7 +84,7 @@ def test_fused_recurrent_varlen(
         torch.tensor([0], dtype=torch.long),
         torch.arange(16, T)[torch.randperm(T - 1)[:N-1]],
         torch.tensor([T], dtype=torch.long)
-    ], 0).cuda().sort()[0]
+    ], 0).to(device).sort()[0]
 
     x = torch.randn((1, T, D), dtype=dtype, device='cuda')
     g = torch.randn((1, T, D), dtype=dtype, device='cuda')

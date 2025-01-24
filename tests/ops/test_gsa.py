@@ -8,7 +8,7 @@ import torch.nn.functional as F
 
 from fla.ops.gsa import chunk_gsa, fused_recurrent_gsa
 from fla.ops.gsa.naive import naive_recurrent_gsa
-
+from fla.utils import device
 
 def get_abs_err(x, y):
     return (x-y).flatten().abs().max().item()
@@ -127,7 +127,7 @@ def test_fused_recurrent_varlen(
         torch.tensor([0], dtype=torch.long),
         torch.arange(16, T)[torch.randperm(T - 1)[:N-1]],
         torch.tensor([T], dtype=torch.long)
-    ], 0).cuda().sort()[0]
+    ], 0).to(device).sort()[0]
 
     q = torch.randn((1, T, H, D), dtype=dtype, device='cuda').requires_grad_()
     k = torch.randn((1, T, H, D), dtype=dtype, device='cuda').requires_grad_()
@@ -289,7 +289,7 @@ def test_chunk_varlen(
         torch.tensor([0], dtype=torch.long),
         torch.arange(16, T)[torch.randperm(T - 1)[:N-1]],
         torch.tensor([T], dtype=torch.long)
-    ], 0).cuda().sort()[0]
+    ], 0).to(device).sort()[0]
     # seq-first required for inputs with variable lengths
     q = torch.randn((1, T, H, D), dtype=dtype, device='cuda').requires_grad_()
     k = torch.randn((1, T, H, D), dtype=dtype, device='cuda').requires_grad_()

@@ -6,31 +6,33 @@ from typing import Optional
 import torch
 
 from fla.ops.generalized_delta_rule import chunk_dplr_delta_rule
+from fla.utils import set_torch_device
 
 
 def chunk_rwkv7(
     r: torch.Tensor,
-    log_w: torch.Tensor,
     k: torch.Tensor,
     v: torch.Tensor,
+    w: torch.Tensor,
     a: torch.Tensor,
     b: torch.Tensor,
     scale: float = 1.0,
     initial_state: torch.Tensor = None,
     output_final_state: bool = True,
     cu_seqlens: Optional[torch.LongTensor] = None,
-    head_first: bool = False
+    head_first: bool = False,
+    use_log_w: bool = True
 ):
     """
     Args:
         r (torch.Tensor):
             r of shape `[B, H, T, K]` if `head_first=True` else `[B, T, H, K]`.
-        log_w (torch.Tensor):
-            log decay of shape `[B, H, T, K]` if `head_first=True` else `[B, T, H, K]`.
         k (torch.Tensor):
             k of shape `[B, H, T, K]` if `head_first=True` else `[B, T, H, K]`.
         v (torch.Tensor):
             v of shape `[B, H, T, V]` if `head_first=True` else `[B, T, H, V]`.
+        w (torch.Tensor):
+            log decay of shape `[B, H, T, K]` if `head_first=True` else `[B, T, H, K]`.
         a (torch.Tensor):
             a of shape `[B, H, T, K]` if `head_first=True` else `[B, T, H, K]`.
         b (torch.Tensor):
@@ -48,7 +50,16 @@ def chunk_rwkv7(
             consistent with the FlashAttention API.
         head_first (bool):
             whether to use head first. Recommended to be False to avoid extra transposes.
+        use_log_w (bool):
+            if use_log_w == false, will apply w = -torch.exp(w)
     """
+    set_torch_device(r)
+
+    if use_log_w:
+        log_w = w
+    else:
+        log_w = -torch.exp(w)
+
     return chunk_dplr_delta_rule(
         q=r,
         k=k,

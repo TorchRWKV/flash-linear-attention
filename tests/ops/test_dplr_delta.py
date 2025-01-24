@@ -7,6 +7,7 @@ import torch
 import torch.nn.functional as F
 from einops import rearrange
 from utils import assert_close
+from fla.utils import device
 
 from fla.ops.generalized_delta_rule.dplr import (
     chunk_dplr_delta_rule, fused_recurrent_dplr_delta_rule)
@@ -310,7 +311,7 @@ def test_chunk(
     gk = torch.nn.functional.logsigmoid(gk) / gate_logit_normalizer
 
     h0 = torch.randn(B, H, D, D, dtype=torch.float32)
-    q, k, v, a, b, gk, h0 = map(lambda x: x.cuda().requires_grad_(True), (q, k, v, a, b, gk, h0))
+    q, k, v, a, b, gk, h0 = map(lambda x: x.to(device).requires_grad_(True), (q, k, v, a, b, gk, h0))
     ref, ref_ht = chunk_dplr_delta_rule_ref(
         q=q.clone(),
         k=k.clone(),
@@ -378,7 +379,7 @@ def test_chunk_varlen(
         torch.tensor([0], dtype=torch.long),
         torch.arange(16, T)[torch.randperm(T - 1)[:N-1]],
         torch.tensor([T], dtype=torch.long)
-    ], 0).cuda().sort()[0]
+    ], 0).to(device).sort()[0]
     # seq-first required for inputs with variable lengths
     q = torch.randn(1, T, H, D, dtype=dtype)
     k = torch.randn(1, T, H, D, dtype=dtype)
@@ -389,7 +390,7 @@ def test_chunk_varlen(
     b = -a
     gk = torch.nn.functional.logsigmoid(gk)
     h0 = torch.randn(N, H, D, D, dtype=torch.float32)
-    q, k, v, a, b, gk, h0 = map(lambda x: x.cuda().requires_grad_(True), (q, k, v, a, b, gk, h0))
+    q, k, v, a, b, gk, h0 = map(lambda x: x.to(device).requires_grad_(True), (q, k, v, a, b, gk, h0))
 
     tri, tri_ht = chunk_dplr_delta_rule(
         q=q.clone(),

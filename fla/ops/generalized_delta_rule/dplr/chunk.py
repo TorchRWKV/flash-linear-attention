@@ -20,7 +20,8 @@ from fla.ops.generalized_delta_rule.dplr.chunk_o_fwd import chunk_dplr_fwd_o
 from fla.ops.generalized_delta_rule.dplr.wy_fast_bwd import chunk_dplr_bwd_wy
 from fla.ops.generalized_delta_rule.dplr.wy_fast_fwd import fwd_prepare_wy_repr
 from fla.ops.rwkv6.chunk import chunk_rwkv6_fwd_cumsum
-from fla.utils import autocast_custom_bwd, autocast_custom_fwd, contiguous
+from fla.utils import (autocast_custom_bwd, autocast_custom_fwd, contiguous,
+                       device_capacity)
 
 
 def chunk_dplr_fwd(
@@ -113,7 +114,7 @@ class ChunkDPLRDeltaRuleFunction(torch.autograd.Function):
         offsets: Optional[torch.LongTensor] = None,
         head_first: bool = True
     ):
-        chunk_size = 64
+        chunk_size = 64 if device_capacity else 32
 
         # 2-d indices denoting the offsets of chunks in each sequence
         # for example, if the passed `offsets` is [0, 100, 356] and `chunk_size` is 64,

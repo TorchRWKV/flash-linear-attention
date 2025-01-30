@@ -9,116 +9,150 @@ import triton
 import triton.language as tl
 
 from fla.ops.generalized_delta_rule import fused_recurrent_dplr_delta_rule
-from fla.utils import autocast_custom_bwd, autocast_custom_fwd, contiguous
+from fla.utils import contiguous
 from fla.utils import device, set_torch_device
 
 
+@triton.heuristics({
+    'USE_OFFSETS': lambda args: args['offsets'] is not None
+})
+@triton.autotune(
+    configs=[
+        triton.Config({'BV': BV}, num_warps=num_warps, num_stages=num_stages)
+        for BV in [32, 64]
+        for num_warps in [2, 4, 8, 16]
+        for num_stages in [2,]
+    ],
+    key=["BK"],
+)
 @triton.jit
 def fused_rwkv7_kernel(
     q_ptr, k_ptr, v_ptr,
     w_ptr, a_ptr, b_ptr,
     state_ptr, output_ptr,
     state_output_ptr,
-    scale: tl.constexpr,
-    N: tl.constexpr,
+    K: tl.constexpr,
     V: tl.constexpr,
-    L: tl.constexpr,
-    H: tl.constexpr,
-    BLOCK: tl.constexpr,
+    L, H,
+    offsets,
+    scale: tl.constexpr,
+    BK: tl.constexpr,
+    BV: tl.constexpr,
     USE_INITIAL_STATE: tl.constexpr,
-    STORE_FINAL_STATE: tl.constexpr
+    STORE_FINAL_STATE: tl.constexpr,
+    USE_OFFSETS: tl.constexpr,
+    HEAD_FIRST: tl.constexpr,
+    DTYPE: tl.constexpr = tl.float32
 ):
-    pid = tl.program_id(0)
+    # indices
+    i_v, i_nh = tl.program_id(0), tl.program_id(1)
+    i_n, i_h = i_nh // H, i_nh % H
 
-    b_idx = pid // H
-    h_idx = pid % H
+    if USE_OFFSETS:
+        bos, eos = tl.load(offsets + i_n).to(tl.int64), tl.load(offsets + i_n + 1).to(tl.int64)
+        L = eos - bos
+    else:
+        bos, eos = i_n * L, i_n * L + L
 
-    xindex = tl.arange(0, BLOCK)
-    xmask = xindex < N
+    if HEAD_FIRST:
+        p_q = q_ptr + i_nh * L*K + tl.arange(0, BK)
+        p_k = k_ptr + i_nh * L*K + tl.arange(0, BK)
+        p_w = w_ptr + i_nh * L*K + tl.arange(0, BK)
+        p_a = a_ptr + i_nh * L*K + tl.arange(0, BK)
+        p_b = b_ptr + i_nh * L*K + tl.arange(0, BK)
+        p_o = output_ptr + i_nh * L*V + i_v * BV + tl.arange(0, BV)
+        p_v = v_ptr + i_nh * L*V + i_v * BV + tl.arange(0, BV)
+    else:
+        p_q = q_ptr + (bos * H + i_h) * K + tl.arange(0, BK)
+        p_k = k_ptr + (bos * H + i_h) * K + tl.arange(0, BK)
+        p_w = w_ptr + (bos * H + i_h) * K + tl.arange(0, BK)
+        p_a = a_ptr + (bos * H + i_h) * K + tl.arange(0, BK)
+        p_b = b_ptr + (bos * H + i_h) * K + tl.arange(0, BK)
+        p_v = v_ptr + (bos * H + i_h) * V + i_v * BV + tl.arange(0, BV)
+        p_o = output_ptr + (bos * H + i_h) * V + i_v * BV + tl.arange(0, BV)
 
-    state = tl.zeros([BLOCK, V], dtype=tl.float32)
+    mask_k = tl.arange(0, BK) < K
+    mask_v = (i_v * BV + tl.arange(0, BV)) < V
+    mask_h = mask_k[None, :] & mask_v[:, None]
+
+    b_h = tl.zeros([BV, BK], dtype=DTYPE)
 
     if USE_INITIAL_STATE:
-        state_offset = (b_idx * H + h_idx) * N * V
-        state += tl.load(state_ptr + state_offset + (xindex[:, None] * V + tl.arange(0, V)[None, :]),
-                         mask=xmask[:, None]).to(tl.float32)
+        p_h0 = state_ptr + i_nh * K * V + (tl.arange(0, BK)[None, :]) * V + ((i_v * BV + tl.arange(0, BV))[:, None])
+        b_h += tl.load(p_h0, mask=mask_h, other=0).to(DTYPE)
 
-    for t in range(L):
-        t_offset = (b_idx * H * L + h_idx * L + t) * N
-
-        # Step 1: sa
-        a = tl.load(a_ptr + t_offset + xindex, mask=xmask).to(tl.float32)
-        sa = tl.sum(a[:, None] * state, axis=0)
-
-        # Step 2: update state
-        w = tl.load(w_ptr + t_offset + xindex, mask=xmask).to(tl.float32)
-        k = tl.load(k_ptr + t_offset + xindex, mask=xmask).to(tl.float32)
-        v = tl.load(v_ptr + (b_idx * H * L + h_idx * L + t) * V + tl.arange(0, V)).to(tl.float32)
-        b = tl.load(b_ptr + t_offset + xindex, mask=xmask).to(tl.float32)
-
-        w = tl.exp(-tl.exp(w))
-        state = (state * w[:, None] +
-                 k[:, None] * v[None, :] +
-                 sa[None, :] * b[:, None])
-
-        # Step 3
-        q = tl.load(q_ptr + t_offset + xindex, mask=xmask).to(tl.float32) * scale
-        output = tl.sum(state * q[:, None], axis=0)
-
-        out_offset = (b_idx * H * L + h_idx * L + t) * V
-        tl.store(output_ptr + out_offset + tl.arange(0, V), output.to(output_ptr.dtype.element_ty))
+    for _ in range(0, L):
+        b_k = tl.load(p_k, mask=mask_k, other=0).to(DTYPE)
+        b_w = tl.load(p_w, mask=mask_k, other=0).to(DTYPE)
+        b_v = tl.load(p_v, mask=mask_v, other=0).to(DTYPE)
+        b_q = tl.load(p_q, mask=mask_k, other=0).to(DTYPE) * scale
+        b_a = tl.load(p_a, mask=mask_k, other=0).to(DTYPE)
+        b_b = tl.load(p_b, mask=mask_k, other=0).to(DTYPE)
+        # to store
+        tmp = tl.sum(b_h * b_a[None, :], axis=1)
+        b_h = tl.exp(-tl.exp(b_w))[None, :] * b_h + (tmp[:, None] * b_b[None, :] + b_k[None, :] * b_v[:, None])
+        _o = b_h * b_q[None, :]
+        _o = tl.sum(_o, axis=1)
+        tl.store(p_o, _o.to(p_o.dtype.element_ty), mask=mask_v)
+        p_q += K if HEAD_FIRST else K*H
+        p_k += K if HEAD_FIRST else K*H
+        p_w += K if HEAD_FIRST else K*H
+        p_o += V if HEAD_FIRST else V*H
+        p_v += V if HEAD_FIRST else V*H
+        p_a += K if HEAD_FIRST else K*H
+        p_b += K if HEAD_FIRST else K*H
 
     if STORE_FINAL_STATE:
-        state_offset = (b_idx * H + h_idx) * N * V
-        tl.store(state_output_ptr + state_offset + (xindex[:, None] * V + tl.arange(0, V)[None, :]),
-                 state.to(state_output_ptr.dtype.element_ty), mask=xmask[:, None])
+        p_ht = state_output_ptr + i_nh * K * V + (tl.arange(0, BK)[None, :]) * V + ((i_v * BV + tl.arange(0, BV))[:, None])
+        tl.store(p_ht, b_h.to(p_ht.dtype.element_ty), mask=mask_h)
 
 
 class FusedRecurrentRWKV7Function(torch.autograd.Function):
 
     @staticmethod
     @contiguous
-    @autocast_custom_fwd
-    def forward(ctx, q, k, v, w, a, b, scale, initial_state, output_final_state: bool = True):
-        """
-        Args:
-            args: List containing:
-                q: (B, H, L, N) Query tensor
-                k: (B, H, L, N) Key tensor
-                v: (B, H, L, V) Value tensor
-                w: (B, H, L, N) Time decay weights
-                a: (B, H, L, N) Dynamic learning rate modulator
-                b: (B, H, L, N) State update modulator
-                state: (B, H, N, V) Current state
-        """
-
-        B, H, L, K = q.shape
-        V = v.shape[-1]
-
+    def forward(ctx, q, k, v, w, a, b,
+        scale=None,
+        initial_state=None,
+        output_final_state=False,
+        offsets=None,
+        head_first=False
+    ):
+        if head_first:
+            B, H, L, K, V = *k.shape, v.shape[-1]
+        else:
+            B, L, H, K, V = *k.shape, v.shape[-1]
+        N = B if offsets is None else len(offsets) - 1
         output = torch.empty_like(v)
 
+        BK = triton.next_power_of_2(K)
         if initial_state is not None:
             final_state = torch.empty_like(initial_state)
+            use_initial_state = True
         elif output_final_state:
-            final_state = q.new_empty(B, H, K, V)
+            final_state = q.new_empty(B, H, K, V, dtype=torch.float32)
+            use_initial_state = False
         else:
             final_state = None
+            use_initial_state = False
 
-        fused_rwkv7_kernel[(B * H,)](
+        def grid(meta): return (triton.cdiv(V, meta['BV']), N * H)
+        
+        fused_rwkv7_kernel[grid](
             q, k, v, w, a, b,
             initial_state, output, final_state,
-            scale,
             K, V, L, H,
-            BLOCK=K,
-            USE_INITIAL_STATE=True if initial_state is not None else False,
+            offsets=offsets,
+            scale=scale,
+            BK=BK,
+            HEAD_FIRST=head_first,
+            USE_INITIAL_STATE=use_initial_state,
             STORE_FINAL_STATE=output_final_state,
         )
-
-        return output, final_state if output_final_state else None
+        return output, final_state
 
     @staticmethod
     @contiguous
-    @autocast_custom_bwd
     def backward(ctx, do, dht):
         raise NotImplementedError(
             "Fused wkv7 backward function is not implemented. "
@@ -170,13 +204,30 @@ def fused_recurrent_rwkv7(
         use_log_w (bool):
             if use_log_w == false, will apply w = -torch.exp(w)
     """
-    if scale == -1.0:
-        scale = r.shape[-1] ** -0.5
     set_torch_device(r)
     if not use_log_w:
-        assert use_log_w is False
-        assert head_first is True
-        return FusedRecurrentRWKV7Function.apply(r, k, v, w, a, b, scale, initial_state, output_final_state)
+        if cu_seqlens is not None:
+            if r.shape[0] != 1:
+                raise ValueError(f"The batch size is expected to be 1 rather than {q.shape[0]} when using `cu_seqlens`."
+                                 f"Please flatten variable-length inputs before processing.")
+            if head_first:
+                raise RuntimeError("Sequences with variable lengths are not supported for head-first mode")
+            if initial_state is not None and initial_state.shape[0] != len(cu_seqlens) - 1:
+                raise ValueError(f"The number of initial states is expected to be equal to the number of input sequences, "
+                                 f"i.e., {len(cu_seqlens) - 1} rather than {initial_state.shape[0]}.")
+        if scale is None:
+            scale = q.shape[-1] ** -0.5
+        else:
+            assert scale > 0, "scale must be positive"
+        o, final_state = FusedRecurrentRWKV7Function.apply(
+            r, k, v, w, a, b,
+            scale,
+            initial_state,
+            output_final_state,
+            cu_seqlens,
+            head_first
+        )
+        return o, final_state
     else:
         log_w = -torch.exp(w)
         return fused_recurrent_dplr_delta_rule(
@@ -200,7 +251,7 @@ if __name__ == '__main__':
     H = 64
     L = 4096
     D = 64
-    dtype = torch.bfloat16
+    dtype = torch.float16
     require_grad = True
     torch.manual_seed(44)
 
@@ -233,7 +284,10 @@ if __name__ == '__main__':
         q, k, v, w, a, b, h = (x.to(dtype=dtype).to(device) for x in (q, k, v, w, a, b, h))
         result, state = fused_recurrent_rwkv7(q, k, v, w, a, b, initial_state=h.transpose(-1, -2),
                                               use_log_w=False, head_first=True)
-
+        if torch.isnan(result).any():
+            raise ValueError("NaN detected in output")
+        if torch.isnan(ref_o).any():
+            raise ValueError("NaN detected in reference output")
         ref_o = ref_o.to(dtype=torch.float32).to(device)
         result = result.to(dtype=torch.float32).to(device)
         ref_state = ref_state.to(dtype=torch.float32).to(device)

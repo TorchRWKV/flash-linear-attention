@@ -101,7 +101,6 @@ class RWKV7Attention(nn.Module):
             nn.init.xavier_uniform_(module, gain=2 ** -2.5)
         module._is_hf_initialized = True
 
-    @torch.compile
     def forward(
         self,
         hidden_states: torch.Tensor,

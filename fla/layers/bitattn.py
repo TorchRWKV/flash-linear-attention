@@ -74,7 +74,6 @@ class BitAttention(nn.Module):
 
         self.rotary = RotaryEmbedding(dim=self.head_dim, base=self.rope_theta)
 
-    @torch.compile
     def forward(
         self,
         hidden_states: torch.Tensor,

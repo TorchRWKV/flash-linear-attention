@@ -94,7 +94,6 @@ class LightNetAttention(nn.Module):
                 nn.init.zeros_(module.bias)
         module._is_hf_initialized = True
 
-    @torch.compile
     def forward(
         self,
         hidden_states: torch.Tensor,

@@ -9,12 +9,8 @@ from fla.utils import contiguous
 
 @triton.autotune(
     configs=[
-        triton.Config({}, num_warps=1),
-        triton.Config({}, num_warps=2),
-        triton.Config({}, num_warps=4),
-        triton.Config({}, num_warps=8),
-        triton.Config({}, num_warps=16),
-        triton.Config({}, num_warps=32)
+        triton.Config({}, num_warps=num_warps)
+        for num_warps in [1, 2, 4, 8, 16, 32]
     ],
     key=['D']
 )
@@ -40,12 +36,8 @@ def swiglu_fwd_kernel(
 
 @triton.autotune(
     configs=[
-        triton.Config({}, num_warps=1),
-        triton.Config({}, num_warps=2),
-        triton.Config({}, num_warps=4),
-        triton.Config({}, num_warps=8),
-        triton.Config({}, num_warps=16),
-        triton.Config({}, num_warps=32)
+        triton.Config({}, num_warps=num_warps)
+        for num_warps in [1, 2, 4, 8, 16, 32]
     ],
     key=['D']
 )
@@ -79,17 +71,13 @@ def swiglu_bwd_kernel(
 
 @triton.autotune(
     configs=[
-        triton.Config({}, num_warps=1),
-        triton.Config({}, num_warps=2),
-        triton.Config({}, num_warps=4),
-        triton.Config({}, num_warps=8),
-        triton.Config({}, num_warps=16),
-        triton.Config({}, num_warps=32)
+        triton.Config({}, num_warps=num_warps)
+        for num_warps in [1, 2, 4, 8, 16, 32]
     ],
     key=['D']
 )
 @triton.jit
-def swiglu_bwd_with_output_kernel(
+def swiglu_fwdbwd_kernel(
     x,
     y,
     g,
@@ -124,12 +112,8 @@ def swiglu_bwd_with_output_kernel(
 
 @triton.autotune(
     configs=[
-        triton.Config({}, num_warps=1),
-        triton.Config({}, num_warps=2),
-        triton.Config({}, num_warps=4),
-        triton.Config({}, num_warps=8),
-        triton.Config({}, num_warps=16),
-        triton.Config({}, num_warps=32)
+        triton.Config({}, num_warps=num_warps)
+        for num_warps in [1, 2, 4, 8, 16, 32]
     ],
     key=['D']
 )
@@ -155,12 +139,8 @@ def logsigmoid_fwd_kernel(
 
 @triton.autotune(
     configs=[
-        triton.Config({}, num_warps=1),
-        triton.Config({}, num_warps=2),
-        triton.Config({}, num_warps=4),
-        triton.Config({}, num_warps=8),
-        triton.Config({}, num_warps=16),
-        triton.Config({}, num_warps=32)
+        triton.Config({}, num_warps=num_warps)
+        for num_warps in [1, 2, 4, 8, 16, 32]
     ],
     key=['D']
 )
@@ -222,7 +202,7 @@ def swiglu_bwd(x: torch.Tensor, y: torch.Tensor, dout: torch.Tensor) -> tuple[to
 
 
 @contiguous
-def swiglu_bwd_with_output(
+def swiglu_fwdbwd(
     x: torch.Tensor,
     y: torch.Tensor,
     dout: torch.Tensor
@@ -233,7 +213,7 @@ def swiglu_bwd_with_output(
     dx = torch.empty_like(x)
     dy = torch.empty_like(y)
     z = torch.empty_like(x)
-    swiglu_bwd_with_output_kernel[(triton.cdiv(T, B),)](
+    swiglu_fwdbwd_kernel[(triton.cdiv(T, B),)](
         x=x,
         y=y,
         g=dout,

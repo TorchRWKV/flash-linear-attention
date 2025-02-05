@@ -3,7 +3,6 @@
 
 from typing import Optional
 
-import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange, repeat
@@ -123,7 +122,6 @@ class LinearAttention(nn.Module):
                 nn.init.zeros_(module.bias)
         module._is_hf_initialized = True
 
-    @torch.compile
     def forward(self, x):
         mode = self.mode
         q = self.q_proj(x)

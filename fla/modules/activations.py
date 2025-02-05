@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
-
-# Copyright (c) 2023-2024, Tri Dao, Yu Zhang, Songlin Yang.
+# Copyright (c) 2023-2025, Tri Dao, Yu Zhang, Songlin Yang.
 
 import torch
 import torch.nn.functional as F
@@ -12,12 +11,12 @@ from fla.modules.activations_triton import (logsigmoid_fwd,
 
 if device == 'cuda':
     from fla.modules.activations_cuda import (sigmoid, swish, swiglu_fwd,
-                                              swiglu_bwd, swiglu_bwd_with_output)
+                                              swiglu_bwd, swiglu_fwdbwd)
 else:
     sigmoid = F.sigmoid
     swish = F.silu
     from fla.modules.activations_triton import (swiglu_fwd, swiglu_bwd,
-                                                swiglu_bwd_with_output)
+                                                swiglu_fwdbwd)
 
 
 class SwiGLUFunction(torch.autograd.Function):
@@ -65,7 +64,7 @@ class SwiGLULinearFunction(torch.autograd.Function):
         x, y, weight = ctx.saved_tensors
         dout = dout.reshape(-1, dout.shape[-1])
         dz = F.linear(dout, weight.t()).view_as(x)
-        dx, dy, z = swiglu_bwd_with_output(x, y, dz)
+        dx, dy, z = swiglu_fwdbwd(x, y, dz)
         dlinear_weight = torch.einsum("bo,bi->oi", dout, z.reshape(-1, z.shape[-1]))
         dlinear_bias = None if ctx.linear_bias_is_none else dout.sum(0)
         return dx, dy, dlinear_weight, dlinear_bias
@@ -97,7 +96,7 @@ class SwiGLUBitLinearFunction(torch.autograd.Function):
         x, y, weight = ctx.saved_tensors
         dout = dout.reshape(-1, dout.shape[-1])
         dz = fused_bitlinear.bit_linear(dout, weight.t()).view_as(x)
-        dx, dy, z = swiglu_bwd_with_output(x, y, dz)
+        dx, dy, z = swiglu_fwdbwd(x, y, dz)
         dlinear_weight = torch.einsum("bo,bi->oi", dout, z.reshape(-1, z.shape[-1]))
         dlinear_bias = None if ctx.linear_bias_is_none else dout.sum(0)
         return dx, dy, dlinear_weight, dlinear_bias

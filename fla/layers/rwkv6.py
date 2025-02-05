@@ -91,7 +91,6 @@ class RWKV6Attention(nn.Module):
             nn.init.xavier_uniform_(module, gain=2 ** -2.5)
         module._is_hf_initialized = True
 
-    @torch.compile
     def forward(
         self,
         hidden_states: torch.Tensor,
@@ -230,7 +229,6 @@ class LoRA(nn.Module):
         s += ")"
         return s
 
-    @torch.compile
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.lora(x)
 
@@ -263,7 +261,6 @@ class LerpLinear(nn.Module):
         s += ")"
         return s
 
-    @torch.compile
     def forward(self, x: torch.Tensor, delta: Optional[torch.Tensor] = None) -> torch.Tensor:
         if delta is None:
             shifted = self.time_shift(x)
@@ -300,7 +297,6 @@ class DDLerpLinear(nn.Module):
         s += ")"
         return s
 
-    @torch.compile
     def forward(self, x: torch.Tensor, mu: torch.Tensor, delta: Optional[torch.Tensor] = None) -> torch.Tensor:
         if delta is None:
             shifted = self.time_shift(x)

@@ -38,12 +38,14 @@ setup(
     install_requires=[
         'torch>=2.3',
         'transformers>=4.45.0',
-        'triton>=3.0',
         'datasets>=3.1.0',
         'einops',
         'ninja'
     ],
     extras_require={
-        'conv1d': ['causal-conv1d>=1.4.0']
+        'conv1d': ['causal-conv1d>=1.4.0'],
+        'cuda': ['pytorch-triton>=3.0'],
+        'xpu': ['pytorch-triton-xpu>=3.0'],
+        'rocm': ['pytorch-triton-rocm>=3.0'],
     }
 )

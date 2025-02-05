@@ -18,7 +18,6 @@ requires-python = ">=3.10"
 dependencies = [
     "torch>=2.3",
     "transformers>=4.45.0",
-    "triton>=3.0",
     "datasets>=3.1.0",
     "einops",
     "ninja",
@@ -27,6 +26,9 @@ dependencies = [
 [project.optional-dependencies]
 conv1d = ["causal-conv1d>=1.4.0"]
 dev = ["pytest"]
+cuda = ["pytorch-triton>=3.0"]
+xpu = ["pytorch-triton-xpu>=3.0"]
+rocm = ["pytorch-triton-rocm>=3.0"]
 
 [project.urls]
 Homepage = "https://github.com/fla-org/flash-linear-attention"

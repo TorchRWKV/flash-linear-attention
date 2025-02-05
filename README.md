@@ -77,7 +77,16 @@ As `fla` is actively developed now, no released packages are provided at this ti
 If you do need to use `fla` ops/modules and contemplate further explorations, an alternative way is to install the package from source
 ```sh
 # uninstall `fla` first to ensure a successful upgrade
+# Please intall triton>3.0 first
 pip uninstall fla && pip install -U git+https://github.com/fla-org/flash-linear-attention
+```
+or
+```sh
+pip uninstall fla && pip install -U "git+https://github.com/fla-org/flash-linear-attention#egg=flash-linear-attention[cuda]" --extra-index-url https://download.pytorch.org/whl/
+# for AMD GPUs
+# pip uninstall fla && pip install -U "git+https://github.com/fla-org/flash-linear-attention#egg=flash-linear-attention[rocm]" --extra-index-url https://download.pytorch.org/whl/
+# for intel GPUs
+# pip uninstall fla && pip install -U "git+https://github.com/fla-org/flash-linear-attention#egg=flash-linear-attention[xpu]" --extra-index-url https://download.pytorch.org/whl/
 ```
 or manage `fla` with submodules
 ```sh

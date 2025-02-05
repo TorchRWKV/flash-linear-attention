@@ -16,7 +16,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 import triton
 import triton.language as tl
-
 from fla.utils import contiguous
 
 
@@ -86,10 +85,6 @@ def layer_norm_fwd_kernel(
     RESIDUAL_OUT,  # pointer to the residual
     Mean,  # pointer to the mean
     Rstd,  # pointer to the 1/std
-    stride_x_row,  # how much to increase the pointer when moving by 1 row
-    stride_y_row,
-    stride_res_row,
-    stride_res_out_row,
     N,  # number of columns in X
     G,  # number of groups
     eps,  # epsilon to avoid division by zero
@@ -103,12 +98,12 @@ def layer_norm_fwd_kernel(
     # Map the program id to the row of X and Y it should compute.
     row = tl.program_id(0)
     group = row % G
-    X += row * stride_x_row
-    Y += row * stride_y_row
+    X += row * N
+    Y += row * N
     if HAS_RESIDUAL:
-        RESIDUAL += row * stride_res_row
+        RESIDUAL += row * N
     if STORE_RESIDUAL_OUT:
-        RESIDUAL_OUT += row * stride_res_out_row
+        RESIDUAL_OUT += row * N
     # Compute mean and variance
     cols = tl.arange(0, BLOCK_N)
     x = tl.load(X + cols, mask=cols < N, other=0.0).to(tl.float32)
@@ -130,9 +125,9 @@ def layer_norm_fwd_kernel(
     # Normalize and apply linear transformation
     mask = cols < N
     if HAS_WEIGHT:
-        w = tl.load(W + group * stride_x_row + cols, mask=mask).to(tl.float32)
+        w = tl.load(W + group * N + cols, mask=mask).to(tl.float32)
     if HAS_BIAS:
-        b = tl.load(B + group * stride_x_row + cols, mask=mask).to(tl.float32)
+        b = tl.load(B + group * N + cols, mask=mask).to(tl.float32)
     x_hat = (x - mean) * rstd if not IS_RMS_NORM else x * rstd
 
     y = x_hat * w if HAS_WEIGHT else x_hat
@@ -176,6 +171,7 @@ def layer_norm_fwd(
     if N > BLOCK_N:
         raise RuntimeError("This layer norm doesn't support feature dim >= 64KB.")
     # heuristics for number of warps
+
     with torch.cuda.device(x.device.index):
         layer_norm_fwd_kernel[(M,)](
             x,
@@ -186,10 +182,6 @@ def layer_norm_fwd(
             residual_out,
             mean,
             rstd,
-            x.stride(0),
-            y.stride(0),
-            residual.stride(0) if residual is not None else 0,
-            residual_out.stride(0) if residual_out is not None else 0,
             N,
             G,
             eps,

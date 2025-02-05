@@ -135,6 +135,7 @@ class LightNetPreTrainedModel(PreTrainedModel):
     config_class = LightNetConfig
     supports_gradient_checkpointing = True
     _no_split_modules = ['LightNetBlock']
+    _supports_cache_class = True
 
     def __init__(self, *inputs, **kwargs):
         super().__init__(*inputs, **kwargs)

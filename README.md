@@ -120,13 +120,14 @@ As `fla` is actively developed now, you should alwayd check for latest version `
 
 Or you can install if with `pip install rwkv-fla[cuda]`, `pip install rwkv-fla[xpu]`, `pip install rwkv-fla[rocm]`
 
-If you do need to use `fla` ops/modules and contemplate further explorations, an alternative way is to install the package from source
+If you do need to use `rwkv-fla` ops/modules and contemplate further explorations, an alternative way is to install the package from source
 ```sh
-pip install -U git+https://github.com/TorchRWKV/flash-linear-attention
+# uninstall `rwkv-fla` first to ensure a successful upgrade
+pip uninstall rwkv-fla && pip install -U git+https://github.com/TorchRWKV/flash-linear-attention
 ```
 or
 ```sh
-pip install -U git+https://gitee.com/uniartisan2018/flash-linear-attention
+pip uninstall rwkv-fla && pip install -U git+https://gitee.com/uniartisan2018/flash-linear-attention
 ```
 or manage `fla` with submodules
 ```sh

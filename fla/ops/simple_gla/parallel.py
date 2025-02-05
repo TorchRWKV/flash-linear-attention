@@ -487,12 +487,14 @@ def parallel_simple_gla_fwd(
     else:
         B, T, H, K, V = *k.shape, v.shape[-1]
     BT, BS = chunk_size, 32
-    if torch.cuda.get_device_capability()[0] >= 9:
-        BK = min(256, triton.next_power_of_2(K))
-        BV = min(256, triton.next_power_of_2(V))
-    else:
-        BK = min(128, triton.next_power_of_2(K))
-        BV = min(128, triton.next_power_of_2(V))
+    BK = min(128, triton.next_power_of_2(K))
+    BV = min(128, triton.next_power_of_2(V))
+    try:
+        if torch.cuda.get_device_capability()[0] >= 9:
+            BK = min(256, triton.next_power_of_2(K))
+            BV = min(256, triton.next_power_of_2(V))
+    except BaseException:
+        pass
     NK = triton.cdiv(K, BK)
     NV = triton.cdiv(V, BV)
     assert BT % BS == 0

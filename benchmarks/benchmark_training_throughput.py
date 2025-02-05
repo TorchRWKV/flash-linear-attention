@@ -6,11 +6,13 @@ from typing import Optional, Tuple
 
 import torch
 from accelerate import Accelerator
-from torch.cuda import max_memory_allocated, memory_allocated
+from fla.utils import device, device_torch_lib
 from torch.optim import AdamW
 from tqdm import trange
 from transformers import AutoConfig, AutoModelForCausalLM, PretrainedConfig
 from transformers.optimization import get_cosine_schedule_with_warmup
+max_memory_allocated = device_torch_lib.max_memory_allocated
+memory_allocated = device_torch_lib.memory_allocated
 
 import fla
 
@@ -68,9 +70,8 @@ def profile(
     mixed_precision: str = 'bf16',
     compile: bool = False
 ):
-    device = torch.device('cuda')
     config = configs[name] if name in configs else AutoConfig.from_pretrained(name)
-    model = AutoModelForCausalLM.from_config(config).cuda().to(dtype)
+    model = AutoModelForCausalLM.from_config(config).to(device).to(dtype)
     if compile:
         print("Compiling the model")
         model = torch.compile(model)
@@ -92,7 +93,7 @@ def profile(
     bar = trange(warmup_steps)
 
     model, optimizer, scheduler = accelerator.prepare(model, optimizer, scheduler)
-    torch.cuda.synchronize(device)
+    device_torch_lib.synchronize(device)
     for _ in bar:
         # forward pass
         tokens, cu_seqlens = prepare_inputs(
@@ -113,7 +114,7 @@ def profile(
 
     start, total_tokens = time.time(), 0
     bar = trange(steps)
-    torch.cuda.synchronize(device)
+    device_torch_lib.synchronize(device)
     for _ in bar:
         # forward pass
         tokens, cu_seqlens = prepare_inputs(
@@ -131,7 +132,7 @@ def profile(
         optimizer.zero_grad()
 
         total_tokens += batch_size * seq_len
-        torch.cuda.synchronize(device)
+        device_torch_lib.synchronize(device)
         duration = time.time() - start
         bar.set_description_str(f"Thoughput: {total_tokens / duration:10.2f} tokens/s")
 

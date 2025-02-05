@@ -9,6 +9,7 @@ import triton.language as tl
 
 import fla.modules.fused_bitlinear as fused_bitlinear
 from fla.utils import autocast_custom_bwd, autocast_custom_fwd, contiguous
+from fla.utils import device_torch_lib
 
 sigmoid_fwd_codestring = """
 template <typename T> T sigmoid_fwd(T x) {
@@ -22,8 +23,8 @@ template <typename T> T sigmoid_bwd(T x, T g) {
 }
 """
 
-sigmoid_fwd = torch.cuda.jiterator._create_jit_fn(sigmoid_fwd_codestring)
-sigmoid_bwd = torch.cuda.jiterator._create_jit_fn(sigmoid_bwd_codestring)
+sigmoid_fwd = device_torch_lib.jiterator._create_jit_fn(sigmoid_fwd_codestring)
+sigmoid_bwd = device_torch_lib.jiterator._create_jit_fn(sigmoid_bwd_codestring)
 
 
 class SigmoidFunction(torch.autograd.Function):
@@ -106,7 +107,7 @@ def logsigmoid_bwd_kernel(
 
 def logsigmoid_fwd(x: torch.Tensor, temperature: float = 1.) -> torch.Tensor:
     T, D = x.numel(), x.shape[-1]
-    B = triton.next_power_of_2(triton.cdiv(T, torch.cuda.get_device_properties(x.device).multi_processor_count))
+    B = triton.next_power_of_2(triton.cdiv(T, device_torch_lib.get_device_properties(x.device).multi_processor_count))
     y = torch.empty_like(x)
     logsigmoid_fwd_kernel[(triton.cdiv(T, B),)](
         x=x,
@@ -121,7 +122,7 @@ def logsigmoid_fwd(x: torch.Tensor, temperature: float = 1.) -> torch.Tensor:
 
 def logsigmoid_bwd(x: torch.Tensor, dy: torch.Tensor, temperature: float = 1.) -> torch.Tensor:
     T, D = x.numel(), x.shape[-1]
-    B = triton.next_power_of_2(triton.cdiv(T, torch.cuda.get_device_properties(x.device).multi_processor_count))
+    B = triton.next_power_of_2(triton.cdiv(T, device_torch_lib.get_device_properties(x.device).multi_processor_count))
     dx = torch.empty_like(x)
     logsigmoid_bwd_kernel[(triton.cdiv(T, B),)](
         x=x,
@@ -168,8 +169,8 @@ template <typename T> T swish_bwd(T x, T g) {
 }
 """
 
-swish_fwd = torch.cuda.jiterator._create_jit_fn(swish_fwd_codestring)
-swish_bwd = torch.cuda.jiterator._create_jit_fn(swish_bwd_codestring)
+swish_fwd = device_torch_lib.jiterator._create_jit_fn(swish_fwd_codestring)
+swish_bwd = device_torch_lib.jiterator._create_jit_fn(swish_bwd_codestring)
 
 
 class SwishFunction(torch.autograd.Function):
@@ -328,9 +329,10 @@ template <typename T> T swiglu_bwd_with_output(T x, T y, T g, T& dx, T& dy, T& z
 }
 """
 
-swiglu_fwd = torch.cuda.jiterator._create_jit_fn(swiglu_fwd_codestring)
-swiglu_bwd = torch.cuda.jiterator._create_multi_output_jit_fn(swiglu_bwd_codestring, num_outputs=2)
-swiglu_bwd_with_output = torch.cuda.jiterator._create_multi_output_jit_fn(swiglu_bwd_with_output_codestring, num_outputs=3)
+swiglu_fwd = device_torch_lib.jiterator._create_jit_fn(swiglu_fwd_codestring)
+swiglu_bwd = device_torch_lib.jiterator._create_multi_output_jit_fn(swiglu_bwd_codestring, num_outputs=2)
+swiglu_bwd_with_output = \
+        device_torch_lib.jiterator._create_multi_output_jit_fn(swiglu_bwd_with_output_codestring, num_outputs=3)
 
 
 class SwiGLUFunction(torch.autograd.Function):

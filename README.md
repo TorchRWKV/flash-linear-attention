@@ -96,7 +96,8 @@ Example usage is as follows:
 >>> import torch
 >>> from fla.layers import MultiScaleRetention
 >>> batch_size, num_heads, seq_len, hidden_size = 32, 4, 2048, 1024
->>> device, dtype = 'cuda:0', torch.bfloat16
+>>> from fla.utils import device
+>>> dtype = torch.bfloat16
 >>> retnet = MultiScaleRetention(hidden_size=hidden_size, num_heads=num_heads).to(device=device, dtype=dtype)
 >>> retnet
 MultiScaleRetention(
@@ -212,9 +213,10 @@ In the following, we give a generation example:
 >>> from transformers import AutoModelForCausalLM, AutoTokenizer
 >>> name = 'fla-hub/gla-1.3B-100B'
 >>> tokenizer = AutoTokenizer.from_pretrained(name)
->>> model = AutoModelForCausalLM.from_pretrained(name).cuda()
+>>> from fla.utils import device
+>>> model = AutoModelForCausalLM.from_pretrained(name).to(device)
 >>> input_prompt = "Power goes with permanence. Impermanence is impotence. And rotation is castration."
->>> input_ids = tokenizer(input_prompt, return_tensors="pt").input_ids.cuda()
+>>> input_ids = tokenizer(input_prompt, return_tensors="pt").input_ids.to(device)
 >>> outputs = model.generate(input_ids, max_length=64)
 >>> tokenizer.batch_decode(outputs, skip_special_tokens=True)[0]
 ```

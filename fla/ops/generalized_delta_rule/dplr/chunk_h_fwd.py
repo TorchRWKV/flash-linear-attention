@@ -7,7 +7,7 @@ from typing import Optional, Tuple
 import torch
 import triton
 import triton.language as tl
-from fla.utils import device_capacity
+from fla.utils import device_capacity, check_triton_shared_mem
 
 
 triton_config = triton.autotune(
@@ -154,14 +154,14 @@ def chunk_dplr_fwd_h(
     BK = triton.next_power_of_2(K)
     assert BK <= 256, "current kernel does not support head dimension larger than 256."
     # H100 can have larger block size
-    try:
-        if torch.cuda.get_device_capability()[0] >= 9:
-            BV = 64
-            BC = 64 if K <= 128 else 32
-        else:  # A100
-            BV = 32
-            BC = 32
-    except BaseException:
+
+    if check_triton_shared_mem(233472, kg.device.index):
+        BV = 64
+        BC = 64 if K <= 128 else 32
+    elif check_triton_shared_mem(131072, kg.device.index):  # A100
+        BV = 32
+        BC = 32
+    else:
         BV = 16
         BC = 16
 

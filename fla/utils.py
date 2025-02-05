@@ -90,15 +90,9 @@ def check_pytorch_version(version_s: str = "2.4"):
 
 
 @lru_cache(maxsize=None)
-def check_compute_capacity(max_shared_mem=102400):
-    try:
-        max_shared_memory = triton.runtime.driver.active.utils.get_device_properties(0)['max_shared_mem']
-        if max_shared_memory < max_shared_mem:
-            return False
-        else:
-            return True
-    except BaseException:
-        return False
+def check_triton_shared_mem(max_shared_mem: int = 102400, tensor_idx: int = 0):
+    max_shared_memory = triton.runtime.driver.active.utils.get_device_properties(tensor_idx)['max_shared_mem']
+    return max_shared_mem >= max_shared_memory
 
 
 @lru_cache(maxsize=None)
@@ -133,7 +127,7 @@ def get_available_device():
 
 
 device = "cuda" if get_available_device() == "cpu" else get_available_device()
-device_capacity = check_compute_capacity()
+device_capacity = check_triton_shared_mem()
 device_torch_lib = getattr(torch, device)
 
 

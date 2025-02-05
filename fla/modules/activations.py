@@ -107,7 +107,8 @@ def logsigmoid_bwd_kernel(
 
 def logsigmoid_fwd(x: torch.Tensor, temperature: float = 1.) -> torch.Tensor:
     T, D = x.numel(), x.shape[-1]
-    B = triton.next_power_of_2(triton.cdiv(T, device_torch_lib.get_device_properties(x.device).multi_processor_count))
+    B = triton.next_power_of_2(triton.cdiv(
+        T, triton.runtime.driver.active.utils.get_device_properties(x.device.index)['multiprocessor_count']))
     y = torch.empty_like(x)
     logsigmoid_fwd_kernel[(triton.cdiv(T, B),)](
         x=x,
@@ -122,7 +123,8 @@ def logsigmoid_fwd(x: torch.Tensor, temperature: float = 1.) -> torch.Tensor:
 
 def logsigmoid_bwd(x: torch.Tensor, dy: torch.Tensor, temperature: float = 1.) -> torch.Tensor:
     T, D = x.numel(), x.shape[-1]
-    B = triton.next_power_of_2(triton.cdiv(T, device_torch_lib.get_device_properties(x.device).multi_processor_count))
+    B = triton.next_power_of_2(triton.cdiv(
+        T, triton.runtime.driver.active.utils.get_device_properties(x.device.index)['multiprocessor_count']))
     dx = torch.empty_like(x)
     logsigmoid_bwd_kernel[(triton.cdiv(T, B),)](
         x=x,
@@ -332,7 +334,7 @@ template <typename T> T swiglu_bwd_with_output(T x, T y, T g, T& dx, T& dy, T& z
 swiglu_fwd = device_torch_lib.jiterator._create_jit_fn(swiglu_fwd_codestring)
 swiglu_bwd = device_torch_lib.jiterator._create_multi_output_jit_fn(swiglu_bwd_codestring, num_outputs=2)
 swiglu_bwd_with_output = \
-        device_torch_lib.jiterator._create_multi_output_jit_fn(swiglu_bwd_with_output_codestring, num_outputs=3)
+    device_torch_lib.jiterator._create_multi_output_jit_fn(swiglu_bwd_with_output_codestring, num_outputs=3)
 
 
 class SwiGLUFunction(torch.autograd.Function):

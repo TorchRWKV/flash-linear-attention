@@ -6,10 +6,9 @@ import pytest
 import torch
 import torch.nn.functional as F
 
-# from fla.ops.titans.chunk import chunk_titans_linear
-# from fla.ops.titans.fused_chunk import fused_chunk_titans_linear
-from fla.ops.titans.naive import chunk_titans_linear_ref
-from fla.utils import device
+from ops.titans.chunk import chunk_titans_linear
+from ops.titans.fused_chunk import fused_chunk_titans_linear
+from ops.titans.naive import chunk_titans_linear_ref
 
 
 def get_abs_err(x, y):
@@ -98,20 +97,20 @@ def test_chunk_fwd(
     # in titans paper, h0 is not learnable
     h0 = h0.to(device)
 
-    # tri, tri_ht = chunk_titans_linear(
-    #     q.clone(),
-    #     k.clone(),
-    #     v.clone(),
-    #     w.clone(),
-    #     b.clone(),
-    #     theta.clone(),
-    #     alpha.clone(),
-    #     eta.clone(),
-    #     output_final_state = True,
-    #     BT = BT,
-    #     initial_state = h0.clone(),
-    #     head_first = head_first
-    # )
+    tri, tri_ht = chunk_titans_linear(
+        q.clone(),
+        k.clone(),
+        v.clone(),
+        w.clone(),
+        b.clone(),
+        theta.clone(),
+        alpha.clone(),
+        eta.clone(),
+        output_final_state = True,
+        BT = BT,
+        initial_state = h0.clone(),
+        head_first = head_first
+    )
 
     ref, ref_ht = chunk_titans_linear_ref(
         q.clone(),
@@ -128,5 +127,5 @@ def test_chunk_fwd(
         head_first = head_first
     )
 
-    # assert_close(" o", ref, tri, 0.006)
-    # assert_close("ht", ref_ht, tri_ht, 0.005)
+    assert_close(" o", ref, tri, 0.006)
+    assert_close("ht", ref_ht, tri_ht, 0.005)

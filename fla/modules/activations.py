@@ -3,7 +3,6 @@
 
 import torch
 import torch.nn.functional as F
-import fla.modules.fused_bitlinear as fused_bitlinear
 from fla.utils import (autocast_custom_bwd, autocast_custom_fwd,
                        contiguous, device)
 from fla.modules.activations_triton import (logsigmoid_fwd,
@@ -19,6 +18,34 @@ else:
                                                 swiglu_fwdbwd)
 
 
+@torch.jit.script
+def swiglu_fwd_torch(x, y):
+    return (F.silu(x.float()) * y).to(x.dtype)
+
+
+@torch.jit.script
+def swiglu_bwd_torch(x, y, g):
+    dtype = x.dtype
+    x, y, g = x.float(), y.float(), g.float()
+    x_sigmoid = x.sigmoid()
+    x_swish = x * x_sigmoid
+    dx = x_sigmoid * (1 + x * (1.0 - x_sigmoid)) * g * y
+    dy = x_swish * g
+    return dx.to(dtype), dy.to(dtype)
+
+
+@torch.jit.script
+def swiglu_fwdbwd_torch(x, y, g):
+    dtype = x.dtype
+    x, y, g = x.float(), y.float(), g.float()
+    x_sigmoid = x.sigmoid()
+    x_swish = x * x_sigmoid
+    dx = x_sigmoid * (1 + x * (1.0 - x_sigmoid)) * g * y
+    dy = x_swish * g
+    z = x_swish * y
+    return dx.to(dtype), dy.to(dtype), z.to(dtype)
+
+
 class SwiGLUFunction(torch.autograd.Function):
     r"""
     Swish-Gated Linear Unit (SwiGLU) function.
@@ -30,12 +57,18 @@ class SwiGLUFunction(torch.autograd.Function):
     @staticmethod
     def forward(ctx, x, y):
         ctx.save_for_backward(x, y)
-        return swiglu_fwd(x, y)
+        if torch.compiler.is_compiling() or isinstance(x, torch.distributed.tensor.DTensor):
+            return swiglu_fwd_torch(x, y)
+        else:
+            return swiglu_fwd(x, y)
 
     @staticmethod
     def backward(ctx, dout):
         x, y = ctx.saved_tensors
-        return swiglu_bwd(x, y, dout)
+        if torch.compiler.is_compiling() or isinstance(x, torch.distributed.tensor.DTensor):
+            return swiglu_bwd_torch(x, y, dout)
+        else:
+            return swiglu_bwd(x, y, dout)
 
 
 class SwiGLULinearFunction(torch.autograd.Function):
@@ -51,7 +84,11 @@ class SwiGLULinearFunction(torch.autograd.Function):
     @staticmethod
     @autocast_custom_fwd
     def forward(ctx, x, y, weight, bias):
-        z = swiglu_fwd(x, y)
+        with torch.no_grad():
+            if torch.compiler.is_compiling() or isinstance(x, torch.distributed.tensor.DTensor):
+                z = swiglu_fwd_torch(x, y)
+            else:
+                z = swiglu_fwd(x, y)
         out = F.linear(z, weight, bias)
         # We don't store z, will be recomputed in the backward pass to save memory
         ctx.save_for_backward(x, y, weight)
@@ -64,39 +101,11 @@ class SwiGLULinearFunction(torch.autograd.Function):
         x, y, weight = ctx.saved_tensors
         dout = dout.reshape(-1, dout.shape[-1])
         dz = F.linear(dout, weight.t()).view_as(x)
-        dx, dy, z = swiglu_fwdbwd(x, y, dz)
-        dlinear_weight = torch.einsum("bo,bi->oi", dout, z.reshape(-1, z.shape[-1]))
-        dlinear_bias = None if ctx.linear_bias_is_none else dout.sum(0)
-        return dx, dy, dlinear_weight, dlinear_bias
-
-
-class SwiGLUBitLinearFunction(torch.autograd.Function):
-    r"""
-    Swish-Gated Linear Unit (SwiGLU) function followed by a linear transformation.
-
-    .. math::
-        \text{SwiGLULinear}(x, y, W, b) = (swish(x) * y) W + b
-
-    This simple wrap discards the intermediate results of SwiGLU(x, y) to save memory.
-    """
-
-    @staticmethod
-    @autocast_custom_fwd
-    def forward(ctx, x, y, weight, bias):
-        z = swiglu_fwd(x, y)
-        out = fused_bitlinear.bit_linear(z, weight, bias)
-        # We don't store z, will be recomputed in the backward pass to save memory
-        ctx.save_for_backward(x, y, weight)
-        ctx.linear_bias_is_none = bias is None
-        return out
-
-    @staticmethod
-    @autocast_custom_bwd
-    def backward(ctx, dout, *args):
-        x, y, weight = ctx.saved_tensors
-        dout = dout.reshape(-1, dout.shape[-1])
-        dz = fused_bitlinear.bit_linear(dout, weight.t()).view_as(x)
-        dx, dy, z = swiglu_fwdbwd(x, y, dz)
+        with torch.no_grad():
+            if torch.compiler.is_compiling() or isinstance(x, torch.distributed.tensor.DTensor):
+                dx, dy, z = swiglu_fwdbwd_torch(x, y, dz)
+            else:
+                dx, dy, z = swiglu_fwdbwd(x, y, dz)
         dlinear_weight = torch.einsum("bo,bi->oi", dout, z.reshape(-1, z.shape[-1]))
         dlinear_bias = None if ctx.linear_bias_is_none else dout.sum(0)
         return dx, dy, dlinear_weight, dlinear_bias
@@ -230,7 +239,6 @@ class SquaredReLUFunction(torch.autograd.Function):
 swiglu = SwiGLUFunction.apply
 logsigmoid = LogSigmoidFunction.apply
 swiglu_linear = SwiGLULinearFunction.apply
-swiglu_bitlinear = SwiGLUBitLinearFunction.apply
 bias_gelu_impl = GeLUFunction.apply
 fast_gelu_impl = FastGeLUFunction.apply
 sqrelu = SquaredReLUFunction.apply

@@ -286,24 +286,21 @@ def native_recurrent_rwkv7(
     r: torch.Tensor,
     k: torch.Tensor,
     v: torch.Tensor,
-    w: torch.Tensor,
     a: torch.Tensor,
     b: torch.Tensor,
+    w: torch.Tensor = None,
+    log_w: torch.Tensor = None,
     scale: float = 1.0,
     initial_state: torch.Tensor = None,
     output_final_state: bool = True,
     cu_seqlens: Optional[torch.LongTensor] = None,
-    head_first: bool = True,
-    use_log_w: bool = False,
-    training: bool = True,
-    dtype=torch.float32
+    head_first: bool = False,
+
 ) -> Tuple[torch.Tensor, torch.Tensor]:
-    r"""
+    """
     Args:
         r (torch.Tensor):
             r of shape `[B, H, T, K]` if `head_first=True` else `[B, T, H, K]`.
-        log_w (torch.Tensor):
-            log decay of shape `[B, H, T, K]` if `head_first=True` else `[B, T, H, K]`.
         k (torch.Tensor):
             k of shape `[B, H, T, K]` if `head_first=True` else `[B, T, H, K]`.
         v (torch.Tensor):
@@ -312,12 +309,19 @@ def native_recurrent_rwkv7(
             a of shape `[B, H, T, K]` if `head_first=True` else `[B, T, H, K]`.
         b (torch.Tensor):
             b of shape `[B, H, T, K]` if `head_first=True` else `[B, T, H, K]`.
+        w (torch.Tensor):
+            decay of shape `[B, H, T, K]` if `head_first=True` else `[B, T, H, K]`, kernel
+            will apply log_w = -torch.exp(w)
+        log_w (torch.Tensor):
+            log decay of shape `[B, H, T, K]` if `head_first=True` else `[B, T, H, K]`.
         scale (float):
             scale of the attention.
-        initial_state (torch.Tensor):
-            initial state of shape `[B, H, K, V]` if cu_seqlens is None else `[N, H, K, V]` where N = len(cu_seqlens) - 1.
-        output_final_state (bool):
-            whether to output the final state.
+        initial_state (Optional[torch.Tensor]):
+            Initial state of shape `[N, H, K, V]` for `N` input sequences.
+            For equal-length input sequences, `N` equals the batch size `B`.
+            Default: `None`.
+        output_final_state (Optional[bool]):
+            Whether to output the final state of shape `[N, H, K, V]`. Default: `False`.
         cu_seqlens (torch.LongTensor):
             Cumulative sequence lengths of shape `[N+1]` used for variable-length training,
             consistent with the FlashAttention API.
@@ -326,7 +330,8 @@ def native_recurrent_rwkv7(
     """
     assert cu_seqlens is None
     assert head_first is True
-    assert use_log_w is False
+    assert log_w is None
+    assert w is not None
     if scale == -1.0:
         scale = r.shape[-1] ** -0.5
     o, h_t = NativeRecurrentRWKV7Function.apply(r, k, v, w, a, b, scale, initial_state, training, dtype)

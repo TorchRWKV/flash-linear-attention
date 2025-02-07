@@ -110,22 +110,16 @@ def layer_norm_fwd(
     if residual is not None:
         residual_dtype = residual.dtype
     M, N = x.shape
-    assert x.stride(-1) == 1
     if residual is not None:
-        assert residual.stride(-1) == 1
         assert residual.shape == (M, N)
     if weight is not None:
         assert weight.shape == (N,)
-        assert weight.stride(-1) == 1
     if bias is not None:
-        assert bias.stride(-1) == 1
         assert bias.shape == (N,)
     # allocate output
     y = torch.empty_like(x, dtype=x.dtype if out_dtype is None else out_dtype)
-    assert y.stride(-1) == 1
     if residual is not None or (residual_dtype is not None and residual_dtype != x.dtype):
         residual_out = torch.empty(M, N, device=x.device, dtype=residual_dtype)
-        assert residual_out.stride(-1) == 1
     else:
         residual_out = None
     mean = torch.empty((M,), dtype=torch.float, device=x.device) if not is_rms_norm else None
@@ -300,29 +294,16 @@ def layer_norm_bwd(
     recompute_output: bool = False,
 ):
     M, N = x.shape
-    assert x.stride(-1) == 1
-    assert dy.stride(-1) == 1
     assert dy.shape == (M, N)
     if dresidual is not None:
-        assert dresidual.stride(-1) == 1
         assert dresidual.shape == (M, N)
     if weight is not None:
         assert weight.shape == (N,)
-        assert weight.stride(-1) == 1
     if bias is not None:
-        assert bias.stride(-1) == 1
         assert bias.shape == (N,)
     # allocate output
-    dx = (
-        torch.empty_like(x)
-        if x_dtype is None
-        else torch.empty(M, N, dtype=x_dtype, device=x.device)
-    )
-    do = (
-        torch.empty_like(o)
-        if x_dtype is None
-        else torch.empty(M, N, dtype=x_dtype, device=x.device)
-    )
+    dx = torch.empty_like(x) if x_dtype is None else torch.empty(M, N, dtype=x_dtype, device=x.device)
+    do = torch.empty_like(o) if x_dtype is None else torch.empty(M, N, dtype=x_dtype, device=x.device)
     dresidual_in = torch.empty_like(x) if has_residual and dx.dtype != x.dtype else None
     y = torch.empty(M, N, dtype=dy.dtype, device=dy.device) if recompute_output else None
 

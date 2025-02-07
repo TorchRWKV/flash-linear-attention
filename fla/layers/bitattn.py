@@ -13,7 +13,7 @@ import torch.utils.checkpoint
 from einops import rearrange
 from transformers.utils import logging
 
-from fla.modules import RMSNorm, RotaryEmbedding
+from fla.modules import RotaryEmbedding
 from fla.modules.fused_bitlinear import FusedBitLinear
 
 if TYPE_CHECKING:
@@ -43,7 +43,6 @@ class BitAttention(nn.Module):
         window_size: Optional[int] = None,
         rope_theta: Optional[float] = 10000.,
         max_position_embeddings: Optional[int] = None,
-        norm_first: bool = False,
         norm_eps: float = 1e-5,
         layer_idx: int = None
     ):
@@ -62,11 +61,8 @@ class BitAttention(nn.Module):
         self.window_size = window_size
         self.rope_theta = rope_theta
         self.max_position_embeddings = max_position_embeddings
-        self.norm_first = norm_first
         self.layer_idx = layer_idx
 
-        if norm_first:
-            self.norm = RMSNorm(self.hidden_size, eps=norm_eps)
         self.q_proj = FusedBitLinear(self.hidden_size, self.hidden_size, bias=False)
         self.k_proj = FusedBitLinear(self.hidden_size, self.kv_dim, bias=False)
         self.v_proj = FusedBitLinear(self.hidden_size, self.kv_dim, bias=False)
@@ -91,9 +87,6 @@ class BitAttention(nn.Module):
             )
 
         batch_size, q_len, _ = hidden_states.size()
-
-        if self.norm_first:
-            hidden_states = self.norm(hidden_states)
 
         q = rearrange(self.q_proj(hidden_states), '... (h d) -> ... h d', h=self.num_heads)
         k = rearrange(self.k_proj(hidden_states), '... (h d) -> ... h d', h=self.num_kv_heads)

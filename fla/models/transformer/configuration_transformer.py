@@ -58,6 +58,7 @@ class TransformerConfig(PretrainedConfig):
         self.fuse_cross_entropy = fuse_cross_entropy
         self.fuse_norm = fuse_norm
         self.fuse_swiglu = fuse_swiglu
+
         super().__init__(
             pad_token_id=pad_token_id,
             bos_token_id=bos_token_id,

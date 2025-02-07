@@ -67,12 +67,12 @@ class RWKV6FeedForward(nn.Module):
     ) -> torch.Tensor:
         if attention_mask is not None:
             x = x.mul_(attention_mask[:, -x.shape[-2]:, None])
-        if x.shape[1] == 1 and state is not None:
+        if x.shape[1] == 1 and state is not None and state[self.layer_idx]['ffn_state'] is not None:
             shifted = state[self.layer_idx]['ffn_state'].unsqueeze(1)
         else:
             shifted = self.time_shift(x)
             if state is not None and state[self.layer_idx]['ffn_state'] is not None:
-                shifted[:, 0] = state[self.layer_idx]['ffn_state'][-1]
+                shifted[:, 0] = state[self.layer_idx]['ffn_state']
         delta = shifted - x
         key = self.act_fn(self.key(x, delta))
         value = self.value(key)
@@ -93,8 +93,16 @@ class RWKV6Block(nn.Module):
         self.layer_idx = layer_idx
 
         if config.norm_first and layer_idx == 0:
-            self.pre_norm = LayerNorm(hidden_size=config.hidden_size, bias=config.norm_bias, eps=config.norm_eps)
-        self.attn_norm = LayerNorm(hidden_size=config.hidden_size, bias=config.norm_bias, eps=config.norm_eps)
+            self.pre_norm = (LayerNorm if config.fuse_norm else nn.LayerNorm)(
+                config.hidden_size,
+                bias=config.norm_bias,
+                eps=config.norm_eps
+            )
+        self.attn_norm = (LayerNorm if config.fuse_norm else nn.LayerNorm)(
+            config.hidden_size,
+            bias=config.norm_bias,
+            eps=config.norm_eps
+        )
         if config.attn is not None and layer_idx in config.attn['layers']:
             self.attn = Attention(
                 hidden_size=config.hidden_size,
@@ -118,7 +126,11 @@ class RWKV6Block(nn.Module):
                 fuse_norm=config.fuse_norm,
                 layer_idx=layer_idx
             )
-        self.ffn_norm = LayerNorm(hidden_size=config.hidden_size, bias=config.norm_bias, eps=config.norm_eps)
+        self.ffn_norm = (LayerNorm if config.fuse_norm else nn.LayerNorm)(
+            config.hidden_size,
+            bias=config.norm_bias,
+            eps=config.norm_eps
+        )
         self.ffn = RWKV6FeedForward(
             hidden_size=config.hidden_size,
             hidden_ratio=config.hidden_ratio,
@@ -146,7 +158,12 @@ class RWKV6Block(nn.Module):
             output_attentions=output_attentions,
             **kwargs
         )
-        hidden_states, residual = self.ffn_norm(hidden_states, residual, True)
+        if self.config.fuse_norm:
+            hidden_states, residual = self.ffn_norm(hidden_states, residual, True)
+        else:
+            hidden_states = residual + hidden_states
+            residual = hidden_states
+            hidden_states = self.ffn_norm(hidden_states)
         hidden_states, past_key_values = self.ffn(hidden_states, attention_mask, past_key_values)
         hidden_states = residual + hidden_states
 
@@ -213,7 +230,11 @@ class RWKV6Model(RWKV6PreTrainedModel):
 
         self.embeddings = nn.Embedding(config.vocab_size, config.hidden_size, self.padding_idx)
         self.layers = nn.ModuleList([RWKV6Block(config, layer_idx) for layer_idx in range(config.num_hidden_layers)])
-        self.norm = LayerNorm(config.hidden_size, bias=config.norm_bias, eps=config.norm_eps)
+        self.norm = (LayerNorm if config.fuse_norm else nn.LayerNorm)(
+            config.hidden_size,
+            bias=config.norm_bias,
+            eps=config.norm_eps
+        )
 
         self.gradient_checkpointing = False
 
@@ -363,8 +384,8 @@ class RWKV6ForCausalLM(RWKV6PreTrainedModel, GenerationMixin):
         num_logits_to_keep: Optional[int] = None,
         **kwargs
     ):
-        # only last token for `inputs_ids` if the `past_key_values` is passed along.
-        if past_key_values is not None:
+        # only last token for `inputs_ids` if the `past_key_values` is not empty.
+        if past_key_values is not None and len(past_key_values) > 0:
             input_ids = input_ids[:, -1:]
         # if `inputs_embeds` are passed, we only want to use them in the 1st generation step
         if inputs_embeds is not None and past_key_values is None:

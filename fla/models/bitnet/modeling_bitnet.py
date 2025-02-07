@@ -37,9 +37,7 @@ class BitNetMLP(nn.Module):
         hidden_size: int,
         hidden_ratio: Optional[int] = None,
         intermediate_size: Optional[int] = None,
-        hidden_act: str = 'swish',
-        norm_first: bool = True,
-        norm_eps: float = 1e-5
+        hidden_act: str = 'swish'
     ) -> BitNetMLP:
         super().__init__()
 
@@ -53,10 +51,6 @@ class BitNetMLP(nn.Module):
             intermediate_size = 256 * ((intermediate_size + 256 - 1) // 256)
         self.hidden_ratio = hidden_ratio
         self.intermediate_size = intermediate_size
-        self.norm_first = norm_first
-
-        if norm_first:
-            self.norm = RMSNorm(hidden_size=hidden_size, eps=norm_eps)
 
         self.gate_proj = FusedBitLinear(self.hidden_size, self.intermediate_size * 2, bias=False)
         self.down_proj = FusedBitLinear(self.intermediate_size, self.hidden_size, bias=False)
@@ -67,8 +61,7 @@ class BitNetMLP(nn.Module):
         x: torch.Tensor,
         **kwargs: Unpack[Any],
     ) -> torch.Tensor:
-        y = self.gate_proj(x)
-        gate, y = y.chunk(2, -1)
+        gate, y = self.gate_proj(x).chunk(2, -1)
         z = self.down_proj(swiglu(gate, y))
         return z
 
@@ -80,8 +73,7 @@ class BitNetBlock(nn.Module):
 
         self.hidden_size = config.hidden_size
 
-        if not config.norm_first:
-            self.attn_norm = RMSNorm(hidden_size=config.hidden_size, eps=config.norm_eps)
+        self.attn_norm = (RMSNorm if config.fuse_norm else nn.RMSNorm)(config.hidden_size, eps=config.norm_eps)
         self.attn = BitAttention(
             hidden_size=config.hidden_size,
             num_heads=config.num_heads,
@@ -89,19 +81,15 @@ class BitNetBlock(nn.Module):
             window_size=config.window_size,
             rope_theta=config.rope_theta,
             max_position_embeddings=config.max_position_embeddings,
-            norm_first=config.norm_first,
             norm_eps=config.norm_eps,
             layer_idx=layer_idx
         )
-        if not config.norm_first:
-            self.mlp_norm = RMSNorm(hidden_size=config.hidden_size, eps=config.norm_eps)
+        self.mlp_norm = (RMSNorm if config.fuse_norm else nn.RMSNorm)(config.hidden_size, eps=config.norm_eps)
         self.mlp = BitNetMLP(
             hidden_size=config.hidden_size,
             hidden_ratio=config.hidden_ratio,
             intermediate_size=config.intermediate_size,
-            hidden_act=config.hidden_act,
-            norm_first=config.norm_first,
-            norm_eps=config.norm_eps
+            hidden_act=config.hidden_act
         )
 
     def forward(
@@ -115,8 +103,7 @@ class BitNetBlock(nn.Module):
     ) -> Tuple[torch.FloatTensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]]:
 
         residual = hidden_states
-        if hasattr(self, 'attn_norm'):
-            hidden_states = self.attn_norm(hidden_states)
+        hidden_states = self.attn_norm(hidden_states)
         hidden_states, attentions, past_key_values = self.attn(
             hidden_states=hidden_states,
             attention_mask=attention_mask,
@@ -125,11 +112,12 @@ class BitNetBlock(nn.Module):
             output_attentions=output_attentions,
             **kwargs
         )
-        if hasattr(self, 'mlp_norm'):
+        if self.config.fuse_norm:
             hidden_states, residual = self.mlp_norm(hidden_states, residual, True)
         else:
             hidden_states = residual + hidden_states
             residual = hidden_states
+            hidden_states = self.mlp_norm(hidden_states)
         hidden_states = self.mlp(hidden_states, **kwargs)
         hidden_states = residual + hidden_states
 
@@ -203,7 +191,7 @@ class BitNetModel(BitNetPreTrainedModel):
 
         self.embeddings = nn.Embedding(config.vocab_size, config.hidden_size, self.padding_idx)
         self.layers = nn.ModuleList([BitNetBlock(config, layer_idx) for layer_idx in range(config.num_hidden_layers)])
-        self.norm = RMSNorm(config.hidden_size, eps=config.norm_eps)
+        self.norm = (RMSNorm if config.fuse_norm else nn.RMSNorm)(config.hidden_size, eps=config.norm_eps)
 
         self.gradient_checkpointing = False
 

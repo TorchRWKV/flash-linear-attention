@@ -1,18 +1,18 @@
 # -*- coding: utf-8 -*-
 
-from typing import Optional, Tuple
+from typing import Optional
 
 import torch
 import triton
 import triton.language as tl
-from fla.utils import autocast_custom_bwd, autocast_custom_fwd, contiguous
-from fla.utils import device, check_pytorch_version, set_torch_device
+from fla.utils import device, check_pytorch_version, set_torch_device, contiguous
 import logging
 
 logger = logging.getLogger(__name__)
 
 if not check_pytorch_version('2.4'):
     logger.warning('PyTorch < 2.4 detected - computations may be slower due to lack of optimizations')
+
 
 @triton.autotune(
     configs=[
@@ -134,7 +134,7 @@ def addcmul_bwd_kernel1(
     tl.store(gx_ptr + (xindex), g_x.to(gx_ptr.dtype.element_ty), xmask)
 
 
-@torch.compiler.disable   
+@torch.compiler.disable
 def addcmul_bwd1(d_oxr, d_oxw, d_oxk, d_oxv, d_oxa, d_oxg, x_r, x_w, x_k, x_v, x_a, x_g, hidden_states, xx, use_xg):
     d_hiddn = torch.empty_like(hidden_states)
     d_xx = torch.empty_like(xx)
@@ -230,8 +230,6 @@ class Rwkv7FusedAddcmul(torch.autograd.Function):
         return d_hiddn, d_xx, d_ixr, d_ixw, d_ixk, d_ixv, d_ixa, d_ixg, None
 
 
-
-
 def fused_addcmul_rwkv7(
     hidden_states: torch.Tensor,
     xx: torch.Tensor,
@@ -246,10 +244,11 @@ def fused_addcmul_rwkv7(
     if num_elements < 16777216 and device == "cuda":
         return torch_addcmul_rwkv7(hidden_states, xx, xr, xw, xk, xv, xa, xg)
     else:
+        set_torch_device(hidden_states)
         return Rwkv7FusedAddcmul.apply(hidden_states, xx, xr, xw, xk, xv, xa, xg, num_elements)
 
 
-def torch_addcmul_rwkv7(hidden_states, xx, xr, xw, xk, xv, xa, xg = None):
+def torch_addcmul_rwkv7(hidden_states, xx, xr, xw, xk, xv, xa, xg=None):
     oxr = torch.addcmul(hidden_states, xx, xr)
     oxw = torch.addcmul(hidden_states, xx, xw)
     oxk = torch.addcmul(hidden_states, xx, xk)

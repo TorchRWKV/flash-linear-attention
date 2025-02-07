@@ -1,5 +1,33 @@
 <div align="center">
 
+# :boom: RWKV-FLA
+
+[![hf_model](https://img.shields.io/badge/-Models-gray.svg?logo=huggingface&style=flat-square)](https://huggingface.co/fla-hub)  [![Discord](https://img.shields.io/badge/Discord-%235865F2.svg?&logo=discord&logoColor=white&style=flat-square)](https://discord.gg/vDaJTmKNcS)
+
+</div>
+
+This repo aims at providing Triton kernel for RWKV models. RWKV is a brand new network architecture that integrates the advantages of transformers and RNNs, and can be used for a variety of natural language processing tasks. Also, RWKV is the state-of-the-art RNN model.
+
+As `rwkv-fla` is actively developed now, you should alwayd check for latest version `pip install --upgrade rwkv-fla triton`
+
+Or you can install if with `pip install rwkv-fla[cuda]`, `pip install rwkv-fla[xpu]`, `pip install rwkv-fla[rocm]`
+
+If you do need to use `fla` ops/modules and contemplate further explorations, an alternative way is to install the package from source
+```sh
+pip install -U git+https://github.com/TorchRWKV/flash-linear-attention
+```
+or
+```sh
+pip install -U git+https://gitee.com/uniartisan2018/flash-linear-attention
+```
+or manage `fla` with submodules
+```sh
+git submodule add https://github.com/TorchRWKV/flash-linear-attention.git 3rdparty/rwkv-fla
+ln -s 3rdparty/rwkv-fla/fla fla
+```
+
+<div align="center">
+
 # :boom: Flash Linear Attention
 
 [![hf_model](https://img.shields.io/badge/-Models-gray.svg?logo=huggingface&style=flat-square)](https://huggingface.co/fla-hub)  [![Discord](https://img.shields.io/badge/Discord-%235865F2.svg?&logo=discord&logoColor=white&style=flat-square)](https://discord.gg/vDaJTmKNcS)
@@ -77,16 +105,7 @@ As `fla` is actively developed now, no released packages are provided at this ti
 If you do need to use `fla` ops/modules and contemplate further explorations, an alternative way is to install the package from source
 ```sh
 # uninstall `fla` first to ensure a successful upgrade
-# Please intall triton>3.0 first
 pip uninstall fla && pip install -U git+https://github.com/fla-org/flash-linear-attention
-```
-or
-```sh
-pip uninstall fla && pip install -U "git+https://github.com/fla-org/flash-linear-attention#egg=flash-linear-attention[cuda]" --extra-index-url https://download.pytorch.org/whl/
-# for AMD GPUs
-# pip uninstall fla && pip install -U "git+https://github.com/fla-org/flash-linear-attention#egg=flash-linear-attention[rocm]" --extra-index-url https://download.pytorch.org/whl/
-# for intel GPUs
-# pip uninstall fla && pip install -U "git+https://github.com/fla-org/flash-linear-attention#egg=flash-linear-attention[xpu]" --extra-index-url https://download.pytorch.org/whl/
 ```
 or manage `fla` with submodules
 ```sh
@@ -105,8 +124,7 @@ Example usage is as follows:
 >>> import torch
 >>> from fla.layers import MultiScaleRetention
 >>> batch_size, num_heads, seq_len, hidden_size = 32, 4, 2048, 1024
->>> from fla.utils import device
->>> dtype = torch.bfloat16
+>>> device, dtype = 'cuda:0', torch.bfloat16
 >>> retnet = MultiScaleRetention(hidden_size=hidden_size, num_heads=num_heads).to(device=device, dtype=dtype)
 >>> retnet
 MultiScaleRetention(
@@ -222,10 +240,9 @@ In the following, we give a generation example:
 >>> from transformers import AutoModelForCausalLM, AutoTokenizer
 >>> name = 'fla-hub/gla-1.3B-100B'
 >>> tokenizer = AutoTokenizer.from_pretrained(name)
->>> from fla.utils import device
->>> model = AutoModelForCausalLM.from_pretrained(name).to(device)
+>>> model = AutoModelForCausalLM.from_pretrained(name).cuda()
 >>> input_prompt = "Power goes with permanence. Impermanence is impotence. And rotation is castration."
->>> input_ids = tokenizer(input_prompt, return_tensors="pt").input_ids.to(device)
+>>> input_ids = tokenizer(input_prompt, return_tensors="pt").input_ids.cuda()
 >>> outputs = model.generate(input_ids, max_length=64)
 >>> tokenizer.batch_decode(outputs, skip_special_tokens=True)[0]
 ```
@@ -461,4 +478,3 @@ If you find this repository helpful, please cite our work:
 
 
 [![Star History Chart](https://api.star-history.com/svg?repos=fla-org/flash-linear-attention&type=Date)](https://star-history.com/#fla-org/flash-linear-attention&Date)
-

@@ -3,8 +3,10 @@
 import torch
 from einops import rearrange
 
+
 def get_abs_err(x, y):
     return (x-y).flatten().abs().max().item()
+
 
 def get_err_ratio(x, y):
     err = (x-y).flatten().square().mean().sqrt().item()

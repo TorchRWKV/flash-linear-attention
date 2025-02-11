@@ -334,6 +334,6 @@ def native_recurrent_rwkv7(
     assert w is not None
     if scale == -1.0:
         scale = r.shape[-1] ** -0.5
-    o, h_t = NativeRecurrentRWKV7Function.apply(r, k, v, w, a, b, scale, initial_state, training, dtype)
+    o, h_t = NativeRecurrentRWKV7Function.apply(r, k, v, w, a, b, scale, initial_state)
     final_state = h_t if output_final_state else None
     return o, final_state

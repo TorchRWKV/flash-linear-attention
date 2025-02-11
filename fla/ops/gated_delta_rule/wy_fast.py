@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# Copyright (c) 2024, Songlin Yang, Yu Zhang
+# Copyright (c) 2023-2025, Songlin Yang, Yu Zhang
 
 from typing import Optional, Tuple
 
@@ -18,9 +18,9 @@ from fla.ops.utils.exp import safe_exp
         triton.Config({}, num_warps=num_warps)
         for num_warps in [2, 4, 8]
     ],
-    key=["BK"],
+    key=['BK'],
 )
-@triton.jit
+@triton.jit(do_not_specialize=['T'])
 def fwd_prepare_wy_repr_kernel_chunk32(
     k,
     g,
@@ -29,7 +29,7 @@ def fwd_prepare_wy_repr_kernel_chunk32(
     Au,
     offsets,
     indices,
-    T: tl.constexpr,
+    T,
     K: tl.constexpr,
     H: tl.constexpr,
     BT: tl.constexpr,
@@ -105,9 +105,9 @@ def fwd_prepare_wy_repr_kernel_chunk32(
         triton.Config({}, num_warps=num_warps)
         for num_warps in [2, 4, 8]
     ],
-    key=["BK"],
+    key=['BK'],
 )
-@triton.jit
+@triton.jit(do_not_specialize=['T'])
 def fwd_prepare_wy_repr_kernel_chunk64(
     k,
     g,
@@ -116,7 +116,7 @@ def fwd_prepare_wy_repr_kernel_chunk64(
     Au,
     offsets,
     indices,
-    T: tl.constexpr,
+    T,
     K: tl.constexpr,
     H: tl.constexpr,
     BT: tl.constexpr,
@@ -243,9 +243,9 @@ def fwd_prepare_wy_repr_kernel_chunk64(
         triton.Config({}, num_warps=num_warps)
         for num_warps in [2, 4, 8]
     ],
-    key=["BT", "BK", "BV"],
+    key=['BT', 'BK', 'BV'],
 )
-@triton.jit
+@triton.jit(do_not_specialize=['T'])
 def fwd_recompute_w_u_kernel(
     k,
     v,
@@ -256,7 +256,7 @@ def fwd_recompute_w_u_kernel(
     Au,
     offsets,
     indices,
-    T: tl.constexpr,
+    T,
     H: tl.constexpr,
     K: tl.constexpr,
     V: tl.constexpr,
@@ -427,14 +427,25 @@ def fwd_recompute_w_u(
         triton.Config({}, num_warps=num_warps)
         for num_warps in [1, 2, 4]
     ],
-    key=["BT", "BK", "BV"],
+    key=['BT', 'BK', 'BV'],
 )
-@triton.jit
+@triton.jit(do_not_specialize=['T'])
 def bwd_prepare_wy_repr_kernel(
-    k, v, beta, g, Aw, Au,
-    dw, du, dk, dv, dbeta, dg,
-    offsets, indices,
-    T: tl.constexpr,
+    k,
+    v,
+    beta,
+    g,
+    Aw,
+    Au,
+    dw,
+    du,
+    dk,
+    dv,
+    dbeta,
+    dg,
+    offsets,
+    indices,
+    T,
     H: tl.constexpr,
     K: tl.constexpr,
     V: tl.constexpr,

@@ -23,7 +23,7 @@ from fla.utils import contiguous
     ],
     key=['D']
 )
-@triton.jit
+@triton.jit(do_not_specialize=['T'])
 def fused_recurrent_hgrn_fwd_kernel(
     x,
     g,
@@ -31,7 +31,7 @@ def fused_recurrent_hgrn_fwd_kernel(
     h0,
     ht,
     offsets,
-    T: tl.constexpr,
+    T,
     D: tl.constexpr,
     BD: tl.constexpr,
     USE_INITIAL_STATE: tl.constexpr,
@@ -84,7 +84,7 @@ def fused_recurrent_hgrn_fwd_kernel(
     ],
     key=['D']
 )
-@triton.jit
+@triton.jit(do_not_specialize=['T'])
 def fused_recurrent_hgrn_bwd_kernel(
     g,
     o,
@@ -95,7 +95,7 @@ def fused_recurrent_hgrn_bwd_kernel(
     dht,
     dh0,
     offsets,
-    T: tl.constexpr,
+    T,
     D: tl.constexpr,
     BD: tl.constexpr,
     USE_INITIAL_STATE: tl.constexpr,

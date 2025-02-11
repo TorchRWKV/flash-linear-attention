@@ -19,9 +19,9 @@ import triton.language as tl
         for num_warps in [1, 2, 4, 8]
         for num_stages in [2, 3, 4]
     ],
-    key=["BC", "K"]
+    key=['BC', 'K']
 )
-@triton.jit
+@triton.jit(do_not_specialize=['T'])
 def chunk_dplr_fwd_A_kernel_intra_sub_inter(
     q,
     k,
@@ -36,7 +36,7 @@ def chunk_dplr_fwd_A_kernel_intra_sub_inter(
     offsets,
     indices,
     scale,
-    T: tl.constexpr,
+    T,
     H: tl.constexpr,
     K: tl.constexpr,
     BT: tl.constexpr,
@@ -133,9 +133,9 @@ def chunk_dplr_fwd_A_kernel_intra_sub_inter(
         triton.Config({}, num_warps=num_warps)
         for num_warps in [1, 2, 4, 8]
     ],
-    key=["BK", "BT"]
+    key=['BK', 'BT']
 )
-@triton.jit
+@triton.jit(do_not_specialize=['T'])
 def chunk_dplr_fwd_A_kernel_intra_sub_intra(
     q,
     k,
@@ -154,7 +154,7 @@ def chunk_dplr_fwd_A_kernel_intra_sub_intra(
     offsets,
     indices,
     scale,
-    T: tl.constexpr,
+    T,
     H: tl.constexpr,
     K: tl.constexpr,
     BT: tl.constexpr,

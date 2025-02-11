@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# Copyright (c) 2024, Songlin Yang, Yu Zhang
+# Copyright (c) 2023-2025, Songlin Yang, Yu Zhang
 
 from typing import Tuple
 
@@ -15,7 +15,7 @@ from fla.ops.utils.exp import safe_exp
 from fla.utils import autocast_custom_bwd, autocast_custom_fwd, contiguous
 
 
-@triton.jit
+@triton.jit(do_not_specialize=['T'])
 def prepare_qg_kg(
     q,
     k,
@@ -23,7 +23,7 @@ def prepare_qg_kg(
     qg,
     kg,
     scale,
-    T: tl.constexpr,
+    T,
     K: tl.constexpr,
     BT: tl.constexpr,
     BK: tl.constexpr
@@ -54,7 +54,7 @@ def prepare_qg_kg(
         p_qg += K
 
 
-@triton.jit
+@triton.jit(do_not_specialize=['T'])
 def bwd_decay_global_cumsum(
     dq_inner,
     dq_inter,
@@ -64,7 +64,7 @@ def bwd_decay_global_cumsum(
     k,
     g,
     dg,
-    T: tl.constexpr,
+    T,
     K: tl.constexpr,
     BT: tl.constexpr,
     BK: tl.constexpr
@@ -110,26 +110,23 @@ def bwd_decay_global_cumsum(
         p_dg -= K
 
 
-@triton.jit
+@triton.jit(do_not_specialize=['T'])
 def fused_chunk_gla_fwd_kernel(
-    q,  # query [B, H, T, K]
-    k,  # key [B, H, T, K]
-    v,  # value [B, H, T, V]
-    g,  # cumulative sum of log decay [B, H, T, K]
-    o,  # output [B, H, T, V]
-
-    h0,  # initial state of the chunk [B, H, K, V]
-    ht,  # final state of the chunk [B, H, K, V]
-
-
-    B: tl.constexpr,  # batch size
-    H: tl.constexpr,  # H
-    T: tl.constexpr,  # T
-    K: tl.constexpr,  # K
-    V: tl.constexpr,  # V
-    BT: tl.constexpr,  # BLOCK SIZE along the sequence dimension, a.k.a. chunk size
-    BK: tl.constexpr,  # BLOCK SIZE along the K dimension
-    BV: tl.constexpr,  # BLOCK SIZE along the V dimension
+    q,
+    k,
+    v,
+    g,
+    o,
+    h0,
+    ht,
+    T,
+    B: tl.constexpr,
+    H: tl.constexpr,
+    K: tl.constexpr,
+    V: tl.constexpr,
+    BT: tl.constexpr,
+    BK: tl.constexpr,
+    BV: tl.constexpr,
     USE_INITIAL_STATE: tl.constexpr,
     STORE_FINAL_STATE: tl.constexpr,
     CHECK: tl.constexpr
@@ -180,27 +177,24 @@ def fused_chunk_gla_fwd_kernel(
 
 
 # Similar to Algorithm1 of https://arxiv.org/abs/2006.16236
-@triton.jit
+@triton.jit(do_not_specialize=['T'])
 def fused_chunk_gla_bwd_kernel(
     q, k, v, g,
-    do,  # gradient of output [B, H, T, V]
-    dq,  # gradient of query [NV, B, H, T, K]
-    dk,  # gradient of key [NV, B, H, T, K]
-    dv,  # gradient of value [NK, B, H, T, V]
-
-    h0,  # initial state of the chunk [B, H, K, V]
-
-    scale,  # K ** -0.5
-
-    B: tl.constexpr,  # B
-    H: tl.constexpr,  # H
-    T: tl.constexpr,  # T
-    K: tl.constexpr,  # K
-    V: tl.constexpr,  # V
+    do,
+    dq,
+    dk,
+    dv,
+    h0,
+    scale,
+    T,
+    B: tl.constexpr,
+    H: tl.constexpr,
+    K: tl.constexpr,
+    V: tl.constexpr,
     # clamp_min, # minimum log value of the gate for numerical stability. default: -5
-    BT: tl.constexpr,  # BLOCK SIZE along the sequence dimension, a.k.a. chunk size
-    BK: tl.constexpr,  # BLOCK SIZE along the K dimension
-    BV: tl.constexpr,  # BLOCK SIZE along the V dimension
+    BT: tl.constexpr,
+    BK: tl.constexpr,
+    BV: tl.constexpr,
     USE_INITIAL_STATE: tl.constexpr,
     CHECK: tl.constexpr
 ):
@@ -285,7 +279,7 @@ def fwd_inner_chunk(
     scale,  # K ** -0.5
     B: tl.constexpr,  # B
     H: tl.constexpr,  # H
-    T: tl.constexpr,  # T
+    T,  # T
     K: tl.constexpr,  # K
     BT: tl.constexpr,  # BLOCK SIZE along the sequence dimension, a.k.a. chunk size
     BK: tl.constexpr  # BLOCK SIZE along the K dimension
@@ -326,7 +320,7 @@ def bwd_inner_chunk(
     dA,
     dq,
     dk,
-    T: tl.constexpr,  # T
+    T,  # T
     K: tl.constexpr,  # K
     # clamp_min, # minimum log value of the gate for numerical stability. default: -5
     BT: tl.constexpr,  # BLOCK SIZE along the sequence dimension, a.k.a. chunk size
@@ -425,9 +419,9 @@ class FusedChunkGLAFunction(torch.autograd.Function):
         grid = (NV, NK, B * H)
         fused_chunk_gla_fwd_kernel[grid](
             q_g, k_g, v, g, o, initial_state, final_state,
+            T=T,
             B=B,
             H=H,
-            T=T,
             K=K,
             V=V,
             BT=BT,
@@ -513,11 +507,19 @@ class FusedChunkGLAFunction(torch.autograd.Function):
         grid = (NV, NK, B * H)
 
         fused_chunk_gla_bwd_kernel[grid](
-            q_g, k_g, v, g, do, dq, dk, dv, initial_state,
+            q_g,
+            k_g,
+            v,
+            g,
+            do,
+            dq,
+            dk,
+            dv,
+            initial_state,
             scale,
+            T=T,
             B=B,
             H=H,
-            T=T,
             K=K,
             V=V,
             BT=BT,

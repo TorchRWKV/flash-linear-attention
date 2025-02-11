@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# Copyright (c) 2024, Songlin Yang, Yu Zhang
+# Copyright (c) 2023-2025, Songlin Yang, Yu Zhang
 
 from typing import Optional, Tuple
 
@@ -16,7 +16,7 @@ from fla.utils import contiguous
     'STORE_FINAL_STATE': lambda args: args['ht'] is not None,
     'USE_OFFSETS': lambda args: args['offsets'] is not None
 })
-@triton.jit
+@triton.jit(do_not_specialize=['T'])
 def fused_recurrent_gated_delta_rule_fwd_kernel(
     q,
     k,
@@ -28,8 +28,8 @@ def fused_recurrent_gated_delta_rule_fwd_kernel(
     ht,
     offsets,
     scale,
+    T,
     B: tl.constexpr,
-    T: tl.constexpr,
     H: tl.constexpr,
     K: tl.constexpr,
     V: tl.constexpr,
@@ -152,8 +152,8 @@ def fused_recurrent_gated_delta_rule_fwd(
         ht=final_state,
         offsets=offsets,
         scale=scale,
-        B=B,
         T=T,
+        B=B,
         H=H,
         K=K,
         V=V,

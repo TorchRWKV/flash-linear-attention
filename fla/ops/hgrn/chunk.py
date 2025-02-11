@@ -44,14 +44,14 @@ from fla.utils import contiguous
     ],
     key=['D']
 )
-@triton.jit
+@triton.jit(do_not_specialize=['T'])
 def chunk_hgrn_fwd_kernel_h(
     x,
     g,
     gc,
     o,
     h0,
-    T: tl.constexpr,
+    T,
     D: tl.constexpr,
     BT: tl.constexpr,
     BD: tl.constexpr,
@@ -86,14 +86,14 @@ def chunk_hgrn_fwd_kernel_h(
         p_o += D
 
 
-@triton.jit
+@triton.jit(do_not_specialize=['T'])
 def chunk_hgrn_fwd_kernel_o(
     gc,
     o,
     s_b,
     s_t,
     s_d,
-    T: tl.constexpr,
+    T,
     D: tl.constexpr,
     BT: tl.constexpr,
     BD: tl.constexpr
@@ -117,28 +117,19 @@ def chunk_hgrn_fwd_kernel_o(
 
 @triton.autotune(
     configs=[
-        triton.Config({'BD': 32}, num_warps=1),
-        triton.Config({'BD': 32}, num_warps=2),
-        triton.Config({'BD': 32}, num_warps=4),
-        triton.Config({'BD': 32}, num_warps=8),
-        triton.Config({'BD': 64}, num_warps=1),
-        triton.Config({'BD': 64}, num_warps=2),
-        triton.Config({'BD': 64}, num_warps=4),
-        triton.Config({'BD': 64}, num_warps=8),
-        triton.Config({'BD': 128}, num_warps=1),
-        triton.Config({'BD': 128}, num_warps=2),
-        triton.Config({'BD': 128}, num_warps=4),
-        triton.Config({'BD': 128}, num_warps=8),
+        triton.Config({'BD': BD}, num_warps=num_warps)
+        for BD in [32, 64, 128]
+        for num_warps in [1, 2, 4, 8]
     ],
     key=['D']
 )
-@triton.jit
+@triton.jit(do_not_specialize=['T'])
 def chunk_hgrn_bwd_kernel_h(
     g,
     gc,
     dx,
     do,
-    T: tl.constexpr,
+    T,
     D: tl.constexpr,
     BT: tl.constexpr,
     BD: tl.constexpr
@@ -178,7 +169,7 @@ def chunk_hgrn_bwd_kernel_h(
         p_do -= D
 
 
-@triton.jit
+@triton.jit(do_not_specialize=['T'])
 def chunk_hgrn_bwd_kernel_o(
     g,
     gc,
@@ -188,7 +179,7 @@ def chunk_hgrn_bwd_kernel_o(
     s_b,
     s_t,
     s_d,
-    T: tl.constexpr,
+    T,
     D: tl.constexpr,
     BT: tl.constexpr,
     BD: tl.constexpr

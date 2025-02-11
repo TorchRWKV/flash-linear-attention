@@ -16,7 +16,7 @@ from fla.utils import contiguous
     'STORE_FINAL_STATE': lambda args: args['ht'] is not None,
     'USE_OFFSETS': lambda args: args['offsets'] is not None
 })
-@triton.jit
+@triton.jit(do_not_specialize=['T'])
 def fused_recurrent_delta_rule_fwd_kernel(
     q,
     k,
@@ -28,16 +28,16 @@ def fused_recurrent_delta_rule_fwd_kernel(
     ht,
     offsets,
     scale,
+    T,
     B: tl.constexpr,
-    T: tl.constexpr,
     H: tl.constexpr,
     K: tl.constexpr,
     V: tl.constexpr,
     BK: tl.constexpr,
     BV: tl.constexpr,
-    USE_INITIAL_STATE: tl.constexpr,  # whether to use initial state
-    STORE_FINAL_STATE: tl.constexpr,  # whether to store final state
-    IS_BETA_HEADWISE: tl.constexpr,  # whether beta is headwise vector or scalar,
+    USE_INITIAL_STATE: tl.constexpr,
+    STORE_FINAL_STATE: tl.constexpr,
+    IS_BETA_HEADWISE: tl.constexpr,
     USE_OFFSETS: tl.constexpr,
     HEAD_FIRST: tl.constexpr
 ):
@@ -115,7 +115,7 @@ def fused_recurrent_delta_rule_fwd_kernel(
     'USE_FINAL_STATE_GRADIENT': lambda args: args['dht'] is not None,
     'USE_OFFSETS': lambda args: args['offsets'] is not None
 })
-@triton.jit
+@triton.jit(do_not_specialize=['T'])
 def fused_recurrent_delta_rule_bwd_kernel(
     q,
     k,
@@ -132,7 +132,7 @@ def fused_recurrent_delta_rule_bwd_kernel(
     offsets,
     scale,
     B: tl.constexpr,
-    T: tl.constexpr,
+    T,
     H: tl.constexpr,
     K: tl.constexpr,
     V: tl.constexpr,
@@ -332,8 +332,8 @@ def fused_recurrent_delta_rule_fwd(
         final_state,
         offsets,
         scale,
-        B=B,
         T=T,
+        B=B,
         H=H,
         K=K,
         V=V,
@@ -402,8 +402,8 @@ def fused_recurrent_delta_rule_bwd(
         db,
         offsets,
         scale,
-        B=B,
         T=T,
+        B=B,
         H=H,
         K=K,
         V=V,

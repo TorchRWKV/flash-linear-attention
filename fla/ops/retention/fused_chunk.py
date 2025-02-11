@@ -11,7 +11,7 @@ from packaging import version
 from fla.utils import autocast_custom_bwd, autocast_custom_fwd, contiguous
 
 
-@triton.jit
+@triton.jit(do_not_specialize=['T'])
 def fused_chunk_retention_fwd_kernel(
     q,
     k,
@@ -20,9 +20,9 @@ def fused_chunk_retention_fwd_kernel(
     h0,
     ht,
     scale,
+    T,
     B: tl.constexpr,
     H: tl.constexpr,
-    T: tl.constexpr,
     K: tl.constexpr,
     V: tl.constexpr,
     BT: tl.constexpr,
@@ -96,7 +96,7 @@ def fused_chunk_retention_fwd_kernel(
         tl.store(p_ht, b_h.to(p_ht.dtype.element_ty), boundary_check=(0, 1))
 
 
-@triton.jit
+@triton.jit(do_not_specialize=['T'])
 def fused_chunk_retention_bwd_kernel(
     q,
     k,
@@ -107,9 +107,9 @@ def fused_chunk_retention_bwd_kernel(
     dv,
     h0,
     scale,
+    T,
     B: tl.constexpr,
     H: tl.constexpr,
-    T: tl.constexpr,
     K: tl.constexpr,
     V: tl.constexpr,
     BT: tl.constexpr,
@@ -251,9 +251,9 @@ class FusedChunkRetentionFunction(torch.autograd.Function):
             initial_state,
             final_state,
             scale,
+            T=T,
             B=B,
             H=H,
-            T=T,
             K=K,
             V=V,
             BT=BT,
@@ -300,8 +300,8 @@ class FusedChunkRetentionFunction(torch.autograd.Function):
             dv,
             initial_state,
             scale,
-            B=B,
             T=T,
+            B=B,
             H=H,
             K=K,
             V=V,

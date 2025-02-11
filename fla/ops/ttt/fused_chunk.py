@@ -14,9 +14,9 @@ from fla.utils import autocast_custom_bwd, autocast_custom_fwd, contiguous
         triton.Config({}, num_warps=2),
         triton.Config({}, num_warps=4)
     ],
-    key=["BT", "BK"],
+    key=['BT', 'BK'],
 )
-@triton.jit
+@triton.jit(do_not_specialize=['T'])
 def fused_chunk_ttt_linear_fwd_kernel(
     q,
     k,
@@ -29,8 +29,8 @@ def fused_chunk_ttt_linear_fwd_kernel(
     eta,
     scale,
     eps,
+    T,
     H: tl.constexpr,
-    T: tl.constexpr,
     BT: tl.constexpr,
     BK: tl.constexpr,
     BV: tl.constexpr,

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# Copyright (c) 2024, Songlin Yang, Yu Zhang
+# Copyright (c) 2023-2025, Songlin Yang, Yu Zhang
 
 from typing import Optional
 
@@ -23,32 +23,32 @@ from fla.utils import autocast_custom_bwd, autocast_custom_fwd, contiguous
     ],
     key=["BK", "BV", "USE_GK", "USE_GV", "USE_G"],
 )
-@triton.jit
+@triton.jit(do_not_specialize=['T'])
 def fused_recurrent_fwd_kernel(
-    q,  # query [B, H, T, K]/[B, T, H, K]
-    k,  # key [B, H, T, K]/[B, T, H, K]
-    v,  # value [B, H, T, V]/[B, T, H, V]
-    g,  # log gate [B, H, T]/[B, T, H] or None
-    gk,  # log gate [B, H, T, K]/[B, T, H, K] or None
-    gv,  # log gate [B, H, T, V]/[B, T, H, V] or None
-    o,  # output [NK, B, H, T, V]/[NK, B, T, H, V]
-    h0,  # initial hidden state [B, H, K, V]
-    ht,  # final hidden state [B, H, K, V]
+    q,
+    k,
+    v,
+    g,
+    gk,
+    gv,
+    o,
+    h0,
+    ht,
     offsets,
     scale,
+    T,
     B: tl.constexpr,
-    T: tl.constexpr,
     H: tl.constexpr,
     K: tl.constexpr,
     V: tl.constexpr,
     BK: tl.constexpr,
     BV: tl.constexpr,
-    REVERSE: tl.constexpr,  # whether to reverse the recurrence
-    USE_G: tl.constexpr,  # whether to use g
-    USE_GK: tl.constexpr,  # whether to use gk
-    USE_GV: tl.constexpr,  # whether to use gv
-    USE_INITIAL_STATE: tl.constexpr,  # whether to use initial state
-    STORE_FINAL_STATE: tl.constexpr,  # whether to store final state
+    REVERSE: tl.constexpr,
+    USE_G: tl.constexpr,
+    USE_GK: tl.constexpr,
+    USE_GV: tl.constexpr,
+    USE_INITIAL_STATE: tl.constexpr,
+    STORE_FINAL_STATE: tl.constexpr,
     USE_OFFSETS: tl.constexpr,
     HEAD_FIRST: tl.constexpr
 ):
@@ -139,39 +139,39 @@ def fused_recurrent_fwd_kernel(
         triton.Config({}, num_warps=num_warps)
         for num_warps in [1, 2, 4]
     ],
-    key=["BK", "BV", "USE_GK", "USE_GV", "USE_G"],
+    key=['BK', 'BV', 'USE_GK', 'USE_GV', 'USE_G'],
 )
-@triton.jit
+@triton.jit(do_not_specialize=['T'])
 def fused_recurrent_bwd_kernel(
-    q,  # query [B, H, T, K]/[B, T, H, K]
-    k,  # key [B, H, T, V]/[B, T, H, V]
-    v,  # value [B, H, T, V]/[B, T, H, V]
-    g,  # log gate [B, H, T]/[B, T, H] or None
-    gk,  # log gate [B, H, T, K]/[B, T, H, K] or None
-    gv,  # log gate [B, H, T, V]/[B, T, H, V] or None
-    h0,  # initial hidden state [B, H, K, V]
-    do,  # gradient wrt output [B, H, T, V]/[B, T, H, V]
-    dq,  # gradient wrt query [NV, B, H, T, K]/[NK, B, T, H, K]
-    dk,  # gradient wrt key [NV, B, H, T, K]/[NK, B, T, H, K]
-    dv,  # gradient wrt value [NK, B, H, T, V]/[NV, B, T, H, V]
-    dht,  # gradient wrt final hidden state [B, H, K, V]
-    dh0,  # gradient wrt initial hidden state [B, H, K, V]
+    q,
+    k,
+    v,
+    g,
+    gk,
+    gv,
+    h0,
+    do,
+    dq,
+    dk,
+    dv,
+    dht,
+    dh0,
     offsets,
     scale,
+    T,
     B: tl.constexpr,
-    T: tl.constexpr,
     H: tl.constexpr,
     K: tl.constexpr,
     V: tl.constexpr,
     BK: tl.constexpr,
     BV: tl.constexpr,
-    REVERSE: tl.constexpr,  # whether to do autoregressive modeling in the reverse direction
-    USE_G: tl.constexpr,  # whether to use g
-    USE_GK: tl.constexpr,  # whether to use gk
-    USE_GV: tl.constexpr,  # whether to use gv
-    USE_INITIAL_STATE: tl.constexpr,  # whether to use initial state
-    STORE_INITIAL_STATE_GRADIENT: tl.constexpr,  # whether to store gradient wrt initial state
-    USE_FINAL_STATE_GRADIENT: tl.constexpr,  # whether to compute gradient wrt final state
+    REVERSE: tl.constexpr,
+    USE_G: tl.constexpr,
+    USE_GK: tl.constexpr,
+    USE_GV: tl.constexpr,
+    USE_INITIAL_STATE: tl.constexpr,
+    STORE_INITIAL_STATE_GRADIENT: tl.constexpr,
+    USE_FINAL_STATE_GRADIENT: tl.constexpr,
     USE_OFFSETS: tl.constexpr,
     HEAD_FIRST: tl.constexpr
 ):
@@ -361,8 +361,8 @@ def fused_recurrent_fwd(
         ht,
         offsets,
         scale,
-        B=B,
         T=T,
+        B=B,
         H=H,
         K=K,
         V=V,

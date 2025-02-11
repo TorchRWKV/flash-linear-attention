@@ -9,7 +9,6 @@ from typing import TYPE_CHECKING, Any, List, Optional, Tuple, Union
 import torch
 import torch.nn as nn
 import torch.utils.checkpoint
-from transformers.activations import ACT2FN
 from transformers.generation import GenerationMixin
 from transformers.modeling_outputs import (BaseModelOutputWithPast,
                                            CausalLMOutputWithPast)
@@ -19,9 +18,9 @@ from transformers.utils import logging
 from fla.layers.attn import Attention
 from fla.models.transformer.configuration_transformer import TransformerConfig
 from fla.models.utils import Cache
-from fla.modules import (FusedCrossEntropyLoss, FusedLinearCrossEntropyLoss,
-                         RMSNorm)
-from fla.modules.activations import swiglu_linear
+from fla.modules import FusedCrossEntropyLoss, FusedLinearCrossEntropyLoss
+from fla.modules import GatedMLP as TransformerMLP
+from fla.modules import RMSNorm
 
 if TYPE_CHECKING:
     from transformers.processing_utils import Unpack
@@ -30,54 +29,13 @@ if TYPE_CHECKING:
 logger = logging.get_logger(__name__)
 
 
-class TransformerMLP(nn.Module):
-
-    def __init__(
-        self,
-        hidden_size: int,
-        hidden_ratio: Optional[int] = None,
-        intermediate_size: Optional[int] = None,
-        hidden_act: str = 'swish',
-        norm_eps: float = 1e-5,
-        fuse_swiglu: bool = True
-    ) -> TransformerMLP:
-        super().__init__()
-
-        self.hidden_size = hidden_size
-        self.fuse_swiglu = fuse_swiglu
-        # the final number of params is `hidden_ratio * hidden_size^2`
-        # `intermediate_size` is chosen to be a multiple of 256 closest to `2/3 * hidden_size * hidden_ratio`
-        if hidden_ratio is None:
-            hidden_ratio = 4
-        if intermediate_size is None:
-            intermediate_size = int(hidden_size * hidden_ratio * 2 / 3)
-            intermediate_size = 256 * ((intermediate_size + 256 - 1) // 256)
-        self.hidden_ratio = hidden_ratio
-        self.intermediate_size = intermediate_size
-
-        self.gate_proj = nn.Linear(self.hidden_size, self.intermediate_size * 2, bias=False)
-        self.down_proj = nn.Linear(self.intermediate_size, self.hidden_size, bias=False)
-        self.act_fn = ACT2FN[hidden_act]
-
-    def forward(
-        self,
-        x: torch.Tensor,
-        **kwargs: Unpack[Any]
-    ) -> torch.Tensor:
-        gate, y = self.gate_proj(x).chunk(2, -1)
-        if self.fuse_swiglu:
-            return swiglu_linear(gate, y, self.down_proj.weight, self.down_proj.bias)
-        else:
-            return self.down_proj(self.act_fn(gate) * y)
-
-
 class TransformerBlock(nn.Module):
 
     def __init__(self, config: TransformerConfig, layer_idx: int):
         super().__init__()
 
-        self.hidden_size = config.hidden_size
         self.config = config
+        self.layer_idx = layer_idx
 
         self.attn_norm = (RMSNorm if config.fuse_norm else nn.RMSNorm)(config.hidden_size, eps=config.norm_eps)
         self.attn = Attention(
@@ -97,7 +55,6 @@ class TransformerBlock(nn.Module):
             hidden_ratio=config.hidden_ratio,
             intermediate_size=config.intermediate_size,
             hidden_act=config.hidden_act,
-            norm_eps=config.norm_eps,
             fuse_swiglu=config.fuse_swiglu
         )
 

@@ -9,7 +9,6 @@ from typing import TYPE_CHECKING, Dict, List, Optional, Tuple, Union
 import torch
 import torch.nn as nn
 import torch.utils.checkpoint
-from transformers.activations import ACT2FN
 from transformers.generation import GenerationMixin
 from transformers.modeling_outputs import (BaseModelOutputWithPast,
                                            CausalLMOutputWithPast)
@@ -20,9 +19,9 @@ from fla.layers.attn import Attention
 from fla.layers.lightnet import LightNetAttention
 from fla.models.lightnet.configuration_lightnet import LightNetConfig
 from fla.models.utils import Cache
-from fla.modules import (FusedCrossEntropyLoss, FusedLinearCrossEntropyLoss,
-                         RMSNorm)
-from fla.modules.activations import swiglu_linear
+from fla.modules import FusedCrossEntropyLoss, FusedLinearCrossEntropyLoss
+from fla.modules import GatedMLP as LightNetMLP
+from fla.modules import RMSNorm
 
 if TYPE_CHECKING:
     from transformers.processing_utils import Unpack
@@ -30,46 +29,12 @@ if TYPE_CHECKING:
 logger = logging.get_logger(__name__)
 
 
-class LightNetMLP(nn.Module):
-
-    def __init__(
-        self,
-        hidden_size: int,
-        hidden_ratio: Optional[int] = None,
-        intermediate_size: Optional[int] = None,
-        hidden_act: str = 'swish'
-    ) -> LightNetMLP:
-        super().__init__()
-
-        self.hidden_size = hidden_size
-        # the final number of params is `hidden_ratio * hidden_size^2`
-        # `intermediate_size` is chosen to be a multiple of 256 closest to `2/3 * hidden_size * hidden_ratio`
-        if hidden_ratio is None:
-            hidden_ratio = 4
-        if intermediate_size is None:
-            intermediate_size = int(hidden_size * hidden_ratio * 2 / 3)
-            intermediate_size = 256 * ((intermediate_size + 256 - 1) // 256)
-        self.hidden_ratio = hidden_ratio
-        self.intermediate_size = intermediate_size
-
-        self.gate_proj = nn.Linear(self.hidden_size, self.intermediate_size * 2, bias=False)
-        self.down_proj = nn.Linear(self.intermediate_size, self.hidden_size, bias=False)
-        self.act_fn = ACT2FN[hidden_act]
-
-    def forward(
-        self,
-        x: torch.Tensor,
-        **kwargs: Unpack[Dict],
-    ) -> torch.Tensor:
-        y = self.gate_proj(x)
-        gate, y = y.chunk(2, -1)
-        return swiglu_linear(gate, y, self.down_proj.weight, self.down_proj.bias)
-
-
 class LightNetBlock(nn.Module):
     def __init__(self, config: LightNetConfig, layer_idx: int):
         super().__init__()
-        self.hidden_size = config.hidden_size
+
+        self.config = config
+        self.layer_idx = layer_idx
 
         self.attn_norm = (RMSNorm if config.fuse_norm else nn.RMSNorm)(config.hidden_size, eps=config.norm_eps)
         if config.attn is not None and layer_idx in config.attn['layers']:

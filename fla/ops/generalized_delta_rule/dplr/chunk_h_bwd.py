@@ -34,7 +34,7 @@ triton_config = triton.autotune(
     'USE_OFFSETS': lambda args: args['offsets'] is not None,
 })
 @triton_config
-@triton.jit
+@triton.jit(do_not_specialize=['T'])
 def chunk_dplr_bwd_kernel_dhu(
     qg,
     bg,
@@ -48,7 +48,7 @@ def chunk_dplr_bwd_kernel_dhu(
     dv2,
     offsets,
     chunk_offsets,
-    T: tl.constexpr,
+    T,
     H: tl.constexpr,
     K: tl.constexpr,
     V: tl.constexpr,

@@ -29,7 +29,7 @@ BK_LIST = [16, 32, 64] if device_capacity else [16, 32]
     ],
     key=['BT', 'USE_G', 'USE_GK', 'USE_GV']
 )
-@triton.jit
+@triton.jit(do_not_specialize=['T'])
 def chunk_fwd_kernel_h(
     k,
     v,
@@ -41,7 +41,7 @@ def chunk_fwd_kernel_h(
     ht,
     offsets,
     chunk_offsets,
-    T: tl.constexpr,
+    T,
     H: tl.constexpr,
     K: tl.constexpr,
     V: tl.constexpr,
@@ -162,7 +162,7 @@ def chunk_fwd_kernel_h(
     ],
     key=['BT', 'USE_G', 'USE_GK', 'USE_GV']
 )
-@triton.jit
+@triton.jit(do_not_specialize=['T'])
 def chunk_bwd_kernel_dh(
     q,
     g,
@@ -175,7 +175,7 @@ def chunk_bwd_kernel_dh(
     offsets,
     chunk_offsets,
     scale,
-    T: tl.constexpr,
+    T,
     HQ: tl.constexpr,
     H: tl.constexpr,
     K: tl.constexpr,

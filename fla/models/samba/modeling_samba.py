@@ -9,7 +9,6 @@ from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, Union
 import torch
 import torch.utils.checkpoint
 from torch import nn
-from transformers.activations import ACT2FN
 from transformers.generation import GenerationMixin
 from transformers.modeling_utils import PreTrainedModel
 from transformers.utils import ModelOutput, logging
@@ -17,9 +16,9 @@ from transformers.utils import ModelOutput, logging
 from fla.layers.attn import Attention
 from fla.models.mamba.modeling_mamba import MambaCache, MambaMixer
 from fla.models.samba.configuration_samba import SambaConfig
-from fla.modules import (FusedCrossEntropyLoss, FusedLinearCrossEntropyLoss,
-                         RMSNorm)
-from fla.modules.activations import swiglu_linear
+from fla.modules import FusedCrossEntropyLoss, FusedLinearCrossEntropyLoss
+from fla.modules import GatedMLP as SambaMLP
+from fla.modules import RMSNorm
 
 if TYPE_CHECKING:
     from transformers.processing_utils import Unpack
@@ -27,46 +26,11 @@ if TYPE_CHECKING:
 logger = logging.get_logger(__name__)
 
 
-class SambaMLP(nn.Module):
-
-    def __init__(
-        self,
-        hidden_size: int,
-        hidden_ratio: Optional[int] = None,
-        hidden_act: str = 'swish'
-    ) -> SambaMLP:
-        super().__init__()
-
-        self.hidden_size = hidden_size
-        # the final number of params is `hidden_ratio * hidden_size^2`
-        # `intermediate_size` is chosen to be a multiple of 256 closest to `2/3 * hidden_size * hidden_ratio`
-        if hidden_ratio is None:
-            hidden_ratio = 4
-        self.hidden_ratio = hidden_ratio
-
-        self.intermediate_size = int(hidden_size * hidden_ratio * 2 / 3)
-        self.intermediate_size = 256 * ((self.intermediate_size + 256 - 1) // 256)
-
-        self.gate_proj = nn.Linear(self.hidden_size, self.intermediate_size * 2, bias=False)
-        self.down_proj = nn.Linear(self.intermediate_size, self.hidden_size, bias=False)
-        self.act_fn = ACT2FN[hidden_act]
-
-    def forward(
-        self,
-        x: torch.Tensor,
-        **kwargs: Unpack[Dict],
-    ) -> torch.Tensor:
-        y = self.gate_proj(x)
-        gate, y = y.chunk(2, -1)
-        return swiglu_linear(gate, y, self.down_proj.weight, self.down_proj.bias)
-
-
 class SambaBlock(nn.Module):
     def __init__(self, config, layer_idx):
         super().__init__()
 
         self.config = config
-        self.hidden_size = config.hidden_size
         self.layer_idx = layer_idx
 
         self.mixer_norm = RMSNorm(hidden_size=config.hidden_size, eps=config.norm_eps)

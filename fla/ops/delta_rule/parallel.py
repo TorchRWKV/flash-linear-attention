@@ -1,7 +1,7 @@
 
 
 # -*- coding: utf-8 -*-
-# Copyright (c) 2024, Songlin Yang, Yu Zhang
+# Copyright (c) 2023-2025, Songlin Yang, Yu Zhang
 
 from typing import Tuple
 
@@ -16,13 +16,12 @@ from fla.utils import autocast_custom_bwd, autocast_custom_fwd, contiguous
 
 @triton.autotune(
     configs=[
-        triton.Config({}, num_warps=1),
-        triton.Config({}, num_warps=2),
-        triton.Config({}, num_warps=4),
+        triton.Config({}, num_warps=num_warps)
+        for num_warps in [1, 2, 4]
     ],
     key=["BT", "K", "V"],
 )
-@triton.jit
+@triton.jit(do_not_specialize=['T'])
 def chunk_transform_qk_fwd_kernel(
     q,
     k,
@@ -40,7 +39,7 @@ def chunk_transform_qk_fwd_kernel(
     s_v_t,
     s_v_d,
     scale,
-    T: tl.constexpr,
+    T,
     K: tl.constexpr,
     V: tl.constexpr,
     BK: tl.constexpr,
@@ -118,13 +117,13 @@ def chunk_transform_qk_fwd_fn(q, k, v, beta, A, scale, BT, output_attentions):
         triton.Config({}, num_warps=1),
         triton.Config({}, num_warps=2),
     ],
-    key=["BT"],
+    key=['BT'],
 )
-@triton.jit
+@triton.jit(do_not_specialize=['T'])
 def save_intra_chunk_attn(
     A,
     A_local,
-    T: tl.constexpr,
+    T,
     BT: tl.constexpr,
 ):
     i_t, i_bh = tl.program_id(0), tl.program_id(1)
@@ -137,7 +136,7 @@ def save_intra_chunk_attn(
 @triton.heuristics({
     'OUTPUT_ATTENTIONS': lambda args: args['attn'] is not None
 })
-@triton.jit
+@triton.jit(do_not_specialize=['T'])
 def parallel_delta_rule_fwd_kernel(
     q,
     k,
@@ -151,7 +150,7 @@ def parallel_delta_rule_fwd_kernel(
     s_k_t,
     s_v_h,
     s_v_t,
-    T: tl.constexpr,
+    T,
     K: tl.constexpr,
     V: tl.constexpr,
     BT: tl.constexpr,

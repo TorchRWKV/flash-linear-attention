@@ -77,7 +77,7 @@ class RWKV7FeedForward(nn.Module):
         if state is not None:
             # no need to update the offset twice
             state.update(ffn_state=x[:, -1], layer_idx=self.layer_idx, offset=0)
-        return self.value(self.act_fn(self.key(x + (shifted - x) * self.x_k))), state
+        return self.value(self.act_fn(self.key(x.addcmul(shifted - x, self.x_k)))), state
 
 
 class RWKV7Block(nn.Module):
@@ -88,7 +88,6 @@ class RWKV7Block(nn.Module):
         layer_idx: int
     ) -> RWKV7Block:
         super().__init__()
-        self.hidden_size = config.hidden_size
 
         self.config = config
         self.layer_idx = layer_idx

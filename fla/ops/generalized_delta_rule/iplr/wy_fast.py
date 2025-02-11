@@ -1,6 +1,6 @@
 
 # -*- coding: utf-8 -*-
-# Copyright (c) 2024, Songlin Yang, Yu Zhang
+# Copyright (c) 2023-2025, Songlin Yang, Yu Zhang
 
 from typing import Optional, Tuple
 
@@ -17,16 +17,16 @@ import triton.language as tl
         triton.Config({}, num_warps=num_warps)
         for num_warps in [1, 2, 4, 8, 16]
     ],
-    key=["BK"]
+    key=['BK']
 )
-@triton.jit
+@triton.jit(do_not_specialize=['T'])
 def fwd_prepare_wy_repr_kernel_chunk32(
     a,
     b,
     A,
     offsets,
     indices,
-    T: tl.constexpr,
+    T,
     H: tl.constexpr,
     K: tl.constexpr,
     BT: tl.constexpr,
@@ -79,16 +79,16 @@ def fwd_prepare_wy_repr_kernel_chunk32(
         triton.Config({}, num_warps=num_warps)
         for num_warps in [1, 2, 4, 8, 16]
     ],
-    key=["BK"]
+    key=['BK']
 )
-@triton.jit
+@triton.jit(do_not_specialize=['T'])
 def fwd_prepare_wy_repr_kernel_chunk64(
     a,
     b,
     A,
     offsets,
     indices,
-    T: tl.constexpr,
+    T,
     H: tl.constexpr,
     K: tl.constexpr,
     BT: tl.constexpr,
@@ -172,9 +172,9 @@ def fwd_prepare_wy_repr_kernel_chunk64(
         triton.Config({}, num_warps=num_warps)
         for num_warps in [1, 2, 4, 8]
     ],
-    key=["BT", "BK", "BV"]
+    key=['BT', 'BK', 'BV']
 )
-@triton.jit
+@triton.jit(do_not_specialize=['T'])
 def fwd_wu_kernel(
     w,
     u,
@@ -184,7 +184,7 @@ def fwd_wu_kernel(
     A,
     offsets,
     indices,
-    T: tl.constexpr,
+    T,
     H: tl.constexpr,
     K: tl.constexpr,
     V: tl.constexpr,

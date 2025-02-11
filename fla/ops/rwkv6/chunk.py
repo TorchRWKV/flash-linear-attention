@@ -28,14 +28,14 @@ BV_LIST = [32, 64] if device_capacity else [16, 32]
     ],
     key=['S', 'BT']
 )
-@triton.jit
+@triton.jit(do_not_specialize=['T'])
 def chunk_rwkv6_fwd_cumsum_kernel(
     s,
     oi,
     oe,
     offsets,
     indices,
-    T: tl.constexpr,
+    T,
     H: tl.constexpr,
     S: tl.constexpr,
     BT: tl.constexpr,
@@ -114,9 +114,9 @@ def chunk_rwkv6_fwd_cumsum(
         for num_warps in [1, 2, 4, 8]
         for num_stages in [2, 3, 4]
     ],
-    key=["BC"]
+    key=['BC']
 )
-@triton.jit
+@triton.jit(do_not_specialize=['T'])
 def chunk_rwkv6_fwd_A_kernel_intra_sub_inter(
     q,
     k,
@@ -126,7 +126,7 @@ def chunk_rwkv6_fwd_A_kernel_intra_sub_inter(
     offsets,
     indices,
     scale,
-    T: tl.constexpr,
+    T,
     H: tl.constexpr,
     K: tl.constexpr,
     BT: tl.constexpr,
@@ -201,9 +201,9 @@ def chunk_rwkv6_fwd_A_kernel_intra_sub_inter(
         triton.Config({}, num_warps=4),
         triton.Config({}, num_warps=8),
     ],
-    key=["BK", "BT"]
+    key=['BK', 'BT']
 )
-@triton.jit
+@triton.jit(do_not_specialize=['T'])
 def chunk_rwkv6_fwd_A_kernel_intra_sub_intra(
     q,
     k,
@@ -214,7 +214,7 @@ def chunk_rwkv6_fwd_A_kernel_intra_sub_intra(
     offsets,
     indices,
     scale,
-    T: tl.constexpr,
+    T,
     H: tl.constexpr,
     K: tl.constexpr,
     BT: tl.constexpr,
@@ -283,9 +283,9 @@ def chunk_rwkv6_fwd_A_kernel_intra_sub_intra(
         triton.Config({}, num_warps=4),
         triton.Config({}, num_warps=8),
     ],
-    key=["BC", "BK"]
+    key=['BC', 'BK']
 )
-@triton.jit
+@triton.jit(do_not_specialize=['T'])
 def chunk_rwkv6_fwd_A_kernel_intra_sub_intra_split(
     q,
     k,
@@ -297,7 +297,7 @@ def chunk_rwkv6_fwd_A_kernel_intra_sub_intra_split(
     indices,
     scale,
     B: tl.constexpr,
-    T: tl.constexpr,
+    T,
     H: tl.constexpr,
     K: tl.constexpr,
     BT: tl.constexpr,
@@ -371,16 +371,16 @@ def chunk_rwkv6_fwd_A_kernel_intra_sub_intra_split(
         triton.Config({}, num_warps=4),
         triton.Config({}, num_warps=8),
     ],
-    key=["BC"]
+    key=['BC']
 )
-@triton.jit
+@triton.jit(do_not_specialize=['T'])
 def chunk_rwkv6_fwd_A_kernel_intra_sub_intra_merge(
     A,
     A2,
     offsets,
     indices,
+    T,
     B: tl.constexpr,
-    T: tl.constexpr,
     H: tl.constexpr,
     BT: tl.constexpr,
     BC: tl.constexpr,
@@ -431,7 +431,7 @@ def chunk_rwkv6_fwd_A_kernel_intra_sub_intra_merge(
     ],
     key=['BT']
 )
-@triton.jit
+@triton.jit(do_not_specialize=['T'])
 def chunk_rwkv6_bwd_kernel_dh(
     q,
     gi,
@@ -443,7 +443,7 @@ def chunk_rwkv6_bwd_kernel_dh(
     offsets,
     chunk_offsets,
     scale,
-    T: tl.constexpr,
+    T,
     HQ: tl.constexpr,
     H: tl.constexpr,
     K: tl.constexpr,
@@ -522,9 +522,9 @@ def chunk_rwkv6_bwd_kernel_dh(
         triton.Config({}, num_warps=num_warps)
         for num_warps in [1, 2, 4, 8]
     ],
-    key=["BK", "NC", "BT"],
+    key=['BK', 'NC', 'BT'],
 )
-@triton.jit
+@triton.jit(do_not_specialize=['T'])
 def chunk_rwkv6_bwd_kernel_intra(
     q,
     k,
@@ -535,7 +535,7 @@ def chunk_rwkv6_bwd_kernel_intra(
     dk,
     offsets,
     indices,
-    T: tl.constexpr,
+    T,
     H: tl.constexpr,
     K: tl.constexpr,
     BT: tl.constexpr,
@@ -698,9 +698,9 @@ def chunk_rwkv6_bwd_kernel_intra(
         for BV in BV_LIST
         for num_warps in [2, 4, 8]
     ],
-    key=["BT"]
+    key=['BT']
 )
-@triton.jit
+@triton.jit(do_not_specialize=['T'])
 def chunk_rwkv6_bwd_kernel_inter(
     q,
     k,
@@ -721,7 +721,7 @@ def chunk_rwkv6_bwd_kernel_inter(
     offsets,
     indices,
     scale,
-    T: tl.constexpr,
+    T,
     H: tl.constexpr,
     K: tl.constexpr,
     V: tl.constexpr,

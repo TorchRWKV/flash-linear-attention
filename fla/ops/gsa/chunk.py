@@ -26,9 +26,9 @@ from fla.utils import contiguous
         for num_warps in [2, 4, 8]
         for num_stages in [2, 3, 4]
     ],
-    key=["BT"]
+    key=['BT']
 )
-@triton.jit
+@triton.jit(do_not_specialize=['T'])
 def chunk_gsa_fwd_k_kernel_inter(
     q,
     k,
@@ -39,7 +39,7 @@ def chunk_gsa_fwd_k_kernel_inter(
     offsets,
     indices,
     scale,
-    T: tl.constexpr,
+    T,
     HQ: tl.constexpr,
     H: tl.constexpr,
     K: tl.constexpr,
@@ -114,7 +114,7 @@ def chunk_gsa_fwd_k_kernel_inter(
 @triton.heuristics({
     'USE_OFFSETS': lambda args: args['offsets'] is not None
 })
-@triton.jit
+@triton.jit(do_not_specialize=['T'])
 def chunk_gsa_fwd_k_kernel_intra(
     v,
     g,
@@ -122,7 +122,7 @@ def chunk_gsa_fwd_k_kernel_intra(
     A,
     offsets,
     indices,
-    T: tl.constexpr,
+    T,
     HQ: tl.constexpr,
     H: tl.constexpr,
     V: tl.constexpr,
@@ -222,7 +222,7 @@ def chunk_gsa_fwd_k_kernel_intra(
     ],
     key=["BT"]
 )
-@triton.jit
+@triton.jit(do_not_specialize=['T'])
 def chunk_gsa_bwd_k_kernel_dA(
     v,
     g,
@@ -231,8 +231,8 @@ def chunk_gsa_bwd_k_kernel_dA(
     indices,
     offsets,
     scale,
+    T,
     B: tl.constexpr,
-    T: tl.constexpr,
     HQ: tl.constexpr,
     H: tl.constexpr,
     V: tl.constexpr,
@@ -338,9 +338,9 @@ def chunk_gsa_bwd_k_kernel_dA(
         for num_warps in [2, 4]
         for num_stages in [2, 3, 4]
     ],
-    key=["BT"]
+    key=['BT']
 )
-@triton.jit
+@triton.jit(do_not_specialize=['T'])
 def chunk_gsa_bwd_k_kernel_dqkvg(
     q,
     k,
@@ -359,8 +359,8 @@ def chunk_gsa_bwd_k_kernel_dqkvg(
     offsets,
     indices,
     scale,
+    T,
     B: tl.constexpr,
-    T: tl.constexpr,
     HQ: tl.constexpr,
     H: tl.constexpr,
     K: tl.constexpr,
@@ -489,7 +489,7 @@ def chunk_gsa_bwd_k_kernel_dqkvg(
 @triton.heuristics({
     'USE_OFFSETS': lambda args: args['offsets'] is not None
 })
-@triton.jit
+@triton.jit(do_not_specialize=['T'])
 def chunk_gsa_bwd_k_kernel_intra_dvg(
     v,
     g,
@@ -500,7 +500,7 @@ def chunk_gsa_bwd_k_kernel_intra_dvg(
     dg,
     offsets,
     indices,
-    T: tl.constexpr,
+    T,
     HQ: tl.constexpr,
     H: tl.constexpr,
     V: tl.constexpr,
@@ -832,8 +832,8 @@ def chunk_gsa_bwd_k(
         offsets=offsets,
         indices=indices,
         scale=scale,
-        B=B,
         T=T,
+        B=B,
         HQ=HQ,
         H=H,
         V=V,
@@ -870,8 +870,8 @@ def chunk_gsa_bwd_k(
         offsets=offsets,
         indices=indices,
         scale=scale,
-        B=B,
         T=T,
+        B=B,
         HQ=HQ,
         H=H,
         K=K,

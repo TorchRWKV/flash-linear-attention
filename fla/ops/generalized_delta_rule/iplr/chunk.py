@@ -24,7 +24,7 @@ from fla.utils import (autocast_custom_bwd, autocast_custom_fwd,
     ],
     key=['BT', 'BK', 'BV'],
 )
-@triton.jit
+@triton.jit(do_not_specialize=['T'])
 def chunk_generalized_iplr_delta_rule_fwd_kernel_h(
     k,
     v,
@@ -37,7 +37,7 @@ def chunk_generalized_iplr_delta_rule_fwd_kernel_h(
     ht,
     offsets,
     chunk_offsets,
-    T: tl.constexpr,
+    T,
     H: tl.constexpr,
     K: tl.constexpr,
     V: tl.constexpr,
@@ -119,9 +119,9 @@ def chunk_generalized_iplr_delta_rule_fwd_kernel_h(
         for num_warps in [2, 4, 8]
         for num_stages in [2, 3]
     ],
-    key=["BT"],
+    key=['BT'],
 )
-@triton.jit
+@triton.jit(do_not_specialize=['T'])
 def chunk_generalized_iplr_delta_rule_fwd_kernel_o(
     q,
     k,
@@ -133,7 +133,7 @@ def chunk_generalized_iplr_delta_rule_fwd_kernel_o(
     offsets,
     indices,
     scale,
-    T: tl.constexpr,
+    T,
     H: tl.constexpr,
     K: tl.constexpr,
     V: tl.constexpr,

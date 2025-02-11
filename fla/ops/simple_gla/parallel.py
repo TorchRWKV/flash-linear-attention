@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# Copyright (c) 2024, Songlin Yang, Yu Zhang
+# Copyright (c) 2023-2025, Songlin Yang, Yu Zhang
 
 from typing import Optional, Tuple
 
@@ -148,7 +148,7 @@ def parallel_simple_gla_fwd_kernel(
     tl.store(p_o, b_o.to(p_o.dtype.element_ty), boundary_check=(0, 1))
 
 
-@triton.jit
+@triton.jit(do_not_specialize=['T'])
 def parallel_simple_gla_bwd_kernel_dq(
     i_t,
     i_k,
@@ -164,7 +164,7 @@ def parallel_simple_gla_bwd_kernel_dq(
     stride_vo,
     stride_g,
     scale,
-    T: tl.constexpr,
+    T,
     K: tl.constexpr,
     V: tl.constexpr,
     BT: tl.constexpr,
@@ -240,7 +240,7 @@ def parallel_simple_gla_bwd_kernel_dq(
         tl.store(p_dg, b_dg.to(p_dg.dtype.element_ty), boundary_check=(0,))
 
 
-@triton.jit
+@triton.jit(do_not_specialize=['T'])
 def parallel_simple_gla_bwd_kernel_dkv(
     i_t,
     i_k,
@@ -257,7 +257,7 @@ def parallel_simple_gla_bwd_kernel_dkv(
     stride_qk,
     stride_vo,
     stride_g,
-    T: tl.constexpr,
+    T,
     K: tl.constexpr,
     V: tl.constexpr,
     BT: tl.constexpr,
@@ -358,9 +358,9 @@ def parallel_simple_gla_bwd_kernel_dkv(
     configs=[
         triton.Config({}, num_warps=4),
     ],
-    key=["BT", "BS", "BK", "BV", "USE_G"],
+    key=['BT', 'BS', 'BK', 'BV', 'USE_G'],
 )
-@triton.jit
+@triton.jit(do_not_specialize=['T'])
 def parallel_simple_gla_bwd_kernel(
     q,
     k,
@@ -374,9 +374,9 @@ def parallel_simple_gla_bwd_kernel(
     scale,
     offsets,
     indices,
+    T,
     B: tl.constexpr,
     H: tl.constexpr,
-    T: tl.constexpr,
     K: tl.constexpr,
     V: tl.constexpr,
     BT: tl.constexpr,
@@ -596,9 +596,9 @@ def parallel_simple_gla_bwd(
         offsets=offsets,
         indices=indices,
         scale=scale,
+        T=T,
         B=B,
         H=H,
-        T=T,
         K=K,
         V=V,
         BT=BT,

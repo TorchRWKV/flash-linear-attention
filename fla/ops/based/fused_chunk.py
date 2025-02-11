@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# Copyright (c) 2024, Songlin Yang, Yu Zhang
+# Copyright (c) 2023-2025, Songlin Yang, Yu Zhang
 
 from typing import Optional
 
@@ -9,7 +9,7 @@ import triton.language as tl
 from fla.utils import autocast_custom_bwd, autocast_custom_fwd, contiguous
 
 
-@triton.jit
+@triton.jit(do_not_specialize=['T'])
 def fused_chunk_based_fwd_kernel(
     q,  # query [B, H, L, K]
     k,  # key [B, H, L, V]
@@ -23,14 +23,14 @@ def fused_chunk_based_fwd_kernel(
     s_v_t,  # stride size: V
     s_v_d,  # stride size: 1
     scale,  # K ** -0.5
-    B: tl.constexpr,  # batch size
-    H: tl.constexpr,  # H
-    T: tl.constexpr,  # T
-    K: tl.constexpr,  # K
-    V: tl.constexpr,  # V
-    BT: tl.constexpr,  # BLOCK SIZE along the sequence dimension, a.k.a. chunk size
-    BK: tl.constexpr,  # BLOCK SIZE along the K dimension
-    BV: tl.constexpr,  # BLOCK SIZE along the V dimension
+    T,
+    B: tl.constexpr,
+    H: tl.constexpr,
+    K: tl.constexpr,
+    V: tl.constexpr,
+    BT: tl.constexpr,
+    BK: tl.constexpr,
+    BV: tl.constexpr,
 ):
     # indices
     i_v, i_k, i_bh = tl.program_id(0), tl.program_id(1), tl.program_id(2)
@@ -132,14 +132,14 @@ def fused_chunk_based_bwd_kernel(
     s_v_t,  # stride size: V
     s_v_d,  # stride size: 1
     scale,  # K ** -0.5
-    B: tl.constexpr,  # B
-    H: tl.constexpr,  # H
-    T: tl.constexpr,  # T
-    K: tl.constexpr,  # K
-    V: tl.constexpr,  # V
-    BT: tl.constexpr,  # BLOCK SIZE along the sequence dimension, a.k.a. chunk size
-    BK: tl.constexpr,  # BLOCK SIZE along the K dimension
-    BV: tl.constexpr,  # BLOCK SIZE along the V dimension
+    T,
+    B: tl.constexpr,
+    H: tl.constexpr,
+    K: tl.constexpr,
+    V: tl.constexpr,
+    BT: tl.constexpr,
+    BK: tl.constexpr,
+    BV: tl.constexpr,
 ):
     i_v, i_k, i_bh = tl.program_id(0), tl.program_id(1), tl.program_id(2)
 
@@ -324,7 +324,7 @@ class FusedChunkBasedFunction(torch.autograd.Function):
             q.stride(1), q.stride(2), q.stride(3),
             v.stride(1), v.stride(2), v.stride(3),
             scale,
-            B=B, H=H, T=T, K=K, V=V, BT=BT, BK=BK, BV=BV,
+            T=T, B=B, H=H, K=K, V=V, BT=BT, BK=BK, BV=BV,
             num_warps=num_warps,
         )
         o = o.sum(0)
@@ -358,7 +358,7 @@ class FusedChunkBasedFunction(torch.autograd.Function):
             q.stride(1), q.stride(2), q.stride(3),
             v.stride(1), v.stride(2), v.stride(3),
             scale,
-            B=B, H=H, T=T, K=K, V=V, BT=BT, BK=BK, BV=BV,
+            T=T, B=B, H=H, K=K, V=V, BT=BT, BK=BK, BV=BV,
             num_warps=num_warps,
             num_stages=num_stages
         )

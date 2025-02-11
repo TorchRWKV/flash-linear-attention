@@ -29,7 +29,7 @@ BK_LIST = [64, 128] if device_capacity else [16, 32]
     ],
     key=["BC"]
 )
-@triton.jit
+@triton.jit(do_not_specialize=['T'])
 def chunk_gla_fwd_A_kernel_intra_sub_inter(
     q,
     k,
@@ -38,7 +38,7 @@ def chunk_gla_fwd_A_kernel_intra_sub_inter(
     offsets,
     indices,
     scale,
-    T: tl.constexpr,
+    T,
     H: tl.constexpr,
     K: tl.constexpr,
     BT: tl.constexpr,
@@ -113,7 +113,7 @@ def chunk_gla_fwd_A_kernel_intra_sub_inter(
     ],
     key=["BK", "BT"]
 )
-@triton.jit
+@triton.jit(do_not_specialize=['T'])
 def chunk_gla_fwd_A_kernel_intra_sub_intra(
     q,
     k,
@@ -122,7 +122,7 @@ def chunk_gla_fwd_A_kernel_intra_sub_intra(
     offsets,
     indices,
     scale,
-    T: tl.constexpr,
+    T,
     H: tl.constexpr,
     K: tl.constexpr,
     BT: tl.constexpr,
@@ -184,9 +184,9 @@ def chunk_gla_fwd_A_kernel_intra_sub_intra(
         triton.Config({}, num_warps=4),
         triton.Config({}, num_warps=8),
     ],
-    key=["BC", "BK"]
+    key=['BC', 'BK']
 )
-@triton.jit
+@triton.jit(do_not_specialize=['T'])
 def chunk_gla_fwd_A_kernel_intra_sub_intra_split(
     q,
     k,
@@ -195,8 +195,8 @@ def chunk_gla_fwd_A_kernel_intra_sub_intra_split(
     offsets,
     indices,
     scale,
+    T,
     B: tl.constexpr,
-    T: tl.constexpr,
     H: tl.constexpr,
     K: tl.constexpr,
     BT: tl.constexpr,
@@ -263,16 +263,16 @@ def chunk_gla_fwd_A_kernel_intra_sub_intra_split(
         triton.Config({}, num_warps=4),
         triton.Config({}, num_warps=8),
     ],
-    key=["BC"]
+    key=['BC']
 )
-@triton.jit
+@triton.jit(do_not_specialize=['T'])
 def chunk_gla_fwd_A_kernel_intra_sub_intra_merge(
     A,
     A2,
     offsets,
     indices,
+    T,
     B: tl.constexpr,
-    T: tl.constexpr,
     H: tl.constexpr,
     BT: tl.constexpr,
     BC: tl.constexpr,
@@ -318,9 +318,9 @@ def chunk_gla_fwd_A_kernel_intra_sub_intra_merge(
         for BV in BK_LIST
         for num_warps in [2, 4, 8]
     ],
-    key=["BT"],
+    key=['BT'],
 )
-@triton.jit
+@triton.jit(do_not_specialize=['T'])
 def chunk_gla_fwd_kernel_o(
     q,
     v,
@@ -331,7 +331,7 @@ def chunk_gla_fwd_kernel_o(
     offsets,
     indices,
     scale,
-    T: tl.constexpr,
+    T,
     H: tl.constexpr,
     K: tl.constexpr,
     V: tl.constexpr,
@@ -407,9 +407,9 @@ def chunk_gla_fwd_kernel_o(
         triton.Config({}, num_warps=4),
         triton.Config({}, num_warps=8),
     ],
-    key=["BK", "NC", "BT"],
+    key=['BK', 'NC', 'BT'],
 )
-@triton.jit
+@triton.jit(do_not_specialize=['T'])
 def chunk_gla_bwd_kernel_intra(
     q,
     k,
@@ -419,7 +419,7 @@ def chunk_gla_bwd_kernel_intra(
     dk,
     offsets,
     indices,
-    T: tl.constexpr,
+    T,
     H: tl.constexpr,
     K: tl.constexpr,
     BT: tl.constexpr,
@@ -583,9 +583,9 @@ def chunk_gla_bwd_kernel_intra(
         triton.Config({}, num_warps=4),
         triton.Config({}, num_warps=8),
     ],
-    key=["BV", "BT"],
+    key=['BV', 'BT'],
 )
-@triton.jit
+@triton.jit(do_not_specialize=['T'])
 def chunk_gla_bwd_kernel_dA(
     v,
     do,
@@ -593,7 +593,7 @@ def chunk_gla_bwd_kernel_dA(
     offsets,
     indices,
     scale,
-    T: tl.constexpr,
+    T,
     H: tl.constexpr,
     V: tl.constexpr,
     BT: tl.constexpr,
@@ -640,9 +640,9 @@ def chunk_gla_bwd_kernel_dA(
         for BV in BK_LIST
         for num_warps in [2, 4, 8]
     ],
-    key=["BT"],
+    key=['BT'],
 )
-@triton.jit
+@triton.jit(do_not_specialize=['T'])
 def chunk_gla_bwd_kernel_dv(
     k,
     g,
@@ -652,7 +652,7 @@ def chunk_gla_bwd_kernel_dv(
     dv,
     offsets,
     indices,
-    T: tl.constexpr,
+    T,
     H: tl.constexpr,
     K: tl.constexpr,
     V: tl.constexpr,
@@ -726,9 +726,9 @@ def chunk_gla_bwd_kernel_dv(
         for BV in [64, 128]
         for num_warps in [2, 4, 8]
     ],
-    key=["BT"]
+    key=['BT'],
 )
-@triton.jit
+@triton.jit(do_not_specialize=['T'])
 def chunk_gla_bwd_kernel_inter(
     q,
     k,
@@ -745,7 +745,7 @@ def chunk_gla_bwd_kernel_inter(
     offsets,
     indices,
     scale,
-    T: tl.constexpr,
+    T,
     H: tl.constexpr,
     K: tl.constexpr,
     V: tl.constexpr,
@@ -916,8 +916,8 @@ def chunk_gla_fwd_intra_gk(
             offsets,
             indices,
             scale,
-            B=B,
             T=T,
+            B=B,
             H=H,
             K=K,
             BT=BT,
@@ -933,8 +933,8 @@ def chunk_gla_fwd_intra_gk(
             A,
             offsets,
             indices,
-            B=B,
             T=T,
+            B=B,
             H=H,
             BT=BT,
             BC=BC,

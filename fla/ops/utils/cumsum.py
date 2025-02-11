@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# Copyright (c) 2023-2024, Songlin Yang, Yu Zhang
+# Copyright (c) 2023-2025, Songlin Yang, Yu Zhang
 
 from typing import Optional
 
@@ -20,13 +20,13 @@ from fla.utils import contiguous
     ],
     key=['BT']
 )
-@triton.jit
+@triton.jit(do_not_specialize=['T'])
 def chunk_local_cumsum_scalar_kernel(
     s,
     o,
     offsets,
     indices,
-    T: tl.constexpr,
+    T,
     H: tl.constexpr,
     BT: tl.constexpr,
     HEAD_FIRST: tl.constexpr,
@@ -68,13 +68,13 @@ def chunk_local_cumsum_scalar_kernel(
     ],
     key=['S', 'BT']
 )
-@triton.jit
+@triton.jit(do_not_specialize=['T'])
 def chunk_local_cumsum_vector_kernel(
     s,
     o,
     offsets,
     indices,
-    T: tl.constexpr,
+    T,
     H: tl.constexpr,
     S: tl.constexpr,
     BT: tl.constexpr,
@@ -123,12 +123,12 @@ def chunk_local_cumsum_vector_kernel(
     ],
     key=[]
 )
-@triton.jit
+@triton.jit(do_not_specialize=['T'])
 def chunk_global_cumsum_scalar_kernel(
     s,
     o,
     offsets,
-    T: tl.constexpr,
+    T,
     H: tl.constexpr,
     BT: tl.constexpr,
     HEAD_FIRST: tl.constexpr,
@@ -175,12 +175,12 @@ def chunk_global_cumsum_scalar_kernel(
     ],
     key=['S']
 )
-@triton.jit
+@triton.jit(do_not_specialize=['T'])
 def chunk_global_cumsum_vector_kernel(
     s,
     z,
     offsets,
-    T: tl.constexpr,
+    T,
     H: tl.constexpr,
     S: tl.constexpr,
     BT: tl.constexpr,

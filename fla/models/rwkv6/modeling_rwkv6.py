@@ -87,7 +87,6 @@ class RWKV6FeedForward(nn.Module):
 class RWKV6Block(nn.Module):
     def __init__(self, config: RWKV6Config, layer_idx: int):
         super().__init__()
-        self.hidden_size = config.hidden_size
 
         self.config = config
         self.layer_idx = layer_idx

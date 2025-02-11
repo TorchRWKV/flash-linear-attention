@@ -23,7 +23,7 @@ import triton.language as tl
     ],
     key=['BT', 'USE_G', 'USE_GK', 'USE_GV'],
 )
-@triton.jit
+@triton.jit(do_not_specialize=['T'])
 def chunk_fwd_kernel_h_split(
     k,
     v,
@@ -36,7 +36,7 @@ def chunk_fwd_kernel_h_split(
     ht,
     offsets,
     split_indices,
-    T: tl.constexpr,
+    T,
     S: tl.constexpr,
     H: tl.constexpr,
     K: tl.constexpr,
@@ -162,7 +162,7 @@ def chunk_fwd_kernel_h_split(
     ],
     key=['BT', 'USE_G', 'USE_GK', 'USE_GV'],
 )
-@triton.jit
+@triton.jit(do_not_specialize=['T'])
 def chunk_fwd_kernel_h_reduction(
     g,
     gk,
@@ -172,7 +172,7 @@ def chunk_fwd_kernel_h_reduction(
     ht,
     offsets,
     split_offsets,
-    T: tl.constexpr,
+    T,
     S: tl.constexpr,
     H: tl.constexpr,
     K: tl.constexpr,
@@ -262,7 +262,7 @@ def chunk_fwd_kernel_h_reduction(
     ],
     key=['BT', 'USE_G', 'USE_GK', 'USE_GV'],
 )
-@triton.jit
+@triton.jit(do_not_specialize=['T'])
 def chunk_bwd_kernel_dh_split(
     q,
     g,
@@ -276,7 +276,7 @@ def chunk_bwd_kernel_dh_split(
     offsets,
     split_indices,
     scale,
-    T: tl.constexpr,
+    T,
     S: tl.constexpr,
     HQ: tl.constexpr,
     H: tl.constexpr,
@@ -400,7 +400,7 @@ def chunk_bwd_kernel_dh_split(
     ],
     key=['BT', 'USE_G', 'USE_GK', 'USE_GV'],
 )
-@triton.jit
+@triton.jit(do_not_specialize=['T'])
 def chunk_bwd_kernel_dh_reduction(
     g,
     gk,
@@ -410,7 +410,7 @@ def chunk_bwd_kernel_dh_reduction(
     dh0,
     offsets,
     split_offsets,
-    T: tl.constexpr,
+    T,
     S: tl.constexpr,
     H: tl.constexpr,
     HQ: tl.constexpr,

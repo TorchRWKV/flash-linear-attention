@@ -23,9 +23,9 @@ BK_LIST = [64, 128] if device_capacity else [16, 32]
         triton.Config({}, num_warps=4),
         triton.Config({}, num_warps=8),
     ],
-    key=["BV", "BT"],
+    key=['BV', 'BT'],
 )
-@triton.jit
+@triton.jit(do_not_specialize=['T'])
 def chunk_dplr_bwd_kernel_dAu(
     v,
     do,
@@ -37,7 +37,7 @@ def chunk_dplr_bwd_kernel_dAu(
     offsets,
     indices,
     scale,
-    T: tl.constexpr,
+    T,
     H: tl.constexpr,
     V: tl.constexpr,
     BT: tl.constexpr,
@@ -108,7 +108,7 @@ def chunk_dplr_bwd_kernel_dAu(
         for num_warps in [2, 4, 8]
         for num_stages in [2, 3]
     ],
-    key=["BT", "BK", "BV"],
+    key=['BT', 'BK', 'BV'],
 )
 @triton.jit
 def chunk_dplr_bwd_o_kernel(
@@ -131,7 +131,7 @@ def chunk_dplr_bwd_o_kernel(
     b,
     offsets,
     indices,
-    T: tl.constexpr,
+    T,
     H: tl.constexpr,
     K: tl.constexpr,
     V: tl.constexpr,
@@ -252,7 +252,7 @@ def chunk_dplr_bwd_o_kernel(
         for BK in BK_LIST
         for BV in BK_LIST
     ],
-    key=["BT", "BK", "BV"],
+    key=['BT', 'BK', 'BV'],
 )
 @triton.jit
 def chunk_dplr_bwd_kernel_dv(
@@ -263,7 +263,7 @@ def chunk_dplr_bwd_kernel_dv(
     dh,
     offsets,
     indices,
-    T: tl.constexpr,
+    T,
     H: tl.constexpr,
     K: tl.constexpr,
     V: tl.constexpr,

@@ -17,15 +17,15 @@ import triton.language as tl
         triton.Config({}, num_warps=num_warps)
         for num_warps in [1, 2, 4, 8, 16]
     ],
-    key=["BT"]
+    key=['BT']
 )
-@triton.jit
+@triton.jit(do_not_specialize=['T'])
 def fwd_prepare_wy_repr_kernel_chunk32(
     A_ab,
     A_ab_inv,
     offsets,
     indices,
-    T: tl.constexpr,
+    T,
     H: tl.constexpr,
     BT: tl.constexpr,
     BC: tl.constexpr,  # placeholder, do not delete
@@ -66,15 +66,15 @@ def fwd_prepare_wy_repr_kernel_chunk32(
         for num_warps in [2, 4, 8]
         for num_stages in [2, 3, 4]
     ],
-    key=["BC"]
+    key=['BC']
 )
-@triton.jit
+@triton.jit(do_not_specialize=['T'])
 def fwd_prepare_wy_repr_kernel_chunk64(
     A_ab,
     A_ab_inv,
     offsets,
     indices,
-    T: tl.constexpr,
+    T,
     H: tl.constexpr,
     BT: tl.constexpr,
     BC: tl.constexpr,
@@ -144,9 +144,9 @@ def fwd_prepare_wy_repr_kernel_chunk64(
         triton.Config({}, num_warps=num_warps)
         for num_warps in [2, 4]
     ],
-    key=["BT", "BK", "BV"]
+    key=['BT', 'BK', 'BV']
 )
-@triton.jit
+@triton.jit(do_not_specialize=['T'])
 def fwd_wu_kernel(
     u,
     w,
@@ -156,7 +156,7 @@ def fwd_wu_kernel(
     A_ak,
     offsets,
     indices,
-    T: tl.constexpr,
+    T,
     H: tl.constexpr,
     K: tl.constexpr,
     V: tl.constexpr,

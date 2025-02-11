@@ -1,8 +1,9 @@
 
 # -*- coding: utf-8 -*-
-# Copyright (c) 2024, Songlin Yang, Yu Zhang
+# Copyright (c) 2023-2025, Songlin Yang, Yu Zhang
 
 from typing import Optional, Tuple
+
 import torch
 import triton
 import triton.language as tl
@@ -16,9 +17,9 @@ import triton.language as tl
         triton.Config({}, num_warps=num_warps)
         for num_warps in [1, 2, 4, 8]
     ],
-    key=["BT", "BK", "BV"]
+    key=['BT', 'BK', 'BV']
 )
-@triton.jit
+@triton.jit(do_not_specialize=['T'])
 def bwd_prepare_wy_repr_kernel(
     A_ab_inv,
     A_ak,
@@ -32,7 +33,7 @@ def bwd_prepare_wy_repr_kernel(
     dAab,
     offsets,
     indices,
-    T: tl.constexpr,
+    T,
     H: tl.constexpr,
     K: tl.constexpr,
     V: tl.constexpr,

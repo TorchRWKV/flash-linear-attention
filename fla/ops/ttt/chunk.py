@@ -26,7 +26,7 @@ from fla.utils import (autocast_custom_bwd, autocast_custom_fwd,
     ],
     key=['BT', 'BK', 'BV', 'STORE_ALL'],
 )
-@triton.jit
+@triton.jit(do_not_specialize=['T'])
 def chunk_ttt_linear_fwd_kernel_h(
     k,
     v,
@@ -43,7 +43,7 @@ def chunk_ttt_linear_fwd_kernel_h(
     r,
     offsets,
     chunk_offsets,
-    T: tl.constexpr,
+    T,
     H: tl.constexpr,
     K: tl.constexpr,
     V: tl.constexpr,
@@ -151,9 +151,9 @@ def chunk_ttt_linear_fwd_kernel_h(
         for num_warps in [2, 4, 8]
         for num_stages in [2, 3]
     ],
-    key=["BT"],
+    key=['BT'],
 )
-@triton.jit
+@triton.jit(do_not_specialize=['T'])
 def chunk_ttt_linear_fwd_kernel_o(
     q,
     k,
@@ -164,7 +164,7 @@ def chunk_ttt_linear_fwd_kernel_o(
     offsets,
     indices,
     scale,
-    T: tl.constexpr,
+    T,
     H: tl.constexpr,
     K: tl.constexpr,
     V: tl.constexpr,
@@ -235,9 +235,9 @@ def chunk_ttt_linear_fwd_kernel_o(
         triton.Config({}, num_warps=num_warps)
         for num_warps in [4]
     ],
-    key=["BT", "BK", "BV"],
+    key=['BT', 'BK', 'BV'],
 )
-@triton.jit
+@triton.jit(do_not_specialize=['T'])
 def chunk_ttt_linear_bwd_kernel_dv_local(
     q,
     k,
@@ -247,7 +247,7 @@ def chunk_ttt_linear_bwd_kernel_dv_local(
     offsets,
     indices,
     scale,
-    T: tl.constexpr,
+    T,
     H: tl.constexpr,
     K: tl.constexpr,
     V: tl.constexpr,
@@ -309,7 +309,7 @@ def chunk_ttt_linear_bwd_kernel_dv_local(
     ],
     key=['BT', 'BK', 'BV'],
 )
-@triton.jit
+@triton.jit(do_not_specialize=['T'])
 def chunk_ttt_linear_bwd_kernel_norm(
     q,
     k,
@@ -334,7 +334,7 @@ def chunk_ttt_linear_bwd_kernel_norm(
     offsets,
     chunk_offsets,
     scale,
-    T: tl.constexpr,
+    T,
     H: tl.constexpr,
     K: tl.constexpr,
     V: tl.constexpr,
@@ -464,9 +464,9 @@ def chunk_ttt_linear_bwd_kernel_norm(
         for num_warps in [2, 4, 8]
         for num_stages in [2, 3]
     ],
-    key=["BT", "BK", "BV"],
+    key=['BT', 'BK', 'BV'],
 )
-@triton.jit
+@triton.jit(do_not_specialize=['T'])
 def chunk_bwd_kernel_dqke(
     q,
     k,
@@ -481,8 +481,8 @@ def chunk_bwd_kernel_dqke(
     offsets,
     indices,
     scale,
+    T,
     B: tl.constexpr,
-    T: tl.constexpr,
     H: tl.constexpr,
     K: tl.constexpr,
     V: tl.constexpr,

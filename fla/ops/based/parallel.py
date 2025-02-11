@@ -1,6 +1,6 @@
 
 # -*- coding: utf-8 -*-
-# Copyright (c) 2024, Songlin Yang, Yu Zhang
+# Copyright (c) 2023-2025, Songlin Yang, Yu Zhang
 
 from typing import Optional
 
@@ -13,29 +13,29 @@ from fla.utils import autocast_custom_bwd, autocast_custom_fwd, contiguous
 # https://hazyresearch.stanford.edu/blog/2023-12-11-zoology2-based
 
 
-@triton.jit
+@triton.jit(do_not_specialize=['T'])
 def parallel_based_fwd_kernel(
-    q,  # query [B, H, L, K]
-    k,  # key [B, H, L, V]
-    v,  # value [B, H, L, V]
-    o,  # output [B, H, L, V]
-    z,  # normalizer [B, H, L]
-    s_k_h,  # stride size: L * K
-    s_k_t,  # stride size: K
-    s_k_d,  # stride size: 1
-    s_v_h,  # stride size: L * V
-    s_v_t,  # stride size: V
-    s_v_d,  # stride size: 1
-    scale,  # K ** -0.5
-    B: tl.constexpr,  # batch size
-    H: tl.constexpr,  # H
-    T: tl.constexpr,  # T
-    K: tl.constexpr,  # K
-    V: tl.constexpr,  # V
-    BTL: tl.constexpr,  # BLOCK SIZE along the sequence dimension for Q
-    BTS: tl.constexpr,  # BLOCK SIZE along the sequence dimension for K/V
-    BK: tl.constexpr,  # BLOCK SIZE along the K dimension
-    BV: tl.constexpr,  # BLOCK SIZE along the V dimension
+    q,
+    k,
+    v,
+    o,
+    z,
+    s_k_h,
+    s_k_t,
+    s_k_d,
+    s_v_h,
+    s_v_t,
+    s_v_d,
+    scale,
+    T,
+    B: tl.constexpr,
+    H: tl.constexpr,
+    K: tl.constexpr,
+    V: tl.constexpr,
+    BTL: tl.constexpr,
+    BTS: tl.constexpr,
+    BK: tl.constexpr,
+    BV: tl.constexpr,
 ):
     # i_c: chunk index. used for sequence parallelism
     i_kv, i_c, i_bh = tl.program_id(0), tl.program_id(1), tl.program_id(2)
@@ -264,7 +264,7 @@ def _parallel_based_bwd_dkv(
     return
 
 
-@triton.jit
+@triton.jit(do_not_specialize=['T'])
 def parallel_based_bwd_kernel(
     q,
     k,
@@ -281,9 +281,9 @@ def parallel_based_bwd_kernel(
     s_v_t,
     s_v_d,
     scale,
+    T,
     B: tl.constexpr,
     H: tl.constexpr,
-    T: tl.constexpr,
     K: tl.constexpr,
     V: tl.constexpr,
     BTL: tl.constexpr,

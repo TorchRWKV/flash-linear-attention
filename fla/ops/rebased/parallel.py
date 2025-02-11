@@ -1,6 +1,6 @@
 
 # -*- coding: utf-8 -*-
-# Copyright (c) 2024, Songlin Yang, Yu Zhang
+# Copyright (c) 2023-2025, Songlin Yang, Yu Zhang
 
 import torch
 import triton
@@ -12,23 +12,23 @@ from fla.utils import autocast_custom_bwd, autocast_custom_fwd, contiguous
 # https://github.com/corl-team/rebased/blob/main/flash_linear_attention/fla/ops/triton/rebased_fast/parallel.py
 
 
-@triton.jit
+@triton.jit(do_not_specialize=['T'])
 def parallel_rebased_fwd_kernel(
-    q,  # query [B, H, L, D_head_K]
-    k,  # key [B, H, L, D_head_V]
-    v,  # value [B, H, L, D_head_V]
-    o,  # output [B, H, L, D_head_V]
-    z,  # normalizer [B, H, L]
-    scale,  # D_head_K ** -0.5
-    B,  # batch size
-    H,  # H
-    T,  # T
-    K: tl.constexpr,  # D_head_K
-    V: tl.constexpr,  # D_head_V
-    BTL: tl.constexpr,  # BLOCK SIZE along the sequence dimension for Q
-    BTS: tl.constexpr,  # BLOCK SIZE along the sequence dimension for K/V
-    BK: tl.constexpr,  # BLOCK SIZE along the K dimension
-    BV: tl.constexpr,  # BLOCK SIZE along the V dimension
+    q,
+    k,
+    v,
+    o,
+    z,
+    scale,
+    T,
+    B: tl.constexpr,
+    H: tl.constexpr,
+    K: tl.constexpr,
+    V: tl.constexpr,
+    BTL: tl.constexpr,
+    BTS: tl.constexpr,
+    BK: tl.constexpr,
+    BV: tl.constexpr,
 ):
     # i_c: chunk index. used for sequence parallelism
     i_kv, i_c, i_bh = tl.program_id(0), tl.program_id(1), tl.program_id(2)
@@ -97,7 +97,7 @@ def parallel_rebased_fwd_kernel(
     tl.store(p_z, b_z.to(p_z.dtype.element_ty), mask=((i_c*BTL + tl.arange(0, BTL)) < T))
 
 
-@triton.jit
+@triton.jit(do_not_specialize=['T'])
 def _parallel_rebased_bwd_dq(
     i_bh,
     i_c,
@@ -111,9 +111,9 @@ def _parallel_rebased_bwd_dq(
     dz,
     dq,
     scale,
+    T,
     B: tl.constexpr,
     H: tl.constexpr,
-    T: tl.constexpr,
     K: tl.constexpr,
     V: tl.constexpr,
     BTL: tl.constexpr,
@@ -181,7 +181,7 @@ def _parallel_rebased_bwd_dq(
     return
 
 
-@triton.jit
+@triton.jit(do_not_specialize=['T'])
 def _parallel_rebased_bwd_dkv(
     i_bh,
     i_c,
@@ -196,9 +196,9 @@ def _parallel_rebased_bwd_dkv(
     dk,
     dv,
     scale,
+    T,
     B: tl.constexpr,
     H: tl.constexpr,
-    T: tl.constexpr,
     K: tl.constexpr,
     V: tl.constexpr,
     BTL: tl.constexpr,
@@ -267,7 +267,7 @@ def _parallel_rebased_bwd_dkv(
     return
 
 
-@triton.jit
+@triton.jit(do_not_specialize=['T'])
 def parallel_rebased_bwd_kernel(
     q,
     k,
@@ -278,9 +278,9 @@ def parallel_rebased_bwd_kernel(
     dk,
     dv,
     scale,
+    T,
     B: tl.constexpr,
     H: tl.constexpr,
-    T: tl.constexpr,
     K: tl.constexpr,
     V: tl.constexpr,
     BTL: tl.constexpr,
@@ -367,10 +367,21 @@ class ParallelBasedFunction(torch.autograd.Function):
         o = torch.empty(NK, B, H, T, V, device=q.device)
         z = torch.empty(NK, B, H, T, device=q.device)
         parallel_rebased_fwd_kernel[grid](
-            q, k, v, o, z,
+            q,
+            k,
+            v,
+            o,
+            z,
             scale,
-            B=B, H=H, T=T, K=K, V=V,
-            BTL=BTL, BTS=BTS, BK=BK, BV=BV,
+            T=T,
+            B=B,
+            H=H,
+            K=K,
+            V=V,
+            BTL=BTL,
+            BTS=BTS,
+            BK=BK,
+            BV=BV,
             num_warps=num_warps,
             num_stages=num_stages
         )
@@ -403,18 +414,29 @@ class ParallelBasedFunction(torch.autograd.Function):
         dv = torch.empty(NK, B, H, T, V, dtype=q.dtype, device=q.device)
 
         parallel_rebased_bwd_kernel[grid](
-            q, k, v, do, dz, dq, dk, dv,
+            q,
+            k,
+            v,
+            do,
+            dz,
+            dq,
+            dk,
+            dv,
             scale,
-            B=B, H=H, T=T, K=K, V=V,
-            BTL=BTL, BTS=BTS, BK=BK, BV=BV,
+            T=T,
+            B=B,
+            H=H,
+            K=K,
+            V=V,
+            BTL=BTL,
+            BTS=BTS,
+            BK=BK,
+            BV=BV,
             num_warps=num_warps,
             num_stages=num_stages
         )
 
         return dq.sum(0).to(q.dtype), dk.sum(0).to(k.dtype), dv.sum(0).to(v.dtype), None
-
-
-triton_parallel_based = ParallelBasedFunction.apply
 
 
 def parallel_rebased(
@@ -434,7 +456,7 @@ def parallel_rebased(
         scale = 1
     if not head_first:
         q, k, v = map(lambda x: x.transpose(1, 2), (q, k, v))
-    o, z = triton_parallel_based(q, k, v, scale)
+    o, z = ParallelBasedFunction.apply(q, k, v, scale)
     if return_both:
         return o, z
     if use_normalize:

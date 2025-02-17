@@ -155,10 +155,10 @@ def chunk_dplr_bwd_dhu(
     elif check_triton_shared_mem(131072, qg.device.index):  # A100
         BV = 32
         BC = 32
-    elif check_triton_shared_mem(101376, qg.device.index):  # 4090
+    else:  # Etc: 4090
         BV = 16
         BC = 16
-    
+
     # N: the actual number of sequences in the batch with either equal or variable lengths
     if offsets is None:
         N, NT, chunk_offsets = B, triton.cdiv(T, BT), None

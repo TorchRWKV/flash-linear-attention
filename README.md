@@ -163,6 +163,7 @@ GLAConfig {
   "feature_map": null,
   "fuse_cross_entropy": true,
   "fuse_norm": true,
+  "fuse_swiglu": true,
   "hidden_act": "swish",
   "hidden_ratio": 4,
   "hidden_size": 2048,
@@ -175,7 +176,7 @@ GLAConfig {
   "num_hidden_layers": 24,
   "num_kv_heads": null,
   "tie_word_embeddings": false,
-  "transformers_version": "4.45.0",
+  "transformers_version": "4.48.2",
   "use_cache": true,
   "use_gk": true,
   "use_gv": false,
@@ -204,10 +205,10 @@ GLAForCausalLM(
           (g_norm_swish_gate): FusedRMSNormSwishGate(512, eps=1e-06)
         )
         (mlp_norm): RMSNorm(2048, eps=1e-06)
-        (mlp): GLAMLP(
-          (gate_proj): Linear(in_features=2048, out_features=11264, bias=False)
+        (mlp): GatedMLP(
+          (gate_proj): Linear(in_features=2048, out_features=5632, bias=False)
+          (up_proj): Linear(in_features=2048, out_features=5632, bias=False)
           (down_proj): Linear(in_features=5632, out_features=2048, bias=False)
-          (act_fn): SiLU()
         )
       )
     )
@@ -215,7 +216,6 @@ GLAForCausalLM(
   )
   (lm_head): Linear(in_features=2048, out_features=32000, bias=False)
 )
-
 ```
 
 ### Fused Modules

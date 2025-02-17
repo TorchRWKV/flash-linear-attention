@@ -43,14 +43,20 @@ def sizeof_fmt(num, suffix='B'):
 def convert(
     llama: str,
     config: str,
-    output: str
+    output: str,
+    precision: str = 'float32'
 ):
     AutoTokenizer.from_pretrained(llama).save_pretrained(output)
-    llama = AutoModelForCausalLM.from_pretrained(llama)
+    llama = AutoModelForCausalLM.from_pretrained(llama, torch_dtype=precision)
     print(f"Loading Llama ...\n{llama}")
 
     config = AutoConfig.from_pretrained(config)
+    config.torch_dtype = precision
     model = AutoModelForCausalLM.from_config(config)
+    if precision in ['float16', 'fp16']:
+        model = model.to(torch.float16)
+    elif precision in ['bfloat16', 'bf16']:
+        model = model.to(torch.bfloat16)
     num_parameters = model.num_parameters()
     print(f"Initializing the model from the config:\n{config}\n{model}")
     print(f"Number of parameters in total: {num_parameters} ({sizeof_fmt(num_parameters)})")
@@ -179,5 +185,6 @@ if __name__ == "__main__":
     parser.add_argument("--model", default='mistralai/Mistral-7B-v0.1')
     parser.add_argument("--config", default='configs/transformer_7B.json')
     parser.add_argument("--output", default='converted/transformer-7B')
+    parser.add_argument('--precision', type=str, default='float32')
     args = parser.parse_args()
-    convert(args.model, args.config, args.output)
+    convert(args.model, args.config, args.output, precision=args.precision)

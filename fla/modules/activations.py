@@ -18,12 +18,12 @@ else:
                                                 swiglu_fwdbwd)
 
 
-@torch.jit.script
+@torch.compile
 def swiglu_fwd_torch(x, y):
     return (F.silu(x.float()) * y).to(x.dtype)
 
 
-@torch.jit.script
+@torch.compile
 def swiglu_bwd_torch(x, y, g):
     dtype = x.dtype
     x, y, g = x.float(), y.float(), g.float()
@@ -34,7 +34,7 @@ def swiglu_bwd_torch(x, y, g):
     return dx.to(dtype), dy.to(dtype)
 
 
-@torch.jit.script
+@torch.compile
 def swiglu_fwdbwd_torch(x, y, g):
     dtype = x.dtype
     x, y, g = x.float(), y.float(), g.float()
@@ -135,7 +135,7 @@ class LogSigmoidFunction(torch.autograd.Function):
 # this function is tanh approximation of gelu
 # actual gelu is:
 # x * 0.5 * (1.0 + torch.erf(x * 0.70710678))
-@torch.jit.script
+@torch.compile
 def bias_gelu(y, bias):
     x = bias + y
     return (x * 0.5 * (1.0 + torch.tanh(0.79788456 * x * (1 + 0.044715 * x * x)))).to(dtype=y.dtype)
@@ -144,7 +144,7 @@ def bias_gelu(y, bias):
 # gradient of tanh approximation of gelu
 # gradient of actual gelu is:
 # 0.5 * (1. + torch.erf(x * 0.70710678)) + 0.3989423 * x * torch.exp(-0.5 * x * x)
-@torch.jit.script
+@torch.compile
 def bias_gelu_bwd(g, y, bias):
     """Assume that y has shape (B, D) and bias has shape (D)"""
     x = bias + y
@@ -175,7 +175,7 @@ class GeLUFunction(torch.autograd.Function):
 # this function is tanh approximation of gelu
 # actual gelu is:
 # x * 0.5 * (1.0 + torch.erf(x * 0.70710678))
-@torch.jit.script
+@torch.compile
 def gelu_fwd(x):
     return (x * 0.5 * (1.0 + torch.tanh(0.79788456 * x * (1 + 0.044715 * x * x)))).to(dtype=x.dtype)
 
@@ -183,7 +183,7 @@ def gelu_fwd(x):
 # gradient of tanh approximation of gelu
 # gradient of actual gelu is:
 # 0.5 * (1. + torch.erf(x * 0.70710678)) + 0.3989423 * x * torch.exp(-0.5 * x * x)
-@torch.jit.script
+@torch.compile
 def gelu_bwd(g, x):
     tanh_out = torch.tanh(0.79788456 * x * (1 + 0.044715 * x * x))
     # sqrt(2/pi) * 3 * 0.044715 -> 0.1070322243
@@ -207,18 +207,18 @@ class FastGeLUFunction(torch.autograd.Function):
         return tmp
 
 
-@torch.jit.script
+@torch.compile
 def relu_bwd(g, x):
     return torch.where(x >= 0, g, 0.0).to(dtype=x.dtype)
 
 
-@torch.jit.script
+@torch.compile
 def sqrelu_fwd(x):
     r = F.relu(x)
     return (r * r).to(dtype=x.dtype)
 
 
-@torch.jit.script
+@torch.compile
 def sqrelu_bwd(g, x):
     return (2.0 * g * F.relu(x)).to(dtype=x.dtype)
 

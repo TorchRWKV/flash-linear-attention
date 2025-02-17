@@ -12,11 +12,11 @@ class TransformerConfig(PretrainedConfig):
 
     def __init__(
         self,
-        vocab_size: int = 32000,
         hidden_size: int = 2048,
         num_hidden_layers: int = 24,
         num_heads: int = 32,
         num_kv_heads: int = None,
+        qkv_bias: bool = False,
         window_size: Optional[int] = None,
         rope_theta: Optional[float] = 10000.,
         max_position_embeddings: int = 2048,
@@ -31,17 +31,17 @@ class TransformerConfig(PretrainedConfig):
         bos_token_id: int = 1,
         eos_token_id: int = 2,
         tie_word_embeddings: bool = False,
-        attention_bias: bool = False,
         fuse_norm: bool = True,
-        fuse_cross_entropy: bool = True,
         fuse_swiglu: bool = True,
+        fuse_cross_entropy: bool = True,
+        vocab_size: int = 32000,
         **kwargs,
     ):
-        self.vocab_size = vocab_size
         self.hidden_size = hidden_size
         self.num_hidden_layers = num_hidden_layers
         self.num_heads = num_heads
         self.num_kv_heads = num_kv_heads
+        self.qkv_bias = qkv_bias
         self.window_size = window_size
         self.rope_theta = rope_theta
         self.max_position_embeddings = max_position_embeddings
@@ -54,10 +54,11 @@ class TransformerConfig(PretrainedConfig):
         self.elementwise_affine = elementwise_affine
         self.norm_eps = norm_eps
         self.use_cache = use_cache
-        self.attention_bias = attention_bias
-        self.fuse_cross_entropy = fuse_cross_entropy
+
         self.fuse_norm = fuse_norm
         self.fuse_swiglu = fuse_swiglu
+        self.fuse_cross_entropy = fuse_cross_entropy
+        self.vocab_size = vocab_size
 
         super().__init__(
             pad_token_id=pad_token_id,

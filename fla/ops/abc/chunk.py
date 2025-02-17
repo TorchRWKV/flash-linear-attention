@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# Copyright (c) 2024, Songlin Yang, Yu Zhang
+# Copyright (c) 2023-2025, Songlin Yang, Yu Zhang
 
 from typing import Optional, Tuple
 
@@ -7,8 +7,7 @@ import torch
 import triton
 import triton.language as tl
 
-from fla.ops.utils import (logcumsumexp_fwd_kernel, softmax_bwd_kernel,
-                           softmax_fwd_kernel)
+from fla.ops.utils import logcumsumexp_fwd_kernel, softmax_bwd, softmax_fwd
 from fla.utils import contiguous
 
 
@@ -983,16 +982,8 @@ class ChunkABCFunction(torch.autograd.Function):
         ok = ok0.add_(ok1)
 
         scale = 1.
-        # equivalent to:
-        # p = ok.softmax(-1, torch.float)
         # p is kept in fp32 for safe softmax backward
-        p = torch.empty_like(ok, dtype=torch.float)
-        grid = (NT, B * H)
-        softmax_fwd_kernel[grid](
-            ok, p,
-            s.stride(1), s.stride(2), s.stride(3),
-            T=T, S=M, BT=BT
-        )
+        p = softmax_fwd(ok, dtype=torch.float)
         qv = p.to(q.dtype)
 
         scale = 1.
@@ -1120,13 +1111,7 @@ class ChunkABCFunction(torch.autograd.Function):
 
         # softmax gradient, equivalent to:
         # dok = p * (dp - (p * dp).sum(-1, True))
-        dok = torch.empty_like(ok)
-        grid = (NT, B * H)
-        softmax_bwd_kernel[grid](
-            p, dp, dok,
-            s.stride(1), s.stride(2), s.stride(3),
-            T=T, S=M, BT=BT
-        )
+        dok = softmax_bwd(p, dp, dtype=ok.dtype)
 
         scale = K ** -0.5
         dhk = bwd_inner(

@@ -41,6 +41,7 @@ class GSAConfig(PretrainedConfig):
         initializer_range: float = 0.02,
         tie_word_embeddings: bool = False,
         fuse_norm: bool = True,
+        fuse_swiglu: bool = True,
         fuse_cross_entropy: bool = True,
         vocab_size: int = 32000,
         **kwargs
@@ -69,7 +70,9 @@ class GSAConfig(PretrainedConfig):
         self.attn = attn
         self.use_cache = use_cache
         self.initializer_range = initializer_range
+
         self.fuse_norm = fuse_norm
+        self.fuse_swiglu = fuse_swiglu
         self.fuse_cross_entropy = fuse_cross_entropy
         self.vocab_size = vocab_size
 
@@ -81,6 +84,7 @@ class GSAConfig(PretrainedConfig):
             if 'num_heads' not in attn:
                 raise ValueError("Number of heads must be provided to initialize hybrid attention layers")
             attn['num_kv_heads'] = attn.get('num_kv_heads', attn['num_heads'])
+            attn['qkv_bias'] = attn.get('qkv_bias', False)
             attn['window_size'] = attn.get('window_size', None)
             attn['rope_theta'] = attn.get('rope_theta', 10000.)
 

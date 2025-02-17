@@ -42,10 +42,10 @@ class TransformerBlock(nn.Module):
             hidden_size=config.hidden_size,
             num_heads=config.num_heads,
             num_kv_heads=config.num_kv_heads,
+            qkv_bias=config.qkv_bias,
             window_size=config.window_size,
             rope_theta=config.rope_theta,
             max_position_embeddings=config.max_position_embeddings,
-            norm_eps=config.norm_eps,
             layer_idx=layer_idx
         )
 
@@ -275,6 +275,7 @@ class TransformerForCausalLM(TransformerPreTrainedModel, GenerationMixin):
         self.model = TransformerModel(config)
         self.vocab_size = config.vocab_size
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
+        self.criterion = None
 
         # Initialize weights and apply final processing
         self.post_init()
@@ -369,23 +370,22 @@ class TransformerForCausalLM(TransformerPreTrainedModel, GenerationMixin):
 
         loss = None
         if labels is not None:
-            if self.config.fuse_cross_entropy:
+            if getattr(self, 'criterion', None) is None:
                 if fuse_linear_and_cross_entropy:
-                    loss_fct = FusedLinearCrossEntropyLoss()
+                    criterion = FusedLinearCrossEntropyLoss()
+                elif self.config.fuse_cross_entropy:
+                    criterion = FusedCrossEntropyLoss(inplace_backward=True)
                 else:
-                    loss_fct = FusedCrossEntropyLoss(inplace_backward=True)
+                    criterion = nn.CrossEntropyLoss()
             else:
-                loss_fct = nn.CrossEntropyLoss()
+                criterion = self.criterion
             # Enable model parallelism
             labels = labels.to(hidden_states.device)
-            labels = torch.cat((labels[..., 1:], torch.full_like(labels[:, :1], loss_fct.ignore_index)), 1)
+            labels = torch.cat((labels[..., 1:], torch.full_like(labels[:, :1], criterion.ignore_index)), 1)
             if fuse_linear_and_cross_entropy:
-                loss = loss_fct(hidden_states.view(-1, self.config.hidden_size),
-                                labels.view(-1),
-                                self.lm_head.weight,
-                                self.lm_head.bias)
+                loss = criterion(hidden_states, labels, self.lm_head.weight, self.lm_head.bias)
             else:
-                loss = loss_fct(logits.view(-1, self.config.vocab_size), labels.view(-1))
+                loss = criterion(logits.view(labels.numel(), -1), labels.view(-1))
 
         if not return_dict:
             output = (logits,) + outputs[1:]

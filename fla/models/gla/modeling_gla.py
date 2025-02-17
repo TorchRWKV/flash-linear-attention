@@ -42,6 +42,7 @@ class GLABlock(nn.Module):
                 hidden_size=config.hidden_size,
                 num_heads=config.attn['num_heads'],
                 num_kv_heads=config.attn['num_kv_heads'],
+                qkv_bias=config.attn['qkv_bias'],
                 window_size=config.attn['window_size'],
                 rope_theta=config.attn['rope_theta'],
                 max_position_embeddings=config.max_position_embeddings,
@@ -71,7 +72,8 @@ class GLABlock(nn.Module):
             hidden_size=config.hidden_size,
             hidden_ratio=config.hidden_ratio,
             intermediate_size=config.intermediate_size,
-            hidden_act=config.hidden_act
+            hidden_act=config.hidden_act,
+            fuse_swiglu=config.fuse_swiglu
         )
 
     def forward(
@@ -266,6 +268,7 @@ class GLAForCausalLM(GLAPreTrainedModel, GenerationMixin):
         self.model = GLAModel(config)
         self.vocab_size = config.vocab_size
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
+        self.criterion = None
 
         # Initialize weights and apply final processing
         self.post_init()
@@ -371,27 +374,26 @@ class GLAForCausalLM(GLAPreTrainedModel, GenerationMixin):
 
         hidden_states = outputs[0]
         fuse_linear_and_cross_entropy = self.config.fuse_cross_entropy and self.training
-        logits = None if fuse_linear_and_cross_entropy else self.lm_head(hidden_states[:, -num_logits_to_keep:])
 
-        loss = None
+        loss, logits = None, None
+        if not fuse_linear_and_cross_entropy or labels is None:
+            logits = self.lm_head(hidden_states[:, -num_logits_to_keep:])
         if labels is not None:
-            if self.config.fuse_cross_entropy:
+            if getattr(self, 'criterion', None) is None:
                 if fuse_linear_and_cross_entropy:
-                    loss_fct = FusedLinearCrossEntropyLoss()
+                    criterion = FusedLinearCrossEntropyLoss()
+                elif self.config.fuse_cross_entropy:
+                    criterion = FusedCrossEntropyLoss(inplace_backward=True)
                 else:
-                    loss_fct = FusedCrossEntropyLoss(inplace_backward=True)
+                    criterion = nn.CrossEntropyLoss()
             else:
-                loss_fct = nn.CrossEntropyLoss()
-            # Enable model parallelism
+                criterion = self.criterion
             labels = labels.to(hidden_states.device)
-            labels = torch.cat((labels[..., 1:], torch.full_like(labels[:, :1], loss_fct.ignore_index)), 1)
+            labels = torch.cat((labels[..., 1:], torch.full_like(labels[:, :1], criterion.ignore_index)), 1)
             if fuse_linear_and_cross_entropy:
-                loss = loss_fct(hidden_states.view(-1, self.config.hidden_size),
-                                labels.view(-1),
-                                self.lm_head.weight,
-                                self.lm_head.bias)
+                loss = criterion(hidden_states, labels, self.lm_head.weight, self.lm_head.bias)
             else:
-                loss = loss_fct(logits.view(-1, self.config.vocab_size), labels.view(-1))
+                loss = criterion(logits.view(labels.numel(), -1), labels.view(-1))
 
         if not return_dict:
             output = (logits,) + outputs[1:]

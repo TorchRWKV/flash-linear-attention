@@ -69,6 +69,7 @@ class RWKV6Config(PretrainedConfig):
             if 'num_heads' not in attn:
                 raise ValueError("Number of heads must be provided to initialize hybrid attention layers")
             attn['num_kv_heads'] = attn.get('num_kv_heads', attn['num_heads'])
+            attn['qkv_bias'] = attn.get('qkv_bias', False)
             attn['window_size'] = attn.get('window_size', None)
             attn['rope_theta'] = attn.get('rope_theta', 10000.)
 

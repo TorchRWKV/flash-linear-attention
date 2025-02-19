@@ -170,7 +170,7 @@ class RWKV7Attention(nn.Module):
         cu_seqlens = kwargs.get('cu_seqlens', None)
         o, recurrent_state = rwkv7_fn(
             r=r,
-            w=w,
+            log_w=w,
             k=k,
             v=v,
             a=-kk,

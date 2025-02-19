@@ -211,11 +211,13 @@ class GatedLinearAttention(nn.Module):
         # dealing with left-padding
         if attention_mask is not None:
             v = v.mul_(attention_mask[:, -v.shape[-2]:, None])
-        q = rearrange(q, 'b t (h d) -> b t h d', h=self.num_heads)
+        q = rearrange(q, 'b t (h d) -> b t h d', d=self.head_qk_dim)
         if self.num_kv_groups > 1:
-            k, v, gk = (repeat(x, 'b t (h d) -> b t (h g) d', h=self.num_kv_heads, g=self.num_kv_groups) for x in (k, v, gk))
+            k, gk = (repeat(x, 'b t (h d) -> b t (h g) d', g=self.num_kv_groups, d=self.head_qk_dim) for x in (k, gk))
+            v = repeat(v, 'b t (h d) -> b t (h g) d', g=self.num_kv_groups, d=self.head_v_dim)
         else:
-            k, v, gk = (rearrange(x, 'b t (h d) -> b t h d', h=self.num_kv_heads) for x in (k, v, gk))
+            k, gk = (rearrange(x, 'b t (h d) -> b t h d', d=self.head_qk_dim) for x in (k, gk))
+            v = rearrange(v, 'b t (h d) -> b t h d', d=self.head_v_dim)
         gk = F.logsigmoid(gk) / self.gate_logit_normalizer
 
         if self.clamp_min is not None:
@@ -269,7 +271,7 @@ class GatedLinearAttention(nn.Module):
         if self.use_output_gate:
             g = self.g_proj(hidden_states)
             if self.fuse_norm_and_gate:
-                g = rearrange(g, 'b t (h d) -> b t h d', h=self.num_heads)
+                g = rearrange(g, 'b t (h d) -> b t h d', d=self.head_v_dim)
                 o = self.g_norm_swish_gate(o, g)
                 o = rearrange(o, 'b t h d -> b t (h d)')
             else:

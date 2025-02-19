@@ -12,7 +12,6 @@ import torch.nn.functional as F
 from einops import rearrange
 
 from fla.modules import RMSNorm, ShortConvolution
-from fla.modules.activations import swish
 from fla.modules.feature_map import (ReLUFeatureMap, SwishFeatureMap,
                                      T2RFeatureMap)
 from fla.modules.layernorm import rms_norm_linear
@@ -179,7 +178,7 @@ class GatedSlotAttention(nn.Module):
 
         if self.feature_map is not None:
             q, k = map(lambda x: self.feature_map(x), (q, k))
-        v = swish(v)
+        v = F.silu(v)
 
         f = F.logsigmoid(f) / self.gate_logit_normalizer
         s = (1 - f.exp()).to(f.dtype)
@@ -228,7 +227,7 @@ class GatedSlotAttention(nn.Module):
             )
 
         o = rearrange(o, 'b t h d -> b t (h d)')
-        o = rms_norm_linear(swish(o), self.g_norm.weight, self.g_norm.bias, self.o_proj.weight, self.o_proj.bias)
+        o = rms_norm_linear(F.silu(o), self.g_norm.weight, self.g_norm.bias, self.o_proj.weight, self.o_proj.bias)
         return o, None, past_key_values
 
     def state_size(self, *args, **kwargs) -> int:

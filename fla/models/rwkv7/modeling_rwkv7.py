@@ -390,7 +390,7 @@ class RWKV7ForCausalLM(RWKV7PreTrainedModel, GenerationMixin):
         attention_mask: Optional[torch.Tensor] = None,
         inputs_embeds: Optional[torch.Tensor] = None,
         use_cache: bool = True,
-        num_logits_to_keep: Optional[int] = None,
+        num_logits_to_keep: Optional[int] = 0,
         **kwargs
     ):
         # only last token for `inputs_ids` if the `past_key_values` is not empty.
@@ -406,7 +406,7 @@ class RWKV7ForCausalLM(RWKV7PreTrainedModel, GenerationMixin):
             # TODO: use `next_tokens` directly instead.
             model_inputs = {'input_ids': input_ids.contiguous()}
 
-        if num_logits_to_keep is not None:
+        if num_logits_to_keep != 0:
             model_inputs['num_logits_to_keep'] = num_logits_to_keep
 
         model_inputs.update({

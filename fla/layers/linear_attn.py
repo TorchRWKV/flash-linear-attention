@@ -50,34 +50,34 @@ class LinearAttention(nn.Module):
         assert self.key_dim % num_heads == 0, f"key dim must be divisible by num_heads of {num_heads}"
         assert self.value_dim % num_heads == 0, f"value dim must be divisible by num_heads of {num_heads}"
 
-        self.head_qk_dim = self.key_dim // num_heads
+        self.head_k_dim = self.key_dim // num_heads
         self.head_v_dim = self.value_dim // num_heads
         self.do_feature_map_norm = do_feature_map_norm
 
         if feature_map == 'hedgehog':
             if tie_feature_map_qk:
-                self.feature_map_q = self.feature_map_k = HedgehogFeatureMap(head_dim=self.head_qk_dim)
+                self.feature_map_q = self.feature_map_k = HedgehogFeatureMap(head_dim=self.head_k_dim)
             else:
-                self.feature_map_q = HedgehogFeatureMap(head_dim=self.head_qk_dim)
-                self.feature_map_k = HedgehogFeatureMap(head_dim=self.head_qk_dim)
+                self.feature_map_q = HedgehogFeatureMap(head_dim=self.head_k_dim)
+                self.feature_map_k = HedgehogFeatureMap(head_dim=self.head_k_dim)
 
         elif feature_map == 't2r':
             if tie_feature_map_qk:
-                self.feature_map_q = self.feature_map_k = T2RFeatureMap(head_dim=self.head_qk_dim)
+                self.feature_map_q = self.feature_map_k = T2RFeatureMap(head_dim=self.head_k_dim)
             else:
-                self.feature_map_q = T2RFeatureMap(head_dim=self.head_qk_dim)
-                self.feature_map_k = T2RFeatureMap(head_dim=self.head_qk_dim)
+                self.feature_map_q = T2RFeatureMap(head_dim=self.head_k_dim)
+                self.feature_map_k = T2RFeatureMap(head_dim=self.head_k_dim)
 
         elif feature_map == 'elementwise_product':
             if tie_feature_map_qk:
-                self.feature_map_q = self.feature_map_k = HadamardFeatureMap(head_dim=self.head_qk_dim)
+                self.feature_map_q = self.feature_map_k = HadamardFeatureMap(head_dim=self.head_k_dim)
             else:
-                self.feature_map_q = HadamardFeatureMap(head_dim=self.head_qk_dim)
-                self.feature_map_k = HadamardFeatureMap(head_dim=self.head_qk_dim)
+                self.feature_map_q = HadamardFeatureMap(head_dim=self.head_k_dim)
+                self.feature_map_k = HadamardFeatureMap(head_dim=self.head_k_dim)
 
         elif feature_map == 'dpfp':
-            self.feature_map_q = DPFPFeatureMap(head_dim=self.head_qk_dim)
-            self.feature_map_k = DPFPFeatureMap(head_dim=self.head_qk_dim)
+            self.feature_map_q = DPFPFeatureMap(head_dim=self.head_k_dim)
+            self.feature_map_k = DPFPFeatureMap(head_dim=self.head_k_dim)
 
         elif feature_map == 'elu':
             def elu(x):
@@ -128,11 +128,13 @@ class LinearAttention(nn.Module):
         k = self.k_proj(x)
         v = self.v_proj(x)
 
-        q = rearrange(q, '... (h d) -> ... h d', h=self.num_heads)
+        q = rearrange(q, '... (h d) -> ... h d', d=self.head_k_dim)
         if self.num_kv_groups > 1:
-            k, v = (repeat(x, '... (h d) -> ... (h g) d', h=self.num_kv_heads, g=self.num_kv_groups) for x in (k, v))
+            k = repeat(k, '... (h d) -> ... (h g) d', d=self.head_k_dim, g=self.num_kv_groups)
+            v = repeat(v, '... (h d) -> ... (h g) d', d=self.head_v_dim, g=self.num_kv_groups)
         else:
-            k, v = (rearrange(x, '... (h d) -> ... h d', h=self.num_kv_heads) for x in (k, v))
+            k = rearrange(k, '... (h d) -> ... h d', d=self.head_k_dim)
+            v = rearrange(v, '... (h d) -> ... h d', d=self.head_v_dim)
 
         q = self.feature_map_q(q)
         k = self.feature_map_k(k)

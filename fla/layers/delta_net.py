@@ -111,7 +111,7 @@ class DeltaNet(nn.Module):
 
         self.key_dim = int(hidden_size * expand_k)
         self.value_dim = int(hidden_size * expand_v)
-        self.head_qk_dim = self.key_dim // num_heads
+        self.head_k_dim = self.key_dim // num_heads
         self.head_v_dim = self.value_dim // num_heads
         self.layer_idx = layer_idx
 
@@ -221,7 +221,8 @@ class DeltaNet(nn.Module):
                 q, k = self.silu(q), self.silu(k)
             v = self.silu(self.v_proj(hidden_states))
 
-        q, k, v = map(lambda x: rearrange(x, '... (h d) -> ... h d', h=self.num_heads), (q, k, v))
+        q, k = map(lambda x: rearrange(x, '... (h d) -> ... h d', d=self.head_k_dim), (q, k))
+        v = rearrange(v, '... (h d) -> ... h d', d=self.head_v_dim)
         if self.qk_activation != 'silu':
             if self.qk_activation == 'relu':
                 q, k = q.relu(), k.relu()
@@ -286,7 +287,7 @@ class DeltaNet(nn.Module):
             )
 
         if self.use_gate:
-            g = rearrange(self.g_proj(hidden_states), '... (h d) -> ... h d', h=self.num_heads)
+            g = rearrange(self.g_proj(hidden_states), '... (h d) -> ... h d', d=self.head_v_dim)
             o = self.o_norm(o, g)
         else:
             o = self.o_norm(o)

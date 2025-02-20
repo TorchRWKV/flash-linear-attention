@@ -117,7 +117,7 @@ class GatedLinearAttention(nn.Module):
         assert self.key_dim % num_heads == 0, f"key dim must be divisible by num_heads of {num_heads}"
         assert self.value_dim % num_heads == 0, f"value dim must be divisible by num_heads of {num_heads}"
 
-        self.head_qk_dim = self.key_dim // num_heads
+        self.head_k_dim = self.key_dim // num_heads
         self.head_v_dim = self.value_dim // num_heads
 
         self.q_proj = nn.Linear(hidden_size, self.key_dim, bias=False)
@@ -211,12 +211,12 @@ class GatedLinearAttention(nn.Module):
         # dealing with left-padding
         if attention_mask is not None:
             v = v.mul_(attention_mask[:, -v.shape[-2]:, None])
-        q = rearrange(q, 'b t (h d) -> b t h d', d=self.head_qk_dim)
+        q = rearrange(q, 'b t (h d) -> b t h d', d=self.head_k_dim)
         if self.num_kv_groups > 1:
-            k, gk = (repeat(x, 'b t (h d) -> b t (h g) d', g=self.num_kv_groups, d=self.head_qk_dim) for x in (k, gk))
+            k, gk = (repeat(x, 'b t (h d) -> b t (h g) d', g=self.num_kv_groups, d=self.head_k_dim) for x in (k, gk))
             v = repeat(v, 'b t (h d) -> b t (h g) d', g=self.num_kv_groups, d=self.head_v_dim)
         else:
-            k, gk = (rearrange(x, 'b t (h d) -> b t h d', d=self.head_qk_dim) for x in (k, gk))
+            k, gk = (rearrange(x, 'b t (h d) -> b t h d', d=self.head_k_dim) for x in (k, gk))
             v = rearrange(v, 'b t (h d) -> b t h d', d=self.head_v_dim)
         gk = F.logsigmoid(gk) / self.gate_logit_normalizer
 

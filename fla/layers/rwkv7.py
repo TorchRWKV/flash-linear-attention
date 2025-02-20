@@ -162,7 +162,7 @@ class RWKV7Attention(nn.Module):
         # dealing with left-padding
         if attention_mask is not None:
             v = v * attention_mask[:, -v.shape[-2]:, None]
-        r, w, k, v, kk, a = map(lambda x: rearrange(x, 'b t (h d) -> b t h d', h=self.num_heads), (r, w, k, v, kk, a))
+        r, w, k, v, kk, a = map(lambda x: rearrange(x, 'b t (h d) -> b t h d', d=self.head_dim), (r, w, k, v, kk, a))
 
         recurrent_state = last_state['recurrent_state'] if last_state is not None else None
 

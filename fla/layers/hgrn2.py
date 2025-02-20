@@ -157,7 +157,8 @@ class HGRN2Attention(nn.Module):
             g = lower_bound + (1 - lower_bound) * f.sigmoid()
             k, g = 1 - g, g.log()
 
-        q, k, i, g = map(lambda x: rearrange(x, '... (h d) -> ... h d', h=self.num_heads), (q, k.to(i), i, g))
+        q, k, g = map(lambda x: rearrange(x, '... (h d) -> ... h d', d=self.head_f_dim), (q, k.to(i), g))
+        i = rearrange(i, '... (h d) -> ... h d', d=self.head_i_dim)
 
         recurrent_state = last_state['recurrent_state'] if last_state is not None else None
         cu_seqlens = kwargs.get('cu_seqlens', None)

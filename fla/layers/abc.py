@@ -169,14 +169,15 @@ class ABCAttention(nn.Module):
         if attention_mask is not None:
             v = v.mul_(attention_mask[:, -v.shape[-2]:, None])
 
-        q, k, v = map(lambda x: rearrange(x, '... (h d) -> ... h d', h=self.num_heads), (q, k, v))
+        q, k = map(lambda x: rearrange(x, '... (h d) -> ... h d', d=self.head_k_dim), (q, k))
+        v = rearrange(v, '... (h d) -> ... h d', d=self.head_v_dim)
         if self.use_rope:
             seqlen_offset = 0
             if past_key_values is not None:
                 seqlen_offset = past_key_values.get_seq_length(self.layer_idx)
             q, k = self.rotary(q, k, seqlen_offset=seqlen_offset)
 
-        s = rearrange(self.s_proj(hidden_states), '... (h m) -> ... h m', h=self.num_heads)
+        s = rearrange(self.s_proj(hidden_states), '... (h m) -> ... h m', m=self.num_slots)
         s = s.clamp_(self.clamp_min, self.clamp_max)
 
         recurrent_state = last_state['recurrent_state'] if last_state is not None else None
@@ -200,7 +201,7 @@ class ABCAttention(nn.Module):
         if self.use_norm and not self.use_output_gate:
             o = self.g_norm(o)
         elif self.use_output_gate:
-            g = rearrange(self.g_proj(hidden_states), '... (h d) -> ... h d', h=self.num_heads)
+            g = rearrange(self.g_proj(hidden_states), '... (h d) -> ... h d', d=self.head_v_dim)
             o = self.g_norm(o, g) if self.use_norm else swiglu(g, o)
         o = rearrange(o, '... h d -> ... (h d)')
         o = self.o_proj(o)

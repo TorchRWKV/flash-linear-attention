@@ -88,9 +88,9 @@ class BitAttention(nn.Module):
 
         batch_size, q_len, _ = hidden_states.size()
 
-        q = rearrange(self.q_proj(hidden_states), '... (h d) -> ... h d', h=self.num_heads)
-        k = rearrange(self.k_proj(hidden_states), '... (h d) -> ... h d', h=self.num_kv_heads)
-        v = rearrange(self.v_proj(hidden_states), '... (h d) -> ... h d', h=self.num_kv_heads)
+        q = rearrange(self.q_proj(hidden_states), '... (h d) -> ... h d', d=self.head_dim)
+        k = rearrange(self.k_proj(hidden_states), '... (h d) -> ... h d', d=self.head_dim)
+        v = rearrange(self.v_proj(hidden_states), '... (h d) -> ... h d', d=self.head_dim)
 
         # equivalent to cu_seqlens in `flash_attn`
         cu_seqlens = kwargs.get('cu_seqlens', None)

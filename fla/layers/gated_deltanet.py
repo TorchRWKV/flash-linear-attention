@@ -110,7 +110,7 @@ class GatedDeltaNet(nn.Module):
 
         self.key_dim = self.num_heads * self.head_dim
         self.value_dim = self.key_dim * self.expand_v
-        self.head_qk_dim = head_dim
+        self.head_k_dim = head_dim
         self.head_v_dim = head_dim * self.expand_v
         self.layer_idx = layer_idx
         self.silu = nn.SiLU()
@@ -233,7 +233,8 @@ class GatedDeltaNet(nn.Module):
             k = self.silu(self.k_proj(hidden_states))
             v = self.silu(self.v_proj(hidden_states))
 
-        q, k, v = map(lambda x: rearrange(x, 'b t (h d) -> b t h d', h=self.num_heads), (q, k, v))
+        q, k = map(lambda x: rearrange(x, 'b t (h d) -> b t h d', d=self.head_k_dim), (q, k))
+        v = rearrange(v, 'b t (h d) -> b t h d', d=self.head_v_dim)
         beta = self.b_proj(hidden_states).sigmoid()
         g = -self.A_log.float().exp() * F.softplus(self.a_proj(hidden_states).float() + self.dt_bias)
 
@@ -279,7 +280,7 @@ class GatedDeltaNet(nn.Module):
             )
 
         if self.use_gate:
-            g = rearrange(self.g_proj(hidden_states), '... (h d) -> ... h d', h=self.num_heads)
+            g = rearrange(self.g_proj(hidden_states), '... (h d) -> ... h d', d=self.head_v_dim)
             o = self.o_norm(o, g)
         else:
             o = self.o_norm(o)

@@ -55,7 +55,7 @@ class RWKV6Attention(nn.Module):
         assert self.key_dim % num_heads == 0, f"key dim must be divisible by num_heads of {num_heads}"
         assert self.value_dim % num_heads == 0, f"value dim must be divisible by num_heads of {num_heads}"
 
-        self.head_qk_dim = self.key_dim // num_heads
+        self.head_k_dim = self.key_dim // num_heads
         self.head_v_dim = self.value_dim // num_heads
 
         self.time_shift = nn.ZeroPad2d((0, 0, 1, -1))
@@ -71,7 +71,7 @@ class RWKV6Attention(nn.Module):
         self.k_proj = DDLerpLinear(hidden_size, self.key_dim)
         self.v_proj = DDLerpLinear(hidden_size, self.value_dim)
         self.g_proj = DDLerpLinear(hidden_size, self.value_dim)
-        self.bonus = nn.Parameter(torch.zeros(num_heads, self.head_qk_dim))
+        self.bonus = nn.Parameter(torch.zeros(num_heads, self.head_k_dim))
 
         # TODO: fuse GroupNorm and output gate
         self.g_norm = GroupNorm(self.num_heads, self.value_dim, elementwise_affine=elementwise_affine, bias=True, eps=norm_eps)
@@ -138,7 +138,8 @@ class RWKV6Attention(nn.Module):
         # dealing with left-padding
         if attention_mask is not None:
             v = v.mul_(attention_mask[:, -v.shape[-2]:, None])
-        r, w, k, v = map(lambda x: rearrange(x, 'b t (h d) -> b t h d', h=self.num_heads), (r, w, k, v))
+        r, w, k = map(lambda x: rearrange(x, 'b t (h d) -> b t h d', d=self.head_k_dim), (r, w, k))
+        v = rearrange(v, 'b t (h d) -> b t h d', d=self.head_v_dim)
         w = -torch.exp(w)
         u = self.bonus
 

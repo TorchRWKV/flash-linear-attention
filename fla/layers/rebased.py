@@ -117,9 +117,9 @@ class ReBasedLinearAttention(nn.Module):
         b, t, _ = hidden_states.size()
         q, k, v = self.q_proj(hidden_states), self.k_proj(hidden_states), self.v_proj(hidden_states)
 
-        q = q.view(b, t, self.num_heads, self.feature_dim).transpose(1, 2)
-        k = k.view(b, t, self.num_key_value_heads, self.feature_dim).transpose(1, 2)
-        v = v.view(b, t, self.num_key_value_heads, self.head_dim).transpose(1, 2)
+        q = q.view(b, t, -1, self.feature_dim).transpose(1, 2)
+        k = k.view(b, t, -1, self.feature_dim).transpose(1, 2)
+        v = v.view(b, t, -1, self.head_dim).transpose(1, 2)
 
         # Linear attention
         q, k = self.feature_map(q), self.feature_map(k)

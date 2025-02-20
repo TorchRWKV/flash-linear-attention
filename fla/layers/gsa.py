@@ -171,10 +171,10 @@ class GatedSlotAttention(nn.Module):
             v = self.v_proj(hidden_states)
         f = self.f_proj(hidden_states)
 
-        q = rearrange(q, 'b t (h d) -> b t h d', h=self.num_heads)
-        k = rearrange(k, 'b t (h d) -> b t h d', h=self.num_kv_heads)
-        v = rearrange(v, 'b t (h d) -> b t h d', h=self.num_kv_heads)
-        f = rearrange(f, 'b t (h m) -> b t h m', h=self.num_kv_heads)
+        q = rearrange(q, 'b t (h d) -> b t h d', d=self.head_k_dim)
+        k = rearrange(k, 'b t (h d) -> b t h d', d=self.head_k_dim)
+        v = rearrange(v, 'b t (h d) -> b t h d', d=self.head_v_dim)
+        f = rearrange(f, 'b t (h m) -> b t h m', m=self.num_slots)
 
         if self.feature_map is not None:
             q, k = map(lambda x: self.feature_map(x), (q, k))

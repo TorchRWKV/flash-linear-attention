@@ -9,10 +9,10 @@ from typing import TYPE_CHECKING, Dict, Optional, Tuple
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from einops import rearrange
 
 from fla.modules import FusedRMSNormSwishGate, ShortConvolution
-from fla.modules.activations import swish
 from fla.modules.fused_norm_gate import rms_norm_swish_gate_linear_fn
 from fla.ops.gla import chunk_gla, fused_recurrent_gla
 
@@ -147,8 +147,9 @@ class LightNetAttention(nn.Module):
         if attention_mask is not None:
             v = v.mul_(attention_mask[:, -v.shape[-2]:, None])
 
-        q = swish(q)
-        q, k, v = map(lambda x: rearrange(x, '... (h d) -> ... h d', h=self.num_heads), (q, k, v))
+        q = F.silu(q)
+        q, k = map(lambda x: rearrange(x, '... (h d) -> ... h d', d=self.head_f_dim), (q, k))
+        v = rearrange(v, '... (h d) -> ... h d', d=self.head_i_dim)
         # TODO: this 2 steps took huge amount of time, which should be optimized
         z = k.float().logcumsumexp(1)
         k, g = torch.exp(k - z).to(k.dtype), (torch.cat((z[:, :1], z[:, :-1]), 1) - z).to(k.dtype)

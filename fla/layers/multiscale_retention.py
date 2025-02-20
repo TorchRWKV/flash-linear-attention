@@ -106,7 +106,7 @@ class MultiScaleRetention(nn.Module):
         assert self.key_dim % num_heads == 0, f"key dim must be divisible by num_heads of {num_heads}"
         assert self.value_dim % num_heads == 0, f"value dim must be divisible by num_heads of {num_heads}"
 
-        self.head_qk_dim = self.key_dim // num_heads
+        self.head_k_dim = self.key_dim // num_heads
         self.head_v_dim = self.value_dim // num_heads
 
         self.q_proj = nn.Linear(hidden_size, self.key_dim, bias=False)
@@ -134,8 +134,8 @@ class MultiScaleRetention(nn.Module):
         # TODO: fix this issue
         # https://github.com/Dao-AILab/flash-attention/blob/main/flash_attn/ops/triton/rotary.py#L180
         # Ideally, we would want to support arbitrary d_head_qk
-        assert self.head_qk_dim <= 256, "head_qk_dim must be less than or equal to 256"
-        self.rotary = RotaryEmbedding(dim=self.head_qk_dim)
+        assert self.head_k_dim <= 256, "head_k_dim must be less than or equal to 256"
+        self.rotary = RotaryEmbedding(dim=self.head_k_dim)
 
         self.apply(self._initialize_weights)
 
@@ -200,8 +200,8 @@ class MultiScaleRetention(nn.Module):
         # dealing with left-padding
         if attention_mask is not None:
             v = v.mul_(attention_mask[:, -v.shape[-2]:, None])
-        q = rearrange(q, '... (h d) -> ... h d', h=self.num_heads)
-        k = rearrange(k, '... (h d) -> ... h d', h=self.num_kv_heads)
+        q = rearrange(q, '... (h d) -> ... h d', d=self.head_k_dim)
+        k = rearrange(k, '... (h d) -> ... h d', d=self.head_k_dim)
         if self.feature_map_fn is not None:
             q, k = map(self.feature_map_fn, (q, k))
 
@@ -217,10 +217,10 @@ class MultiScaleRetention(nn.Module):
 
         q, k = self.rotary(q, k, seqlen_offset=seqlen_offset, max_seqlen=max_seqlen)
         if self.num_kv_groups > 1:
-            k = repeat(k, 'b t h d -> b t (h g) d', h=self.num_kv_heads, g=self.num_kv_groups)
-            v = repeat(v, 'b t (h d) -> b t (h g) d', h=self.num_kv_heads, g=self.num_kv_groups)
+            k = repeat(k, 'b t h d -> b t (h g) d', g=self.num_kv_groups)
+            v = repeat(v, 'b t (h d) -> b t (h g) d', d=self.head_v_dim, g=self.num_kv_groups)
         else:
-            k, v = rearrange(k, 'b t h d -> b t h d'), rearrange(v, 'b t (h d) -> b t h d', h=self.num_kv_heads)
+            v = rearrange(v, 'b t (h d) -> b t h d', d=self.head_v_dim)
 
         recurrent_state = last_state['recurrent_state'] if last_state is not None else None
         if mode == 'chunk':
@@ -266,7 +266,7 @@ class MultiScaleRetention(nn.Module):
         if self.use_output_gate:
             g = self.g_proj(hidden_states)
             if self.fuse_norm_and_gate:
-                g = rearrange(g, 'b t (h d) -> b t h d', h=self.num_heads)
+                g = rearrange(g, 'b t (h d) -> b t h d', d=self.head_v_dim)
                 o = self.g_norm_swish_gate(o, g)
                 o = rearrange(o, 'b t h d -> b t (h d)')
             else:

@@ -90,7 +90,6 @@ def rwkv_relu_and_square_torch(x: torch.Tensor):
     return torch.relu(x) ** 2
 
 
-@torch.compiler.disable
 def rwkv_mix_fwd(x, x_prev, x_k):
     has_batch = x.dim() == 3
 
@@ -128,7 +127,6 @@ def rwkv_mix_fwd(x, x_prev, x_k):
     return output
 
 
-@torch.compiler.disable
 def rwkv_relu_and_square_fwd(x: torch.Tensor, inplace: bool = True):
     """
     Triton implementation of RWKV's ReLU and square operation
@@ -240,7 +238,6 @@ def compute_x_k_grad(dk1, x, x_prev):
     return grad_x_k
 
 
-@torch.compiler.disable
 def rwkv_channel_mixing_bwd(grad_output, x, x_prev, x_k, key_weight, value_weight, k1, k1_K, k):
     batch_size = x.shape[0] if x.dim() == 3 else 1
     seq_len = x.shape[-2]

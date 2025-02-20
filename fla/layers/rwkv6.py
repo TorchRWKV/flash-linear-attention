@@ -270,7 +270,7 @@ class LerpLinear(nn.Module):
             if len(shifted.shape) == 2:
                 shifted = shifted.unsqueeze(1)
             delta = shifted - x
-        return self.linear(x + delta * self.mu)
+        return self.linear(torch.addcmul(x, delta, self.mu))
 
 
 class DDLerpLinear(nn.Module):
@@ -306,4 +306,4 @@ class DDLerpLinear(nn.Module):
             if len(shifted.shape) == 2:
                 shifted = shifted.unsqueeze(1)
             delta = shifted - x
-        return self.linear(x + delta * mu)
+        return self.linear(torch.addcmul(x, delta, mu))

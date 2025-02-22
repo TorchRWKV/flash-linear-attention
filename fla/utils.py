@@ -90,7 +90,7 @@ def check_pytorch_version(version_s: str = "2.4") -> bool:
 
 
 @lru_cache(maxsize=None)
-def check_triton_shared_mem(max_shared_mem: int = 102400, tensor_idx: int = 0) -> bool:
+def is_triton_shared_mem_enough(max_shared_mem: int = 102400, tensor_idx: int = 0) -> bool:
     max_shared_memory = triton.runtime.driver.active.utils.get_device_properties(tensor_idx)['max_shared_mem']
     return max_shared_memory >= max_shared_mem
 
@@ -102,37 +102,11 @@ def get_multiprocessor_count(tensor_idx: int = 0) -> int:
 
 @lru_cache(maxsize=None)
 def get_available_device() -> str:
-    if torch.cuda.is_available():
-        return "cuda"
-
-    try:
-        import intel_extension_for_pytorch as ipex  # noqa: F401
-    except ImportError:
-        pass
-    if torch.xpu.is_available():
-        return "xpu"
-
-    try:
-        import torch_musa  # noqa: F401
-
-        if torch.musa.is_available():
-            return "musa"
-    except ImportError:
-        pass
-
-    try:
-        import torch_npu  # noqa: F401
-
-        if torch.npu.is_available():
-            return "npu"
-    except ImportError:
-        pass
-
-    raise ValueError("No available device found.")
+    return triton.runtime.driver.active.get_current_target().backend
 
 
 device = "cuda" if get_available_device() == "cpu" else get_available_device()
-device_capacity = check_triton_shared_mem()
+device_capacity = is_triton_shared_mem_enough()
 device_torch_lib = getattr(torch, device)
 is_intel_a770 = (device == "xpu" and 'Intel(R) Arc(TM) A' in torch.xpu.get_device_name(0))
 

@@ -11,7 +11,7 @@ import triton.language as tl
 from fla.modules.layernorm import group_norm
 from fla.ops.common.utils import prepare_chunk_indices, prepare_chunk_offsets
 from fla.utils import (autocast_custom_bwd, autocast_custom_fwd,
-                       contiguous, check_triton_shared_mem)
+                       contiguous, is_triton_shared_mem_enough)
 
 
 @triton.heuristics({
@@ -602,11 +602,11 @@ def chunk_ttt_linear_fwd_h(
     assert BK <= 128, "current kernel does not support head dimension larger than 128."
 
     # H100 can have larger block size
-    if check_triton_shared_mem(233472, k.device.index):
+    if is_triton_shared_mem_enough(233472, k.device.index):
         BV = triton.next_power_of_2(V)
         BC = 64
     # A100
-    elif check_triton_shared_mem(131072, k.device.index):
+    elif is_triton_shared_mem_enough(131072, k.device.index):
         BV = triton.next_power_of_2(V)
         BC = 64
     else:

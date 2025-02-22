@@ -8,7 +8,7 @@ import triton
 import triton.language as tl
 
 from fla.ops.common.utils import prepare_chunk_offsets
-from fla.utils import check_triton_shared_mem
+from fla.utils import is_triton_shared_mem_enough
 
 
 @triton.heuristics({
@@ -264,11 +264,11 @@ def chunk_gated_delta_rule_fwd_h(
     BK = triton.next_power_of_2(K)
     assert BK <= 256, "current kernel does not support head dimension larger than 256."
     # H100 can have larger block size
-    if check_triton_shared_mem(233472, k.device.index):
+    if is_triton_shared_mem_enough(233472, k.device.index):
         BV = 64
         BC = 64
     # A100
-    elif check_triton_shared_mem(131072, k.device.index):
+    elif is_triton_shared_mem_enough(131072, k.device.index):
         BV = 32
         BC = 64
     else:
@@ -344,11 +344,11 @@ def chunk_gated_delta_rule_bwd_dhu(
     assert BK <= 256, "current kernel does not support head dimension being larger than 256."
 
     # H100
-    if check_triton_shared_mem(233472, q.device.index):
+    if is_triton_shared_mem_enough(233472, q.device.index):
         BV = 64
         BC = 64
     # A100
-    elif check_triton_shared_mem(131072, q.device.index):
+    elif is_triton_shared_mem_enough(131072, q.device.index):
         BV = 32
         BC = 64 if K <= 128 else 32
     else:

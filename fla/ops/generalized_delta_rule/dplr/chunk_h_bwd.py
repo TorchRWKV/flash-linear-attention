@@ -8,7 +8,7 @@ import triton
 import triton.language as tl
 
 from fla.ops.common.utils import prepare_chunk_offsets
-from fla.utils import check_triton_shared_mem
+from fla.utils import is_triton_shared_mem_enough
 
 
 @triton.heuristics({
@@ -139,10 +139,10 @@ def chunk_dplr_bwd_dhu(
     BK = triton.next_power_of_2(K)
     assert BK <= 256, "current kernel does not support head dimension being larger than 256."
     # H100
-    if check_triton_shared_mem(233472, qg.device.index):
+    if is_triton_shared_mem_enough(233472, qg.device.index):
         BV = 64
         BC = 64 if K <= 128 else 32
-    elif check_triton_shared_mem(131072, qg.device.index):  # A100
+    elif is_triton_shared_mem_enough(131072, qg.device.index):  # A100
         BV = 32
         BC = 32
     else:  # Etc: 4090

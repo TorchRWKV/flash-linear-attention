@@ -10,7 +10,7 @@ import triton.language as tl
 from fla.ops.utils import chunk_global_cumsum, chunk_local_cumsum
 from fla.ops.utils.exp import safe_exp
 from fla.utils import (autocast_custom_bwd, autocast_custom_fwd,
-                       contiguous, check_triton_shared_mem)
+                       contiguous, is_triton_shared_mem_enough)
 
 
 @triton.heuristics({
@@ -489,10 +489,10 @@ def parallel_simple_gla_fwd(
         B, T, H, K, V = *k.shape, v.shape[-1]
     BT, BS = chunk_size, 32
 
-    if check_triton_shared_mem(233472, q.device.index):
+    if is_triton_shared_mem_enough(233472, q.device.index):
         BK = min(256, triton.next_power_of_2(K))
         BV = min(256, triton.next_power_of_2(V))
-    elif check_triton_shared_mem(131072, q.device.index):
+    elif is_triton_shared_mem_enough(131072, q.device.index):
         BK = min(128, triton.next_power_of_2(K))
         BV = min(128, triton.next_power_of_2(V))
     else:

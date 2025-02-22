@@ -7,7 +7,7 @@ from typing import Optional, Tuple
 import torch
 import triton
 import triton.language as tl
-from fla.utils import device_capacity, check_triton_shared_mem
+from fla.utils import device_capacity, is_triton_shared_mem_enough
 
 
 BK_LIST = [64, 128] if device_capacity else [16, 32]
@@ -466,9 +466,9 @@ def chunk_dplr_bwd_dAu(
             indices = torch.stack([indices.eq(0).cumsum(0) - 1, indices], 1).to(offsets)
         NT = len(indices)
 
-    if check_triton_shared_mem(131072):  # A100
+    if is_triton_shared_mem_enough(131072):  # A100
         BV = min(triton.next_power_of_2(V), 128)
-    elif check_triton_shared_mem(101376):  # 4090
+    elif is_triton_shared_mem_enough(101376):  # 4090
         BV = min(triton.next_power_of_2(V), 64)
     else:
         BV = min(triton.next_power_of_2(V), 32)

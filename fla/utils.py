@@ -109,6 +109,7 @@ device = "cuda" if get_available_device() == "cpu" else get_available_device()
 device_capacity = is_triton_shared_mem_enough()
 device_torch_lib = getattr(torch, device)
 is_intel_a770 = (device == "xpu" and 'Intel(R) Arc(TM) A' in torch.xpu.get_device_name(0))
+is_tf32_supported = (device == "cuda" and torch.cuda.get_device_capability(0)[0] >= 8)  # Nvidia Ampere or newer
 
 
 def set_torch_device(x: torch.Tensor):

@@ -7,6 +7,7 @@ from typing import Optional, Tuple
 import torch
 import triton
 import triton.language as tl
+from fla.utils import is_tf32_supported
 
 
 @triton.heuristics({
@@ -79,8 +80,10 @@ def fwd_prepare_wy_repr_kernel_chunk64(
     BT: tl.constexpr,
     BC: tl.constexpr,
     USE_OFFSETS: tl.constexpr,
-    HEAD_FIRST: tl.constexpr
+    HEAD_FIRST: tl.constexpr,
+    ALLOW_TF32: tl.constexpr = is_tf32_supported,
 ):
+    ASM: tl.constexpr = "cvt.rna.tf32.f32 $0, $1;"
     i_t, i_bh = tl.program_id(0), tl.program_id(1)
     i_b, i_h = i_bh // H, i_bh % H
     if USE_OFFSETS:
@@ -127,7 +130,11 @@ def fwd_prepare_wy_repr_kernel_chunk64(
     # i.e., [A11, 0; A21, A22]^-1 = [A11^-1, 0; -A22^-1 A21 A11^-1, A22^-1]
     b_A += tl.arange(0, BC)[:, None] == tl.arange(0, BC)[None, :]
     b_A2 += tl.arange(0, BC)[:, None] == tl.arange(0, BC)[None, :]
-    b_A3 = tl.dot(tl.dot(b_A2, b_A3, allow_tf32=False), b_A, allow_tf32=False)
+    if ALLOW_TF32:
+        b_A2 = tl.inline_asm_elementwise(ASM, "=r, r", [b_A2], dtype=tl.float32, is_pure=True, pack=1)
+        b_A3 = tl.inline_asm_elementwise(ASM, "=r, r", [b_A3], dtype=tl.float32, is_pure=True, pack=1)
+        b_A = tl.inline_asm_elementwise(ASM, "=r, r", [b_A], dtype=tl.float32, is_pure=True, pack=1)
+    b_A3 = tl.dot(tl.dot(b_A2, b_A3, allow_tf32=ALLOW_TF32), b_A, allow_tf32=ALLOW_TF32)
     tl.debug_barrier()
     tl.store(p_A_inv1, b_A.to(p_A_inv1.dtype.element_ty), boundary_check=(0, 1))
     tl.store(p_A_inv2, b_A2.to(p_A_inv2.dtype.element_ty), boundary_check=(0, 1))
@@ -201,7 +208,7 @@ def fwd_wu_kernel(
             p_ag = tl.make_block_ptr(ag + (bos*H + i_h) * K, (T, K), (H*K, 1), (i_t * BT, i_k * BK), (BT, BK), (1, 0))
             p_w = tl.make_block_ptr(w + (bos*H + i_h) * K, (T, K), (H*K, 1), (i_t * BT, i_k * BK), (BT, BK), (1, 0))
         b_ag = tl.load(p_ag, boundary_check=(0, 1))
-        b_w = tl.dot(b_Aab_inv.to(b_ag.dtype), b_ag, allow_tf32=False)
+        b_w = tl.dot(b_Aab_inv.to(b_ag.dtype), b_ag)  # both bf16 or fp16
         tl.store(p_w, b_w.to(p_w.dtype.element_ty), boundary_check=(0, 1))
 
     for i_v in range(tl.cdiv(V, BV)):
@@ -212,7 +219,7 @@ def fwd_wu_kernel(
             p_v = tl.make_block_ptr(v + (bos*H + i_h) * V, (T, V), (H*V, 1), (i_t * BT, i_v * BV), (BT, BV), (1, 0))
             p_u = tl.make_block_ptr(u + (bos*H + i_h) * V, (T, V), (H*V, 1), (i_t * BT, i_v * BV), (BT, BV), (1, 0))
         b_v = tl.load(p_v, boundary_check=(0, 1))
-        b_u = tl.dot(b_Aak.to(b_v.dtype), b_v, allow_tf32=False)
+        b_u = tl.dot(b_Aak.to(b_v.dtype), b_v)  # both bf16 or fp16
         tl.store(p_u, b_u.to(p_u.dtype.element_ty), boundary_check=(0, 1))
 
 

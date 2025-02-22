@@ -56,7 +56,9 @@ def chunk_dplr_fwd(
         head_first=head_first
     )
 
-    w, u, A_ab_inv = fwd_prepare_wy_repr(
+    # A_ab, A_ak, gi, ge torch.float32
+    # A_qk, A_qb, qg, kg, ag, bg, dtype=q.dtype, eg: bf16
+    w, u, _ = fwd_prepare_wy_repr(
         ag=ag,
         A_ab=A_ab,
         A_ak=A_ak,
@@ -199,6 +201,8 @@ class ChunkDPLRDeltaRuleFunction(torch.autograd.Function):
         )
         u = None
         # ******* end of recomputation *******
+        # A_ab, A_ak, A_ab_inv, gi, ge torch.float32
+        # A_qk, A_qb, qg, kg, ag, bg, dtype=q.dtype, eg: bf16
 
         dv_new_intra, dA_qk, dA_qb = chunk_dplr_bwd_dAu(
             v=v,

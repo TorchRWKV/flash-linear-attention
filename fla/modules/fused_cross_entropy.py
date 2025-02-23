@@ -9,8 +9,7 @@ import torch.nn as nn
 import triton
 import triton.language as tl
 
-from fla.utils import contiguous
-from fla.utils import device_torch_lib
+from fla.utils import contiguous, set_torch_device
 
 # `all_gather_into_tensor` and `reduce_scatter_tensor` are new placeholders for
 # `_all_gather_base` and `_reduce_scatter_base`. They require the most recent
@@ -174,26 +173,26 @@ def fused_cross_entropy_forward(
     z_losses = torch.empty(*loss_shape, dtype=torch.float, device=logits.device)
     # Need this, otherwise Triton tries to launch from cuda:0 and we get
     # ValueError: Pointer argument (at 0) cannot be accessed from Triton (cpu tensor?)
-    with device_torch_lib.device(logits.device.index):
-        cross_entropy_fwd_kernel[(n_rows, n_splits)](
-            losses,  # data ptrs
-            lse,
-            z_losses,
-            logits,
-            target,
-            label_smoothing,
-            logit_scale,
-            lse_square_scale,
-            ignore_index,
-            total_classes,
-            class_start_idx,
-            n_cols,  # shapes
-            n_rows,
-            logits.stride(0),  # strides
-            BLOCK_SIZE=BLOCK_SIZE,  # constants
-            num_warps=num_warps,
-            SPLIT=split
-        )
+    set_torch_device(logits)
+    cross_entropy_fwd_kernel[(n_rows, n_splits)](
+        losses,  # data ptrs
+        lse,
+        z_losses,
+        logits,
+        target,
+        label_smoothing,
+        logit_scale,
+        lse_square_scale,
+        ignore_index,
+        total_classes,
+        class_start_idx,
+        n_cols,  # shapes
+        n_rows,
+        logits.stride(0),  # strides
+        BLOCK_SIZE=BLOCK_SIZE,  # constants
+        num_warps=num_warps,
+        SPLIT=split
+    )
 
     if split:
         # If there's no label_smoothing, if target are in the vocab of this partition, losses contains
@@ -279,26 +278,26 @@ class CrossEntropyLossFunction(torch.autograd.Function):
         def grid(META): return (n_rows, triton.cdiv(n_cols, META["BLOCK_SIZE"]))  # noqa
         # Need this, otherwise Triton tries to launch from cuda:0 and we get
         # ValueError: Pointer argument (at 0) cannot be accessed from Triton (cpu tensor?)
-        with device_torch_lib.device(logits.device.index):
-            cross_entropy_bwd_kernel[grid](
-                dlogits,  # data ptrs
-                grad_losses,
-                logits,
-                lse,
-                target,
-                ctx.label_smoothing,
-                ctx.logit_scale,
-                ctx.lse_square_scale,
-                ctx.ignore_index,
-                ctx.total_classes,
-                ctx.class_start_idx,
-                n_cols,  # shapes
-                logits.stride(0),  # strides
-                dlogits.stride(0),
-                grad_losses.stride(0),
-                BLOCK_SIZE=BLOCK_SIZE,  # constants
-                num_warps=num_warps,
-            )
+        set_torch_device(logits)
+        cross_entropy_bwd_kernel[grid](
+            dlogits,  # data ptrs
+            grad_losses,
+            logits,
+            lse,
+            target,
+            ctx.label_smoothing,
+            ctx.logit_scale,
+            ctx.lse_square_scale,
+            ctx.ignore_index,
+            ctx.total_classes,
+            ctx.class_start_idx,
+            n_cols,  # shapes
+            logits.stride(0),  # strides
+            dlogits.stride(0),
+            grad_losses.stride(0),
+            BLOCK_SIZE=BLOCK_SIZE,  # constants
+            num_warps=num_warps,
+        )
         return dlogits, None, None, None, None, None, None, None, None
 
 

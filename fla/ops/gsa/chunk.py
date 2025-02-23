@@ -12,7 +12,7 @@ from fla.ops.common.chunk_h import chunk_bwd_dh, chunk_fwd_h
 from fla.ops.gla.chunk import chunk_gla_bwd, chunk_gla_fwd
 from fla.ops.utils import chunk_local_cumsum, softmax_bwd, softmax_fwd
 from fla.ops.utils.exp import safe_exp
-from fla.utils import contiguous
+from fla.utils import contiguous, use_cuda_graph
 
 
 @triton.heuristics({
@@ -26,7 +26,8 @@ from fla.utils import contiguous
         for num_warps in [2, 4, 8]
         for num_stages in [2, 3, 4]
     ],
-    key=['BT']
+    key=['BT'],
+    use_cuda_graph=use_cuda_graph,
 )
 @triton.jit(do_not_specialize=['T'])
 def chunk_gsa_fwd_k_kernel_inter(
@@ -220,7 +221,8 @@ def chunk_gsa_fwd_k_kernel_intra(
         triton.Config({}, num_warps=num_warps)
         for num_warps in [2, 4, 8]
     ],
-    key=["BT"]
+    key=["BT"],
+    use_cuda_graph=use_cuda_graph,
 )
 @triton.jit(do_not_specialize=['T'])
 def chunk_gsa_bwd_k_kernel_dA(
@@ -338,7 +340,8 @@ def chunk_gsa_bwd_k_kernel_dA(
         for num_warps in [2, 4]
         for num_stages in [2, 3, 4]
     ],
-    key=['BT']
+    key=['BT'],
+    use_cuda_graph=use_cuda_graph,
 )
 @triton.jit(do_not_specialize=['T'])
 def chunk_gsa_bwd_k_kernel_dqkvg(

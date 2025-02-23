@@ -8,6 +8,7 @@ import triton
 import triton.language as tl
 
 from fla.ops.utils.exp import safe_exp
+from fla.utils import use_cuda_graph
 
 
 @triton.heuristics({
@@ -19,6 +20,7 @@ from fla.ops.utils.exp import safe_exp
         for num_warps in [2, 4, 8]
     ],
     key=['BK'],
+    use_cuda_graph=use_cuda_graph,
 )
 @triton.jit(do_not_specialize=['T'])
 def fwd_prepare_wy_repr_kernel_chunk32(
@@ -106,6 +108,7 @@ def fwd_prepare_wy_repr_kernel_chunk32(
         for num_warps in [2, 4, 8]
     ],
     key=['BK'],
+    use_cuda_graph=use_cuda_graph,
 )
 @triton.jit(do_not_specialize=['T'])
 def fwd_prepare_wy_repr_kernel_chunk64(
@@ -244,6 +247,7 @@ def fwd_prepare_wy_repr_kernel_chunk64(
         for num_warps in [2, 4, 8]
     ],
     key=['BT', 'BK', 'BV'],
+    use_cuda_graph=use_cuda_graph,
 )
 @triton.jit(do_not_specialize=['T'])
 def fwd_recompute_w_u_kernel(
@@ -428,6 +432,7 @@ def fwd_recompute_w_u(
         for num_warps in [1, 2, 4]
     ],
     key=['BT', 'BK', 'BV'],
+    use_cuda_graph=use_cuda_graph,
 )
 @triton.jit(do_not_specialize=['T'])
 def bwd_prepare_wy_repr_kernel(

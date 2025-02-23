@@ -5,7 +5,8 @@ from typing import Optional
 import torch
 import triton
 import triton.language as tl
-from fla.utils import device, check_pytorch_version, set_torch_device, contiguous
+from fla.utils import (device, check_pytorch_version, set_torch_device,
+                       contiguous, use_cuda_graph)
 import logging
 
 logger = logging.getLogger(__name__)
@@ -20,7 +21,8 @@ if not check_pytorch_version('2.4'):
         for block_size in [128, 256, 512, 1024, 2048, 4096, 8192]
         for num_warps in [1, 2, 4, 8, 16, 32]
     ],
-    key=['hidden_dim']
+    key=['hidden_dim'],
+    use_cuda_graph=use_cuda_graph,
 )
 @triton.jit
 def fused_addcmul_fwd_kernel(
@@ -80,7 +82,8 @@ def fused_addcmul_fwd_kernel(
         for block_size in [128, 256, 512, 1024, 2048, 4096, 8192]
         for num_warps in [1, 2, 4, 8, 16, 32]
     ],
-    key=['hidden_dim']
+    key=['hidden_dim'],
+    use_cuda_graph=use_cuda_graph,
 )
 @triton.jit
 def addcmul_bwd_kernel1(

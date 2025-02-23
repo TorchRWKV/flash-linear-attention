@@ -7,7 +7,7 @@ from typing import Optional, Tuple
 import torch
 import triton
 import triton.language as tl
-from fla.utils import device_capacity, is_intel_a770
+from fla.utils import device_capacity, is_intel_a770, use_cuda_graph
 
 triton_config = {'grf_mode': 'large'} if is_intel_a770 else {}
 
@@ -21,7 +21,8 @@ triton_config = {'grf_mode': 'large'} if is_intel_a770 else {}
         for num_warps in [2, 4, 8, 16, 32]
         for num_stages in [2, 3, 4]
     ],
-    key=['BT', 'BK', 'BV']
+    key=['BT', 'BK', 'BV'],
+    use_cuda_graph=use_cuda_graph,
 )
 @triton.jit(do_not_specialize=['T'])
 def bwd_prepare_wy_repr_kernel(

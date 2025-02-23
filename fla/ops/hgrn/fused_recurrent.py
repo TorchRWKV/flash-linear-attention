@@ -7,7 +7,7 @@ import torch
 import triton
 import triton.language as tl
 
-from fla.utils import contiguous
+from fla.utils import contiguous, use_cuda_graph
 
 
 @triton.heuristics({
@@ -21,7 +21,8 @@ from fla.utils import contiguous
         for BD in [32, 64, 128]
         for num_warps in [1, 2, 4, 8]
     ],
-    key=['D']
+    key=['D'],
+    use_cuda_graph=use_cuda_graph,
 )
 @triton.jit(do_not_specialize=['T'])
 def fused_recurrent_hgrn_fwd_kernel(
@@ -82,7 +83,8 @@ def fused_recurrent_hgrn_fwd_kernel(
         for BD in [32, 64, 128]
         for num_warps in [1, 2, 4, 8]
     ],
-    key=['D']
+    key=['D'],
+    use_cuda_graph=use_cuda_graph,
 )
 @triton.jit(do_not_specialize=['T'])
 def fused_recurrent_hgrn_bwd_kernel(

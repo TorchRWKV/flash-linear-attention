@@ -7,7 +7,7 @@ from typing import Optional, Tuple
 import torch
 import triton
 import triton.language as tl
-from fla.utils import is_triton_shared_mem_enough
+from fla.utils import is_triton_shared_mem_enough, use_cuda_graph
 
 
 @triton.heuristics({
@@ -21,7 +21,8 @@ from fla.utils import is_triton_shared_mem_enough
         for num_warps in [2, 4, 8, 16, 32]
         for num_stages in [2, 3, 4]
     ],
-    key=['BT', 'BK', 'BV']
+    key=['BT', 'BK', 'BV'],
+    use_cuda_graph=use_cuda_graph,
 )
 @triton.jit(do_not_specialize=['T'])
 def chunk_dplr_fwd_kernel_h(

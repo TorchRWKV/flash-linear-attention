@@ -1,8 +1,8 @@
 import triton
 import triton.language as tl
 import torch
-from fla.utils import autocast_custom_bwd, autocast_custom_fwd, contiguous
-from fla.utils import check_pytorch_version, set_torch_device
+from fla.utils import (autocast_custom_bwd, autocast_custom_fwd, contiguous,
+                       check_pytorch_version, set_torch_device, use_cuda_graph)
 import logging
 
 logger = logging.getLogger(__name__)
@@ -16,7 +16,8 @@ if not check_pytorch_version('2.4'):
         triton.Config({'BLOCK_SIZE': block_size})
         for block_size in [128, 256, 512, 1024, 2048, 4096, 8192]
     ],
-    key=['hidden_dim']
+    key=['hidden_dim'],
+    use_cuda_graph=use_cuda_graph,
 )
 @triton.jit
 def rwkv_seq_mix_kernel(
@@ -180,7 +181,8 @@ def relu_square_bwd_kernel(
         triton.Config({'BLOCK_SIZE': block_size})
         for block_size in [128, 256, 512, 1024, 2048, 4096, 8192]
     ],
-    key=['hidden_dim']
+    key=['hidden_dim'],
+    use_cuda_graph=use_cuda_graph,
 )
 @triton.jit
 def rwkv_mix_bwd_kenel(

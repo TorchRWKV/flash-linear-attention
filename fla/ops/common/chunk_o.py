@@ -8,6 +8,7 @@ import triton
 import triton.language as tl
 
 from fla.ops.utils.exp import safe_exp
+from fla.utils import use_cuda_graph
 
 
 @triton.heuristics({
@@ -23,6 +24,7 @@ from fla.ops.utils.exp import safe_exp
         for num_stages in [2, 3, 4]
     ],
     key=["BT", "USE_G"],
+    use_cuda_graph=use_cuda_graph,
 )
 @triton.jit(do_not_specialize=['T'])
 def chunk_fwd_kernel_o(
@@ -122,6 +124,7 @@ def chunk_fwd_kernel_o(
         for num_stages in [2, 3]
     ],
     key=["BT", "BK", "BV", "USE_G", "USE_DW"],
+    use_cuda_graph=use_cuda_graph,
 )
 @triton.jit(do_not_specialize=['T'])
 def chunk_bwd_kernel_dqkwg(
@@ -292,6 +295,7 @@ def chunk_bwd_kernel_dqkwg(
         for num_warps in [4, 8]
     ],
     key=['BT', 'BK', 'BV', 'USE_G'],
+    use_cuda_graph=use_cuda_graph,
 )
 @triton.jit(do_not_specialize=['T'])
 def chunk_bwd_kernel_dv(
@@ -382,6 +386,7 @@ def chunk_bwd_kernel_dv(
         for num_warps in [4]
     ],
     key=['BT', 'BK', 'BV', 'USE_G'],
+    use_cuda_graph=use_cuda_graph,
 )
 @triton.jit(do_not_specialize=['T'])
 def chunk_bwd_kernel_dv_local(

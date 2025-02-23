@@ -7,7 +7,7 @@ from typing import Optional
 import torch
 import triton
 import triton.language as tl
-from fla.utils import device_capacity
+from fla.utils import device_capacity, use_cuda_graph
 
 BK_LIST = [64, 128] if device_capacity else [16, 32]
 
@@ -24,6 +24,7 @@ BK_LIST = [64, 128] if device_capacity else [16, 32]
         for num_stages in [2, 3, 4]
     ],
     key=['BT'],
+    use_cuda_graph=use_cuda_graph,
 )
 @triton.jit(do_not_specialize=['T'])
 def chunk_dplr_fwd_kernel_o(

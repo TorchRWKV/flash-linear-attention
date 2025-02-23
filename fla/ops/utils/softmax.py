@@ -6,6 +6,7 @@ from typing import Optional
 import torch
 import triton
 import triton.language as tl
+from fla.utils import use_cuda_graph
 
 
 @triton.autotune(
@@ -17,7 +18,8 @@ import triton.language as tl
         triton.Config({}, num_warps=16),
         triton.Config({}, num_warps=32)
     ],
-    key=['D']
+    key=['D'],
+    use_cuda_graph=use_cuda_graph,
 )
 @triton.jit
 def softmax_fwd_kernel(
@@ -47,7 +49,8 @@ def softmax_fwd_kernel(
         triton.Config({}, num_warps=16),
         triton.Config({}, num_warps=32)
     ],
-    key=['D']
+    key=['D'],
+    use_cuda_graph=use_cuda_graph,
 )
 @triton.jit
 def softmax_bwd_kernel(

@@ -5,7 +5,8 @@ import torch
 import triton
 import triton.language as tl
 
-from fla.utils import autocast_custom_bwd, autocast_custom_fwd, contiguous
+from fla.utils import (autocast_custom_bwd, autocast_custom_fwd,
+                       contiguous, use_cuda_graph)
 
 
 @triton.autotune(
@@ -15,6 +16,7 @@ from fla.utils import autocast_custom_bwd, autocast_custom_fwd, contiguous
         triton.Config({}, num_warps=4)
     ],
     key=['BT', 'BK'],
+    use_cuda_graph=use_cuda_graph,
 )
 @triton.jit(do_not_specialize=['T'])
 def fused_chunk_ttt_linear_fwd_kernel(

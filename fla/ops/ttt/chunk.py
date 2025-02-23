@@ -11,7 +11,8 @@ import triton.language as tl
 from fla.modules.layernorm import group_norm
 from fla.ops.common.utils import prepare_chunk_indices, prepare_chunk_offsets
 from fla.utils import (autocast_custom_bwd, autocast_custom_fwd,
-                       contiguous, is_triton_shared_mem_enough)
+                       contiguous, is_triton_shared_mem_enough,
+                       use_cuda_graph)
 
 
 @triton.heuristics({
@@ -25,6 +26,7 @@ from fla.utils import (autocast_custom_bwd, autocast_custom_fwd,
         for num_warps in [1, 2, 4, 8]
     ],
     key=['BT', 'BK', 'BV', 'STORE_ALL'],
+    use_cuda_graph=use_cuda_graph,
 )
 @triton.jit(do_not_specialize=['T'])
 def chunk_ttt_linear_fwd_kernel_h(
@@ -152,6 +154,7 @@ def chunk_ttt_linear_fwd_kernel_h(
         for num_stages in [2, 3]
     ],
     key=['BT'],
+    use_cuda_graph=use_cuda_graph,
 )
 @triton.jit(do_not_specialize=['T'])
 def chunk_ttt_linear_fwd_kernel_o(
@@ -236,6 +239,7 @@ def chunk_ttt_linear_fwd_kernel_o(
         for num_warps in [4]
     ],
     key=['BT', 'BK', 'BV'],
+    use_cuda_graph=use_cuda_graph,
 )
 @triton.jit(do_not_specialize=['T'])
 def chunk_ttt_linear_bwd_kernel_dv_local(
@@ -308,6 +312,7 @@ def chunk_ttt_linear_bwd_kernel_dv_local(
         for num_warps in [2, 4, 8, 16]
     ],
     key=['BT', 'BK', 'BV'],
+    use_cuda_graph=use_cuda_graph,
 )
 @triton.jit(do_not_specialize=['T'])
 def chunk_ttt_linear_bwd_kernel_norm(
@@ -465,6 +470,7 @@ def chunk_ttt_linear_bwd_kernel_norm(
         for num_stages in [2, 3]
     ],
     key=['BT', 'BK', 'BV'],
+    use_cuda_graph=use_cuda_graph,
 )
 @triton.jit(do_not_specialize=['T'])
 def chunk_bwd_kernel_dqke(

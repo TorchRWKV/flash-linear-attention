@@ -10,7 +10,8 @@ import triton.language as tl
 from fla.ops.utils import chunk_global_cumsum, chunk_local_cumsum
 from fla.ops.utils.exp import safe_exp
 from fla.utils import (autocast_custom_bwd, autocast_custom_fwd,
-                       contiguous, is_triton_shared_mem_enough)
+                       contiguous, is_triton_shared_mem_enough,
+                       use_cuda_graph)
 
 
 @triton.heuristics({
@@ -24,6 +25,7 @@ from fla.utils import (autocast_custom_bwd, autocast_custom_fwd,
         triton.Config({}, num_warps=1),
     ],
     key=["BT", "BS", "BK", "BV", "USE_G"],
+    use_cuda_graph=use_cuda_graph,
 )
 @triton.jit
 def parallel_simple_gla_fwd_kernel(
@@ -359,6 +361,7 @@ def parallel_simple_gla_bwd_kernel_dkv(
         triton.Config({}, num_warps=4),
     ],
     key=['BT', 'BS', 'BK', 'BV', 'USE_G'],
+    use_cuda_graph=use_cuda_graph,
 )
 @triton.jit(do_not_specialize=['T'])
 def parallel_simple_gla_bwd_kernel(

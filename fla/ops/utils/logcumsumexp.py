@@ -3,6 +3,7 @@
 
 import triton
 import triton.language as tl
+from fla.utils import use_cuda_graph
 
 
 @triton.autotune(
@@ -11,7 +12,8 @@ import triton.language as tl
         for BT in [16, 32, 64]
         for num_warps in [2, 4, 8]
     ],
-    key=['S']
+    key=['S'],
+    use_cuda_graph=use_cuda_graph,
 )
 @triton.jit(do_not_specialize=['T'])
 def logcumsumexp_fwd_kernel(

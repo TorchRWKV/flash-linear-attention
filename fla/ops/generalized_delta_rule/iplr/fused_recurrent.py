@@ -7,7 +7,7 @@ import torch
 import triton
 import triton.language as tl
 
-from fla.utils import contiguous
+from fla.utils import contiguous, use_cuda_graph
 
 
 @triton.heuristics({
@@ -23,6 +23,7 @@ from fla.utils import contiguous
         for num_stages in [2, 3, 4]
     ],
     key=["BK"],
+    use_cuda_graph=use_cuda_graph,
 )
 @triton.jit
 def fused_recurrent_fwd_kernel(
@@ -124,6 +125,7 @@ def fused_recurrent_fwd_kernel(
         for num_stages in [2, 3]
     ],
     key=["BK", "BV"],
+    use_cuda_graph=use_cuda_graph,
 )
 @triton.jit
 def fused_recurrent_bwd_kernel(

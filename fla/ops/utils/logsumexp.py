@@ -6,6 +6,7 @@ from typing import Optional
 import torch
 import triton
 import triton.language as tl
+from fla.utils import use_cuda_graph
 
 
 @triton.heuristics({
@@ -16,7 +17,8 @@ import triton.language as tl
         triton.Config({}, num_warps=num_warps)
         for num_warps in [1, 2, 4, 8, 16, 32]
     ],
-    key=['D']
+    key=['D'],
+    use_cuda_graph=use_cuda_graph,
 )
 @triton.jit
 def logsumexp_fwd_kernel(

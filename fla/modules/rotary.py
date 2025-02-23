@@ -11,7 +11,7 @@ import triton
 import triton.language as tl
 from einops import rearrange, repeat
 
-from fla.utils import contiguous
+from fla.utils import contiguous, use_cuda_graph
 from fla.utils import set_torch_device
 
 
@@ -39,6 +39,7 @@ def rotary_embedding_ref(x, cos, sin, interleaved=False):
         for num_warps in [2, 4, 8, 16]
     ],
     key=['B', 'T', 'H', 'INTERLEAVED'],
+    use_cuda_graph=use_cuda_graph,
 )
 @triton.jit
 def rotary_embedding_kernel(

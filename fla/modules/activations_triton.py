@@ -4,7 +4,7 @@
 import torch
 import triton
 import triton.language as tl
-from fla.utils import contiguous
+from fla.utils import contiguous, use_cuda_graph
 
 
 @triton.autotune(
@@ -12,7 +12,8 @@ from fla.utils import contiguous
         triton.Config({}, num_warps=num_warps)
         for num_warps in [1, 2, 4, 8, 16, 32]
     ],
-    key=['D']
+    key=['D'],
+    use_cuda_graph=use_cuda_graph,
 )
 @triton.jit
 def swiglu_fwd_kernel(
@@ -39,7 +40,8 @@ def swiglu_fwd_kernel(
         triton.Config({}, num_warps=num_warps)
         for num_warps in [1, 2, 4, 8, 16, 32]
     ],
-    key=['D']
+    key=['D'],
+    use_cuda_graph=use_cuda_graph,
 )
 @triton.jit
 def swiglu_bwd_kernel(
@@ -74,7 +76,8 @@ def swiglu_bwd_kernel(
         triton.Config({}, num_warps=num_warps)
         for num_warps in [1, 2, 4, 8, 16, 32]
     ],
-    key=['D']
+    key=['D'],
+    use_cuda_graph=use_cuda_graph,
 )
 @triton.jit
 def swiglu_fwdbwd_kernel(
@@ -115,7 +118,8 @@ def swiglu_fwdbwd_kernel(
         triton.Config({}, num_warps=num_warps)
         for num_warps in [1, 2, 4, 8, 16, 32]
     ],
-    key=['D']
+    key=['D'],
+    use_cuda_graph=use_cuda_graph,
 )
 @triton.jit
 def logsigmoid_fwd_kernel(
@@ -142,7 +146,8 @@ def logsigmoid_fwd_kernel(
         triton.Config({}, num_warps=num_warps)
         for num_warps in [1, 2, 4, 8, 16, 32]
     ],
-    key=['D']
+    key=['D'],
+    use_cuda_graph=use_cuda_graph,
 )
 @triton.jit
 def logsigmoid_bwd_kernel(

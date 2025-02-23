@@ -8,7 +8,7 @@ import triton
 import triton.language as tl
 
 from fla.ops.common.utils import prepare_chunk_offsets
-from fla.utils import is_triton_shared_mem_enough
+from fla.utils import is_triton_shared_mem_enough, use_cuda_graph
 
 
 @triton.heuristics({
@@ -23,6 +23,7 @@ from fla.utils import is_triton_shared_mem_enough
         for num_stages in [2, 3, 4]
     ],
     key=['BT', 'BK', 'BV', "V"],
+    use_cuda_graph=use_cuda_graph,
 )
 @triton.jit(do_not_specialize=['T'])
 def chunk_dplr_bwd_kernel_dhu(

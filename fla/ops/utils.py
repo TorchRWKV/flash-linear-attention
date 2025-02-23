@@ -7,7 +7,7 @@ import torch
 import triton
 import triton.language as tl
 
-from fla.utils import contiguous
+from fla.utils import contiguous, use_cuda_graph
 
 
 @triton.autotune(
@@ -22,7 +22,8 @@ from fla.utils import contiguous
         triton.Config({'BT': 64}, num_warps=4),
         triton.Config({'BT': 64}, num_warps=8),
     ],
-    key=['S']
+    key=['S'],
+    use_cuda_graph=use_cuda_graph,
 )
 @triton.jit
 def logcumsumexp_fwd_kernel(
@@ -72,7 +73,8 @@ def logcumsumexp_fwd_kernel(
         triton.Config({}, num_warps=4),
         triton.Config({}, num_warps=8),
     ],
-    key=['S']
+    key=['S'],
+    use_cuda_graph=use_cuda_graph,
 )
 @triton.jit
 def softmax_fwd_kernel(
@@ -108,7 +110,8 @@ def softmax_fwd_kernel(
         triton.Config({}, num_warps=4),
         triton.Config({}, num_warps=8),
     ],
-    key=['S']
+    key=['S'],
+    use_cuda_graph=use_cuda_graph,
 )
 @triton.jit
 def softmax_bwd_kernel(
@@ -149,7 +152,8 @@ def softmax_bwd_kernel(
         triton.Config({'BT': 64}, num_warps=4),
         triton.Config({'BT': 64}, num_warps=8),
     ],
-    key=['S']
+    key=['S'],
+    use_cuda_graph=use_cuda_graph,
 )
 @triton.jit
 def chunk_global_reversed_cumsum_vector_kernel(
@@ -192,7 +196,8 @@ def chunk_global_reversed_cumsum_vector_kernel(
         triton.Config({'BT': 64}, num_warps=4),
         triton.Config({'BT': 64}, num_warps=8),
     ],
-    key=['S']
+    key=['S'],
+    use_cuda_graph=use_cuda_graph,
 )
 @triton.jit
 def chunk_global_cumsum_vector_kernel(
@@ -229,7 +234,8 @@ def chunk_global_cumsum_vector_kernel(
         triton.Config({'BT': 64}, num_warps=8),
         triton.Config({'BT': 64}, num_warps=4),
     ],
-    key=[]
+    key=[],
+    use_cuda_graph=use_cuda_graph,
 )
 @triton.jit
 def chunk_global_reversed_cumsum_scalar_kernel(
@@ -258,7 +264,8 @@ def chunk_global_reversed_cumsum_scalar_kernel(
         triton.Config({'BT': 64}, num_warps=8),
         triton.Config({'BT': 64}, num_warps=4),
     ],
-    key=[]
+    key=[],
+    use_cuda_graph=use_cuda_graph,
 )
 @triton.jit
 def chunk_global_cumsum_scalar_kernel(
@@ -291,7 +298,8 @@ def chunk_global_cumsum_scalar_kernel(
         triton.Config({'BS': 64}, num_warps=4),
         triton.Config({'BS': 64}, num_warps=8),
     ],
-    key=['S', 'BT']
+    key=['S', 'BT'],
+    use_cuda_graph=use_cuda_graph,
 )
 @triton.jit
 def chunk_local_cumsum_vector_kernel(
@@ -323,7 +331,8 @@ def chunk_local_cumsum_vector_kernel(
         triton.Config({}, num_warps=4),
         triton.Config({}, num_warps=8)
     ],
-    key=['BT']
+    key=['BT'],
+    use_cuda_graph=use_cuda_graph,
 )
 @triton.jit
 def chunk_local_cumsum_scalar_kernel(

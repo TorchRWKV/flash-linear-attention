@@ -3,6 +3,7 @@
 import functools
 from typing import Any, Callable, Dict, Optional, Tuple
 
+import os
 import torch
 import triton
 from packaging import version
@@ -109,7 +110,9 @@ device = "cuda" if get_available_device() == "cpu" else get_available_device()
 device_capacity = is_triton_shared_mem_enough()
 device_torch_lib = getattr(torch, device)
 is_intel_a770 = (device == "xpu" and 'Intel(R) Arc(TM) A' in torch.xpu.get_device_name(0))
-is_tf32_supported = (device == "cuda" and torch.cuda.get_device_capability(0)[0] >= 8)  # Nvidia Ampere or newer
+is_nvidia = (device == "cuda" and 'NVIDIA' in torch.cuda.get_device_name(0))
+use_cuda_graph = (is_nvidia and os.environ.get('FLA_USE_CUDA_GRAPH', '0') == '1')
+is_tf32_supported = (is_nvidia and torch.cuda.get_device_capability(0)[0] >= 8)  # Nvidia Ampere or newer
 
 
 def set_torch_device(x: torch.Tensor):

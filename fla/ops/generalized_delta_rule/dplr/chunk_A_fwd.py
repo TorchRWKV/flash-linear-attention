@@ -7,6 +7,7 @@ from typing import Optional
 import torch
 import triton
 import triton.language as tl
+from fla.utils import use_cuda_graph
 
 
 @triton.heuristics({
@@ -19,7 +20,8 @@ import triton.language as tl
         for num_warps in [1, 2, 4, 8]
         for num_stages in [2, 3, 4]
     ],
-    key=['BC', 'K']
+    key=['BC', 'K'],
+    use_cuda_graph=use_cuda_graph,
 )
 @triton.jit(do_not_specialize=['T'])
 def chunk_dplr_fwd_A_kernel_intra_sub_inter(
@@ -133,7 +135,8 @@ def chunk_dplr_fwd_A_kernel_intra_sub_inter(
         triton.Config({}, num_warps=num_warps)
         for num_warps in [2, 4, 8, 16, 32]
     ],
-    key=['BK', 'BT']
+    key=['BK', 'BT'],
+    use_cuda_graph=use_cuda_graph,
 )
 @triton.jit(do_not_specialize=['T'])
 def chunk_dplr_fwd_A_kernel_intra_sub_intra(

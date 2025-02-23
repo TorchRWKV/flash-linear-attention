@@ -8,7 +8,8 @@ import triton
 import triton.language as tl
 
 from fla.ops.utils import chunk_global_cumsum
-from fla.utils import autocast_custom_bwd, autocast_custom_fwd, contiguous
+from fla.utils import (autocast_custom_bwd, autocast_custom_fwd,
+                       contiguous, use_cuda_graph)
 
 
 @triton.heuristics({
@@ -22,6 +23,7 @@ from fla.utils import autocast_custom_bwd, autocast_custom_fwd, contiguous
         for num_warps in [1, 2, 4]
     ],
     key=["BK", "BV", "USE_GK", "USE_GV", "USE_G"],
+    use_cuda_graph=use_cuda_graph,
 )
 @triton.jit(do_not_specialize=['T'])
 def fused_recurrent_fwd_kernel(
@@ -140,6 +142,7 @@ def fused_recurrent_fwd_kernel(
         for num_warps in [1, 2, 4]
     ],
     key=['BK', 'BV', 'USE_GK', 'USE_GV', 'USE_G'],
+    use_cuda_graph=use_cuda_graph,
 )
 @triton.jit(do_not_specialize=['T'])
 def fused_recurrent_bwd_kernel(

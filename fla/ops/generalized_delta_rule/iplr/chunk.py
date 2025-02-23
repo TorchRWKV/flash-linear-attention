@@ -9,7 +9,8 @@ import triton.language as tl
 
 from fla.ops.generalized_delta_rule.iplr.wy_fast import fwd_prepare_wy_repr
 from fla.utils import (autocast_custom_bwd, autocast_custom_fwd,
-                       contiguous, is_triton_shared_mem_enough)
+                       contiguous, is_triton_shared_mem_enough,
+                       use_cuda_graph)
 
 
 @triton.heuristics({
@@ -23,6 +24,7 @@ from fla.utils import (autocast_custom_bwd, autocast_custom_fwd,
         for num_warps in [2, 4, 8, 16]
     ],
     key=['BT', 'BK', 'BV'],
+    use_cuda_graph=use_cuda_graph,
 )
 @triton.jit(do_not_specialize=['T'])
 def chunk_generalized_iplr_delta_rule_fwd_kernel_h(
@@ -120,6 +122,7 @@ def chunk_generalized_iplr_delta_rule_fwd_kernel_h(
         for num_stages in [2, 3]
     ],
     key=['BT'],
+    use_cuda_graph=use_cuda_graph,
 )
 @triton.jit(do_not_specialize=['T'])
 def chunk_generalized_iplr_delta_rule_fwd_kernel_o(

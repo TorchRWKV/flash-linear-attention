@@ -19,7 +19,7 @@ import triton.language as tl
 
 from fla.modules.layernorm import RMSNorm
 from fla.utils import contiguous, require_version
-from fla.utils import get_multiprocessor_count, set_torch_device
+from fla.utils import get_multiprocessor_count, set_torch_device, use_cuda_graph
 
 
 def activation_quant(x):
@@ -66,6 +66,7 @@ def weight_quant(w):
         triton.Config({}, num_warps=32),
     ],
     key=["N", "HAS_RESIDUAL", "STORE_RESIDUAL_OUT", "IS_RMS_NORM", "HAS_BIAS"],
+    use_cuda_graph=use_cuda_graph,
 )
 @triton.jit
 def layer_norm_fwd_kernel_quant(
@@ -205,6 +206,7 @@ def layer_norm_fwd_quant(
         triton.Config({}, num_warps=32),
     ],
     key=["N", "HAS_DRESIDUAL", "STORE_DRESIDUAL", "IS_RMS_NORM", "HAS_BIAS"],
+    use_cuda_graph=use_cuda_graph,
 )
 @triton.jit
 def layer_norm_bwd_kernel(

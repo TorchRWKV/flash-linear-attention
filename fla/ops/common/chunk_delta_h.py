@@ -8,7 +8,7 @@ import triton
 import triton.language as tl
 
 from fla.ops.common.utils import prepare_chunk_offsets
-from fla.utils import is_triton_shared_mem_enough
+from fla.utils import is_triton_shared_mem_enough, use_cuda_graph
 
 
 @triton.heuristics({
@@ -23,6 +23,7 @@ from fla.utils import is_triton_shared_mem_enough
         for num_warps in [2, 4, 8, 16]
     ],
     key=['BT', 'BK', 'BV', 'USE_G'],
+    use_cuda_graph=use_cuda_graph,
 )
 @triton.jit(do_not_specialize=['T'])
 def chunk_gated_delta_rule_fwd_kernel_h(
@@ -132,6 +133,7 @@ def chunk_gated_delta_rule_fwd_kernel_h(
         for num_warps in [2, 4, 8, 16]
     ],
     key=['BT', 'BK', 'BV', 'USE_G'],
+    use_cuda_graph=use_cuda_graph,
 )
 @triton.jit(do_not_specialize=['T'])
 def chunk_gated_delta_rule_bwd_kernel_dhu(

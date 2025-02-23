@@ -51,15 +51,18 @@
 import torch
 import triton
 import triton.language as tl
-from fla.utils import contiguous
+from fla.utils import contiguous, use_cuda_graph
 
 
 @triton.autotune(
-    [triton.Config({'BLOCK_SIZE': BLOCK_SIZE},  num_warps=NUM_WARPS, num_stages=NUM_STAGES)
-     for BLOCK_SIZE in [1024, 2048, 4096, 8192]
-     for NUM_WARPS in [8, 16, 32]
-     for NUM_STAGES in [1, 2, 4]
-     ], key=['B', 'N']
+    configs=[
+        triton.Config({'BLOCK_SIZE': BLOCK_SIZE},  num_warps=NUM_WARPS, num_stages=NUM_STAGES)
+        for BLOCK_SIZE in [1024, 2048, 4096, 8192]
+        for NUM_WARPS in [8, 16, 32]
+        for NUM_STAGES in [1, 2, 4]
+    ],
+    key=['B', 'N'],
+    use_cuda_graph=use_cuda_graph,
 )
 @triton.jit
 def grpo_fwd_kernel(
@@ -129,11 +132,14 @@ def grpo_fwd_kernel(
 
 
 @triton.autotune(
-    [triton.Config({'BLOCK_SIZE': BLOCK_SIZE},  num_warps=NUM_WARPS, num_stages=NUM_STAGES)
-     for BLOCK_SIZE in [1024, 2048, 4096, 8192]
-     for NUM_WARPS in [8, 16, 32]
-     for NUM_STAGES in [1, 2, 4]
-     ], key=['B', 'N']
+    configs=[
+        triton.Config({'BLOCK_SIZE': BLOCK_SIZE},  num_warps=NUM_WARPS, num_stages=NUM_STAGES)
+        for BLOCK_SIZE in [1024, 2048, 4096, 8192]
+        for NUM_WARPS in [8, 16, 32]
+        for NUM_STAGES in [1, 2, 4]
+    ],
+    key=['B', 'N'],
+    use_cuda_graph=use_cuda_graph,
 )
 @triton.jit
 def grpo_bwd_kernel(

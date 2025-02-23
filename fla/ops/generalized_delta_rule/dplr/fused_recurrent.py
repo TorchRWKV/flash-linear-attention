@@ -7,7 +7,8 @@ import torch
 import triton
 import triton.language as tl
 
-from fla.utils import autocast_custom_bwd, autocast_custom_fwd, contiguous
+from fla.utils import (autocast_custom_bwd, autocast_custom_fwd,
+                       contiguous, use_cuda_graph)
 
 
 @triton.heuristics({
@@ -23,6 +24,7 @@ from fla.utils import autocast_custom_bwd, autocast_custom_fwd, contiguous
         for num_stages in [2, 3, 4]
     ],
     key=['BK'],
+    use_cuda_graph=use_cuda_graph,
 )
 @triton.jit(do_not_specialize=['T'])
 def fused_recurrent_dplr_delta_rule_fwd_kernel(

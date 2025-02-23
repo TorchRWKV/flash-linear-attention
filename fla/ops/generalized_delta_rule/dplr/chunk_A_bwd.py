@@ -8,7 +8,7 @@ import torch
 import triton
 import triton.language as tl
 
-from fla.utils import device_capacity
+from fla.utils import device_capacity, use_cuda_graph
 
 
 @triton.heuristics({
@@ -21,6 +21,7 @@ from fla.utils import device_capacity
         for num_stages in [2, 3, 4]
     ],
     key=['BK', 'NC', 'BT', 'K'],
+    use_cuda_graph=use_cuda_graph,
 )
 @triton.jit(do_not_specialize=['T'])
 def chunk_dplr_bwd_kernel_intra(
@@ -271,6 +272,7 @@ def chunk_dplr_bwd_kernel_intra(
         for BK in [32, 64]
     ],
     key=['BK', 'BT', 'K'],
+    use_cuda_graph=use_cuda_graph,
 )
 @triton.jit(do_not_specialize=['T'])
 def chunk_dplr_bwd_dgk_kernel(

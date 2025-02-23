@@ -9,7 +9,7 @@ import triton.language as tl
 
 from fla.utils import (autocast_custom_bwd, autocast_custom_fwd,
                        contiguous, set_torch_device,
-                       device_capacity)
+                       device_capacity, use_cuda_graph)
 
 
 @triton.heuristics({
@@ -22,7 +22,8 @@ from fla.utils import (autocast_custom_bwd, autocast_custom_fwd,
         triton.Config({}, num_warps=num_warps)
         for num_warps in [1, 2, 4, 8, 16]
     ],
-    key=['BK', 'BV']
+    key=['BK', 'BV'],
+    use_cuda_graph=use_cuda_graph,
 )
 @triton.jit(do_not_specialize=['T'])
 def fused_recurrent_rwkv6_fwd_kernel(
@@ -116,7 +117,8 @@ def fused_recurrent_rwkv6_fwd_kernel(
         triton.Config({}, num_warps=2),
         triton.Config({}, num_warps=4),
     ],
-    key=['BK', 'BV']
+    key=['BK', 'BV'],
+    use_cuda_graph=use_cuda_graph,
 )
 @triton.jit(do_not_specialize=['T'])
 def fused_recurrent_rwkv6_bwd_kernel_dq(
@@ -214,7 +216,8 @@ def fused_recurrent_rwkv6_bwd_kernel_dq(
         triton.Config({}, num_warps=2),
         triton.Config({}, num_warps=4),
     ],
-    key=['BK', 'BV']
+    key=['BK', 'BV'],
+    use_cuda_graph=use_cuda_graph,
 )
 @triton.jit(do_not_specialize=['T'])
 def fused_recurrent_rwkv6_bwd_kernel_dkv(
@@ -326,7 +329,8 @@ BK_LIST = [16, 32, 64] if device_capacity else [16, 32]
         for BK in BK_LIST
         for num_warps in [1, 2, 4, 8]
     ],
-    key=['K']
+    key=['K'],
+    use_cuda_graph=use_cuda_graph,
 )
 @triton.jit(do_not_specialize=['T'])
 def fused_recurrent_rwkv6_bwd_kernel_dw(

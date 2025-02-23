@@ -19,7 +19,7 @@ import torch.nn.functional as F
 import triton
 import triton.language as tl
 
-from fla.utils import contiguous, set_torch_device
+from fla.utils import contiguous, set_torch_device, use_cuda_graph
 
 
 @triton.autotune(
@@ -29,6 +29,7 @@ from fla.utils import contiguous, set_torch_device
         for num_stages in [2, 3, 4]
     ],
     key=["N", "HAS_RESIDUAL", "STORE_RESIDUAL_OUT", "IS_RMS_NORM", "HAS_BIAS"],
+    use_cuda_graph=use_cuda_graph,
 )
 @triton.jit
 def layer_norm_fwd_kernel(
@@ -164,6 +165,7 @@ def layer_norm_fwd(
         for num_stages in [2, 3, 4]
     ],
     key=["N", "HAS_DRESIDUAL", "STORE_DRESIDUAL", "IS_RMS_NORM", "HAS_BIAS"],
+    use_cuda_graph=use_cuda_graph,
 )
 @triton.jit
 def layer_norm_bwd_kernel(

@@ -7,7 +7,7 @@ import torch
 import triton
 import triton.language as tl
 
-from fla.utils import contiguous
+from fla.utils import contiguous, use_cuda_graph
 
 
 @triton.heuristics({
@@ -18,7 +18,8 @@ from fla.utils import contiguous
         triton.Config({}, num_warps=num_warps)
         for num_warps in [1, 2, 4, 8]
     ],
-    key=['BT']
+    key=['BT'],
+    use_cuda_graph=use_cuda_graph,
 )
 @triton.jit(do_not_specialize=['T'])
 def chunk_local_cumsum_scalar_kernel(
@@ -66,7 +67,8 @@ def chunk_local_cumsum_scalar_kernel(
         for BS in [16, 32, 64]
         for num_warps in [2, 4, 8]
     ],
-    key=['S', 'BT']
+    key=['S', 'BT'],
+    use_cuda_graph=use_cuda_graph,
 )
 @triton.jit(do_not_specialize=['T'])
 def chunk_local_cumsum_vector_kernel(
@@ -121,7 +123,8 @@ def chunk_local_cumsum_vector_kernel(
         triton.Config({'BT': 64}, num_warps=8),
         triton.Config({'BT': 64}, num_warps=4),
     ],
-    key=[]
+    key=[],
+    use_cuda_graph=use_cuda_graph,
 )
 @triton.jit(do_not_specialize=['T'])
 def chunk_global_cumsum_scalar_kernel(
@@ -173,7 +176,8 @@ def chunk_global_cumsum_scalar_kernel(
         for BT in [16, 32, 64]
         for num_warps in [2, 4, 8]
     ],
-    key=['S']
+    key=['S'],
+    use_cuda_graph=use_cuda_graph,
 )
 @triton.jit(do_not_specialize=['T'])
 def chunk_global_cumsum_vector_kernel(

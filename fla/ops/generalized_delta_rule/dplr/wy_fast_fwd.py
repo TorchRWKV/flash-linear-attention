@@ -7,7 +7,7 @@ from typing import Optional, Tuple
 import torch
 import triton
 import triton.language as tl
-from fla.utils import is_tf32_supported
+from fla.utils import is_tf32_supported, use_cuda_graph
 
 
 @triton.heuristics({
@@ -18,7 +18,8 @@ from fla.utils import is_tf32_supported
         triton.Config({}, num_warps=num_warps)
         for num_warps in [1, 2, 4, 8, 16]
     ],
-    key=['BT']
+    key=['BT'],
+    use_cuda_graph=use_cuda_graph,
 )
 @triton.jit(do_not_specialize=['T'])
 def fwd_prepare_wy_repr_kernel_chunk32(
@@ -67,7 +68,8 @@ def fwd_prepare_wy_repr_kernel_chunk32(
         for num_warps in [2, 4, 8]
         for num_stages in [2, 3, 4]
     ],
-    key=['BC']
+    key=['BC'],
+    use_cuda_graph=use_cuda_graph,
 )
 @triton.jit(do_not_specialize=['T'])
 def fwd_prepare_wy_repr_kernel_chunk64(
@@ -152,7 +154,8 @@ def fwd_prepare_wy_repr_kernel_chunk64(
         for num_warps in [2, 4, 8, 16, 32]
         for num_stages in [2, 3, 4]
     ],
-    key=['BT', 'BK', 'BV']
+    key=['BT', 'BK', 'BV'],
+    use_cuda_graph=use_cuda_graph,
 )
 @triton.jit(do_not_specialize=['T'])
 def fwd_wu_kernel(

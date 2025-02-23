@@ -24,7 +24,7 @@ import torch
 import triton
 import triton.language as tl
 
-from fla.utils import contiguous
+from fla.utils import contiguous, use_cuda_graph
 
 
 @triton.autotune(
@@ -42,7 +42,8 @@ from fla.utils import contiguous
         triton.Config({'BD': 128}, num_warps=4),
         triton.Config({'BD': 128}, num_warps=8),
     ],
-    key=['D']
+    key=['D'],
+    use_cuda_graph=use_cuda_graph,
 )
 @triton.jit(do_not_specialize=['T'])
 def chunk_hgrn_fwd_kernel_h(
@@ -121,7 +122,8 @@ def chunk_hgrn_fwd_kernel_o(
         for BD in [32, 64, 128]
         for num_warps in [1, 2, 4, 8]
     ],
-    key=['D']
+    key=['D'],
+    use_cuda_graph=use_cuda_graph,
 )
 @triton.jit(do_not_specialize=['T'])
 def chunk_hgrn_bwd_kernel_h(

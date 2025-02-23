@@ -10,7 +10,8 @@ from einops import rearrange
 
 from fla.ops.common.utils import (prepare_chunk_indices, prepare_lens,
                                   prepare_token_indices)
-from fla.utils import autocast_custom_bwd, autocast_custom_fwd, contiguous
+from fla.utils import (autocast_custom_bwd, autocast_custom_fwd,
+                       contiguous, use_cuda_graph)
 
 
 @triton.heuristics({
@@ -22,6 +23,7 @@ from fla.utils import autocast_custom_bwd, autocast_custom_fwd, contiguous
         for num_warps in [1, 2, 4, 8, 16]
     ],
     key=['BS', 'BK', 'BV'],
+    use_cuda_graph=use_cuda_graph,
 )
 @triton.jit
 def parallel_nsa_fwd_kernel(
@@ -151,6 +153,7 @@ def parallel_nsa_bwd_kernel_preprocess(
         for num_warps in [1, 2, 4, 8, 16]
     ],
     key=['BS', 'BK', 'BV'],
+    use_cuda_graph=use_cuda_graph,
 )
 @triton.jit(do_not_specialize=['T'])
 def parallel_nsa_bwd_kernel_dq(
@@ -249,6 +252,7 @@ def parallel_nsa_bwd_kernel_dq(
         for num_warps in [1, 2, 4, 8, 16]
     ],
     key=['BS', 'BK', 'BV'],
+    use_cuda_graph=use_cuda_graph,
 )
 @triton.jit(do_not_specialize=['T'])
 def parallel_nsa_bwd_kernel_dkv(

@@ -81,7 +81,7 @@ def rwkv_channel_mixing_pow_and_relu(
 
 
 def rwkv_mix_torch(x: torch.Tensor, x_prev: torch.Tensor, x_k: torch.Tensor):
-    x_prev = x_prev.unsqueeze(1)  # (batch_size, 1, hidden_dim)
+    x_prev = x_prev.unsqueeze(1) if x_prev.dim() == 2 else x_prev # (batch_size, 1, hidden_dim)
     xx = torch.cat((x_prev, x[:, :-1, :]), dim=1) - x
     k = x + xx * x_k
     return k
@@ -227,11 +227,11 @@ def compute_x_k_grad(dk1, x, x_prev):
     Args:
         dk1: (batch*seq_len, hidden_dim)
         x: (batch, seq_len, hidden_dim)
-        x_prev: (batch, hidden_dim)
+        x_prev: (batch, hidden_dim) or (batch, 1, hidden_dim)
     """
     hidden_dim = x.shape[2]
 
-    x_prev = x_prev.unsqueeze(1)  # (batch, 1, hidden_dim)
+    x_prev = x_prev.unsqueeze(1) if x_prev.dim() == 2 else x_prev # (batch, 1, hidden_dim)
     xx = torch.cat((x_prev, x[:, :-1, :]), dim=1) - x  # (batch, seq_len, hidden_dim)
 
     grad_x_k = (dk1 * xx.reshape(-1, hidden_dim)).sum(dim=0).unsqueeze(0).unsqueeze(0)    # (hidden_dim,)
@@ -283,25 +283,27 @@ class Rwkv7ChannelMixing(torch.autograd.Function):
     @staticmethod
     @contiguous
     @autocast_custom_fwd
-    def forward(ctx, x, x_prev, x_k, key_weight, value_weight, train_mode=True):
+    def forward(ctx, x, x_prev, x_k, key_weight, value_weight):
         k1 = rwkv_mix_fwd(x, x_prev, x_k)
         k1_K = k1 @ key_weight
-        k = rwkv_relu_and_square_fwd(k1_K, inplace=(not train_mode))
-        ctx.save_for_backward(x, x_prev, x_k, key_weight, value_weight, k1, k1_K, k)
+        k = rwkv_relu_and_square_fwd(k1_K, inplace=True)
+        ctx.save_for_backward(x, x_prev, x_k, key_weight, value_weight)
         return k @ value_weight
 
     @staticmethod
     @contiguous
     @autocast_custom_bwd
     def backward(ctx, dkv):
-        x, x_prev, x_k, K_, V_, k1, k1_K, k = ctx.saved_tensors
-        dx, dx_prev, dk_reduced, dK, dV = rwkv_channel_mixing_bwd(dkv, x, x_prev, x_k, K_, V_, k1, k1_K, k)
-        return dx, dx_prev, dk_reduced, dK, dV, None
+        x, x_prev, x_k, key_weight, value_weight = ctx.saved_tensors
+        k1 = rwkv_mix_fwd(x, x_prev, x_k)
+        k1_K = k1 @ key_weight
+        k = rwkv_relu_and_square_fwd(k1_K, inplace=False)
+        dx, dx_prev, dk_reduced, dK, dV = rwkv_channel_mixing_bwd(dkv, x, x_prev, x_k, key_weight, value_weight, k1, k1_K, k)
+        return dx, dx_prev, dk_reduced, dK, dV
 
 
 def channel_mixing_rwkv7(x: torch.Tensor, x_prev: torch.Tensor, x_k: torch.Tensor,
-                         key_weight: torch.Tensor, value_weight: torch.Tensor,
-                         train_mode: bool = True):
+                         key_weight: torch.Tensor, value_weight: torch.Tensor):
     assert x.dim() == 3
     set_torch_device(x)
-    return Rwkv7ChannelMixing.apply(x, x_prev, x_k, key_weight, value_weight, train_mode), x[-1, :]
+    return Rwkv7ChannelMixing.apply(x, x_prev, x_k, key_weight, value_weight), x[-1, :]

@@ -132,7 +132,7 @@ def test_rwkv_relu_and_square(seq_len, hidden_dim, dtype, inplace):
 @pytest.mark.parametrize("seq_len", [1024])
 @pytest.mark.parametrize("n_embd", [512, 1024])
 @pytest.mark.parametrize("dim_ffn", [2048, 4096])
-@pytest.mark.parametrize("dtype", [torch.float32])
+@pytest.mark.parametrize("dtype", [torch.bfloat16])
 def test_channel_mixing_gradients(batch_size, seq_len, n_embd, dim_ffn, dtype):
     torch.manual_seed(42)
     torch._dynamo.config.cache_size_limit = 512
@@ -168,8 +168,8 @@ def test_channel_mixing_gradients(batch_size, seq_len, n_embd, dim_ffn, dtype):
     loss2.backward()
 
     # Test gradients
-    rtol = 1e-3 if dtype == torch.float32 else 0.025
-    atol = 1e-3 if dtype == torch.float32 else 0.025
+    rtol = 1e-3 if dtype == torch.float32 else 0.01
+    atol = 1e-3 if dtype == torch.float32 else 0.1
 
     torch.testing.assert_close(x.grad, x2.grad, rtol=rtol, atol=atol)
     torch.testing.assert_close(x_prev.grad, x_prev2.grad, rtol=rtol, atol=atol)

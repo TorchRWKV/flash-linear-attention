@@ -115,6 +115,7 @@ use_cuda_graph = (is_nvidia and os.environ.get('FLA_USE_CUDA_GRAPH', '0') == '1'
 is_tf32_supported = (is_nvidia and torch.cuda.get_device_capability(0)[0] >= 8)  # Nvidia Ampere or newer
 
 
+@torch.compiler.disable
 def set_torch_device(x: torch.Tensor):
     device_torch_lib.set_device(x.device.index)
 

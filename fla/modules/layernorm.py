@@ -363,8 +363,8 @@ def layer_norm_bwd(
         weight is not None,
         bias is not None,
     )
-    dw = dw.view(G, -1, N).sum(1).to(weight).view_as(weight) if weight is not None else None
-    db = db.view(G, -1, N).sum(1).to(bias).view_as(bias) if bias is not None else None
+    dw = dw.view(G, -1, N).sum(1, dtype=weight.dtype).view_as(weight) if weight is not None else None
+    db = db.view(G, -1, N).sum(1, dtype=bias.dtype).view_as(bias) if bias is not None else None
     # Don't need to compute dresidual_in separately in this case
     if has_residual and dx.dtype == x.dtype:
         dresidual_in = dx

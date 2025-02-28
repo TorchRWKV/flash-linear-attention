@@ -36,7 +36,7 @@ def chunk_dplr_bwd_kernel_dAu(
     dv_new,
     offsets,
     indices,
-    scale,
+    scale: tl.constexpr,
     T,
     H: tl.constexpr,
     V: tl.constexpr,

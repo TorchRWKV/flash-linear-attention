@@ -47,7 +47,7 @@ def chunk_dplr_bwd_kernel_intra(
     dgk_offset,
     offsets,
     indices,
-    scale,
+    scale: tl.constexpr,
     T,
     H: tl.constexpr,
     K: tl.constexpr,

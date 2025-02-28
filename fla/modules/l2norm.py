@@ -5,7 +5,7 @@ from typing import Optional
 import torch
 import triton
 import triton.language as tl
-from fla.utils import set_torch_device, use_cuda_graph
+from fla.utils import use_cuda_graph
 
 
 @triton.autotune(
@@ -116,7 +116,7 @@ def l2norm_fwd(
         raise RuntimeError(
             "This layer norm doesn't support feature dim >= 64KB.")
     # heuristics for number of warps
-    set_torch_device(x)
+
     l2norm_fwd_kernel[(M,)](
         x,
         y,
@@ -157,7 +157,7 @@ def l2norm_bwd(
         raise RuntimeError(
             "This layer norm doesn't support feature dim >= 64KB.")
     # heuristics for number of warps
-    set_torch_device(x)
+
     l2norm_bwd_kernel[(M,)](
         x,
         dy,

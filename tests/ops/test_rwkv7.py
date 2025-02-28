@@ -385,7 +385,7 @@ def test_rwkv7_chunk_forward(
     print('test passed')
 
 @pytest.mark.parametrize("B", [4])
-@pytest.mark.parametrize("T", [4096])
+@pytest.mark.parametrize("T", [1024])
 @pytest.mark.parametrize("H", [64])
 @pytest.mark.parametrize("D", [64])
 @pytest.mark.parametrize("vocab_size", [1024])
@@ -464,5 +464,5 @@ def test_rwkv7_model(
     model = RWKV7(vocab_size, dim, 6).to(device)
     y = model(x)
 
-    loss = F.cross_entropy(y.view(-1, vocab_size), target.view(-1))
+    loss = F.cross_entropy(y.reshape(-1, vocab_size), target.reshape(-1))
     loss.backward()

@@ -18,7 +18,7 @@ import triton
 import triton.language as tl
 
 from fla.utils import contiguous, use_cuda_graph
-from fla.utils import set_torch_device, get_multiprocessor_count
+from fla.utils import get_multiprocessor_count
 
 
 def layer_norm_ref(

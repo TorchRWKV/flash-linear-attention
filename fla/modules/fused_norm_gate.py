@@ -19,7 +19,7 @@ import torch.nn.functional as F
 import triton
 import triton.language as tl
 
-from fla.utils import contiguous, set_torch_device, use_cuda_graph
+from fla.utils import contiguous, use_cuda_graph
 
 
 @triton.autotune(
@@ -131,7 +131,6 @@ def layer_norm_fwd(
     if N > BLOCK_N:
         raise RuntimeError("This layer norm doesn't support feature dim >= 64KB.")
     # heuristics for number of warps
-    set_torch_device(x)
     layer_norm_fwd_kernel[(M,)](
         x,
         o,
@@ -319,7 +318,7 @@ def layer_norm_bwd(
     db = torch.empty((sm_count, N), dtype=torch.float, device=bias.device) if bias is not None else None
     rows_per_program = math.ceil(M / sm_count)
     grid = (sm_count,)
-    set_torch_device(x)
+
     layer_norm_bwd_kernel[grid](
         x,
         o,

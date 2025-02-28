@@ -6,7 +6,6 @@ from typing import Optional
 import torch
 
 from fla.ops.generalized_delta_rule import chunk_dplr_delta_rule
-from fla.utils import set_torch_device
 
 
 @torch.compile(fullgraph=True)
@@ -60,7 +59,6 @@ def chunk_rwkv7(
         head_first (bool):
             whether to use head first. Recommended to be False to avoid extra transposes.
     """
-    set_torch_device(r)
 
     if w is not None:
         log_w = cal_log_w(w)

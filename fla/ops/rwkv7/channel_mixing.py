@@ -2,7 +2,7 @@ import triton
 import triton.language as tl
 import torch
 from fla.utils import (autocast_custom_bwd, autocast_custom_fwd, contiguous,
-                       check_pytorch_version, set_torch_device, use_cuda_graph)
+                       check_pytorch_version, use_cuda_graph)
 import logging
 
 logger = logging.getLogger(__name__)
@@ -204,11 +204,11 @@ def rwkv_mix_bwd_kenel(
     feat_idx = seq_feat % hidden_dim
 
     is_valid = offsets < (batch_size * token_length * hidden_dim)
-    
+
     dk1 = tl.load(dk1_ptr0 + offsets, mask=is_valid)
     xk = tl.load(xk_ptr + feat_idx, mask=is_valid)
     prod = dk1 * xk
-    
+
     mask_next = seq_idx < (token_length - 1)
     next_offset = offsets + hidden_dim
     dk1_next = tl.load(dk1_ptr0 + next_offset, mask=mask_next & is_valid, other=0.0)
@@ -216,16 +216,15 @@ def rwkv_mix_bwd_kenel(
     dx_val = dk1 - prod + tl.where(mask_next, prod_next, 0.0)
     dx_val = tl.cast(dx_val, dtype=dx_ptr.dtype.element_ty, fp_downcast_rounding='rtne')
     tl.store(dx_ptr + offsets, dx_val, mask=is_valid)
-    
+
     dx_prev_offset = batch_idx * hidden_dim + feat_idx
     is_first_step = seq_idx == 0
 
     tl.store(
-        dx_prev_ptr + dx_prev_offset, 
+        dx_prev_ptr + dx_prev_offset,
         tl.cast(prod, dtype=dx_prev_ptr.dtype.element_ty),
         mask=is_first_step
     )
-
 
 
 def channel_mixing_rwkv7_torch(x, x_prev, x_k, key_weight, value_weight):
@@ -274,7 +273,7 @@ def rwkv_channel_mixing_bwd(grad_output, x, x_prev, x_k, key_weight, value_weigh
     dk1 = dk @ key_weight.transpose(-2, -1)
     dk1 = dk1.view(-1, n_embd).contiguous()
 
-    dx_prev = torch.empty((batch_size, n_embd), device=x.device, dtype=x.dtype) 
+    dx_prev = torch.empty((batch_size, n_embd), device=x.device, dtype=x.dtype)
 
     dk_reduced = compute_x_k_grad(dk1, x, x_prev)
 
@@ -323,5 +322,5 @@ def channel_mixing_rwkv7(x: torch.Tensor, x_prev: torch.Tensor, x_k: torch.Tenso
                          key_weight: torch.Tensor, value_weight: torch.Tensor):
     assert x.dim() == 3
     assert x_prev.dim() == 2
-    set_torch_device(x)
+
     return Rwkv7ChannelMixing.apply(x, x_prev, x_k, key_weight, value_weight), x[-1, :]

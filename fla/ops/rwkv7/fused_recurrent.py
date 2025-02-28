@@ -9,7 +9,6 @@ import triton.language as tl
 
 from fla.ops.generalized_delta_rule import fused_recurrent_dplr_delta_rule
 from fla.utils import contiguous, use_cuda_graph
-from fla.utils import set_torch_device
 
 
 @triton.heuristics({
@@ -206,7 +205,6 @@ def fused_recurrent_rwkv7(
         head_first (bool):
             whether to use head first. Recommended to be False to avoid extra transposes.
     """
-    set_torch_device(r)
     if w is not None:
         if cu_seqlens is not None:
             if r.shape[0] != 1:

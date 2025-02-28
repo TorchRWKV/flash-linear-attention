@@ -5,7 +5,7 @@ from typing import Optional
 import torch
 import triton
 import triton.language as tl
-from fla.utils import (device, check_pytorch_version, set_torch_device,
+from fla.utils import (device, check_pytorch_version,
                        contiguous, use_cuda_graph)
 import logging
 
@@ -247,7 +247,6 @@ def fused_addcmul_rwkv7(
     if num_elements < 16777216 and device == "cuda":
         return torch_addcmul_rwkv7(hidden_states, xx, xr, xw, xk, xv, xa, xg)
     else:
-        set_torch_device(hidden_states)
         return Rwkv7FusedAddcmul.apply(hidden_states, xx, xr, xw, xk, xv, xa, xg, num_elements)
 
 

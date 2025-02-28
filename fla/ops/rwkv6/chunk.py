@@ -10,7 +10,7 @@ import triton.language as tl
 from fla.ops.common.chunk_h import chunk_fwd_h
 from fla.ops.gla.chunk import (chunk_gla_bwd_dA, chunk_gla_bwd_dv,
                                chunk_gla_fwd_o_gk)
-from fla.utils import (contiguous, device_capacity, set_torch_device,
+from fla.utils import (contiguous, device_capacity,
                        autocast_custom_bwd, autocast_custom_fwd,
                        is_tf32_supported, use_cuda_graph)
 
@@ -1449,7 +1449,6 @@ def chunk_rwkv6(
         >>> assert o.allclose(o_var.view(o.shape))
         >>> assert ht.allclose(ht_var)
     """
-    set_torch_device(q)
     if cu_seqlens is not None:
         if q.shape[0] != 1:
             raise ValueError(f"The batch size is expected to be 1 rather than {q.shape[0]} when using `cu_seqlens`."

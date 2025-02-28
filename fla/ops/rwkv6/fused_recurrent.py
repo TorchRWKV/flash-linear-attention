@@ -8,7 +8,7 @@ import triton
 import triton.language as tl
 
 from fla.utils import (autocast_custom_bwd, autocast_custom_fwd,
-                       contiguous, set_torch_device,
+                       contiguous,
                        device_capacity, use_cuda_graph)
 
 
@@ -692,7 +692,6 @@ def fused_recurrent_rwkv6(
         >>> assert o.allclose(o_var.view(o.shape))
         >>> assert ht.allclose(ht_var)
     """
-    set_torch_device(q)
     if cu_seqlens is not None:
         if q.shape[0] != 1:
             raise ValueError(f"The batch size is expected to be 1 rather than {q.shape[0]} when using `cu_seqlens`."

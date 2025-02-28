@@ -102,29 +102,24 @@ def _check_platform() -> Literal['nvidia', 'amd', 'intel', 'musa']:
     device = get_available_device()
     if device == 'cuda' and 'NVIDIA' in torch.cuda.get_device_name(0):
         return 'nvidia'
-    elif device == 'hip' and 'AMD' in torch.cuda.get_device_name(0):
+    elif device == 'cuda' and 'AMD' in torch.cuda.get_device_name(0):
         return 'amd'
     else:
         return device
 
 
-# although AMD named 'hip' in triton backennd, we still use 'cuda' as device name
-# to keep the compatibility with PyTorch
-device = get_available_device() if get_available_device() != 'hip' else 'cuda'
-
+device = get_available_device()
 device_capacity = is_triton_shared_mem_enough()
 device_torch_lib = getattr(torch, device)
 device_platform = _check_platform()
 is_intel_a770 = (device_platform == 'intel' and 'Intel(R) Arc(TM) A' in torch.xpu.get_device_name(0))
 is_nvidia = (device_platform == 'nvidia')
-is_hip = (get_available_device() == 'hip')
-use_cuda_graph = os.environ.get('FLA_USE_CUDA_GRAPH', '0') == '1'
+use_cuda_graph = (is_nvidia and os.environ.get('FLA_USE_CUDA_GRAPH', '0') == '1')
 
 # Nvidia Ampere or newer, haven't check AMD and intel yet.
 is_tf32_supported = (is_nvidia and torch.cuda.get_device_capability(0)[0] >= 8)
 
 
-@torch.compiler.disable
 def set_torch_device(index: int):
     device_torch_lib.set_device(index)
 

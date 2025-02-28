@@ -268,13 +268,14 @@ class ChunkDPLRDeltaRuleFunction(torch.autograd.Function):
         )
         del v_new
 
-        dA_ab, dA_ak, dv2, dag = chunk_dplr_bwd_wy(
+        dA_ab, dA_ak, dv, dag = chunk_dplr_bwd_wy(
             A_ab_inv=A_ab_inv,
             A_ak=A_ak,
             v=v,
             ag=ag,
             dw=dw,
             du=dv_new,
+            dv0=dv,
             offsets=offsets,
             indices=indices,
             head_first=head_first,
@@ -304,7 +305,7 @@ class ChunkDPLRDeltaRuleFunction(torch.autograd.Function):
             offsets=offsets,
             indices=indices
         )
-        dv.add_(dv2)
+
         return dq.to(q), dk.to(k), dv.to(v), da.to(a), db.to(b), dgk.to(gk), None, dh0, None, None, None
 
 

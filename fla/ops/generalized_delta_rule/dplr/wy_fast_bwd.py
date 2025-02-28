@@ -33,6 +33,7 @@ def bwd_prepare_wy_repr_kernel(
     dw,
     du,
     dv,
+    dv0,
     dag,
     dAak,
     dAab,
@@ -79,15 +80,18 @@ def bwd_prepare_wy_repr_kernel(
         if HEAD_FIRST:
             p_v = tl.make_block_ptr(v + i_bh * T*V, (T, V), (V, 1), (i_t * BT, i_v * BV), (BT, BV), (1, 0))
             p_dv = tl.make_block_ptr(dv + i_bh * T*V, (T, V), (V, 1), (i_t * BT, i_v * BV), (BT, BV), (1, 0))
+            p_dv0 = tl.make_block_ptr(dv0 + i_bh * T*V, (T, V), (V, 1), (i_t * BT, i_v * BV), (BT, BV), (1, 0))
             p_du = tl.make_block_ptr(du + i_bh * T*V, (T, V), (V, 1), (i_t * BT, i_v * BV), (BT, BV), (1, 0))
         else:
             p_v = tl.make_block_ptr(v + (bos*H + i_h) * V, (T, V), (H*V, 1), (i_t * BT, i_v * BV), (BT, BV), (1, 0))
             p_dv = tl.make_block_ptr(dv + (bos*H + i_h) * V, (T, V), (H*V, 1), (i_t * BT, i_v * BV), (BT, BV), (1, 0))
+            p_dv0 = tl.make_block_ptr(dv0 + (bos*H + i_h) * V, (T, V), (H*V, 1), (i_t * BT, i_v * BV), (BT, BV), (1, 0))
             p_du = tl.make_block_ptr(du + (bos*H + i_h) * V, (T, V), (H*V, 1), (i_t * BT, i_v * BV), (BT, BV), (1, 0))
         b_v = tl.load(p_v, boundary_check=(0, 1))
         b_du = tl.load(p_du, boundary_check=(0, 1))
         b_dA_tmp += tl.dot(b_du.to(b_v.dtype), tl.trans(b_v))
-        b_dv = tl.dot(b_A_tmp_t, b_du)
+        b_dv0 = tl.load(p_dv0, boundary_check=(0, 1))
+        b_dv = b_dv0 + tl.dot(b_A_tmp_t, b_du)
         tl.store(p_dv, b_dv.to(p_dv.dtype.element_ty), boundary_check=(0, 1))
 
     b_dA_tmp = tl.where(tl.arange(0, BT)[:, None] > tl.arange(0, BT)[None, :], b_dA_tmp, 0)
@@ -132,6 +136,7 @@ def chunk_dplr_bwd_wy(
     ag: torch.Tensor,
     dw: torch.Tensor,
     du: torch.Tensor,
+    dv0: torch.Tensor,
     offsets: Optional[torch.LongTensor],
     indices: Optional[torch.LongTensor],
     head_first: bool,
@@ -166,6 +171,7 @@ def chunk_dplr_bwd_wy(
         dw=dw,
         du=du,
         dv=dv,
+        dv0=dv0,
         dag=dag,
         dAak=dA_ak,
         dAab=dA_ab,

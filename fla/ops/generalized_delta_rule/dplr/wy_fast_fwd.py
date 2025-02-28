@@ -8,6 +8,7 @@ import torch
 import triton
 import triton.language as tl
 from fla.utils import is_tf32_supported, use_cuda_graph
+from fla.ops.utils.asm import fp32_to_tf32_asm
 
 
 @triton.heuristics({
@@ -84,8 +85,8 @@ def fwd_prepare_wy_repr_kernel_chunk64(
     USE_OFFSETS: tl.constexpr,
     HEAD_FIRST: tl.constexpr,
     ALLOW_TF32: tl.constexpr = is_tf32_supported,
+    ASM: tl.constexpr = fp32_to_tf32_asm(),
 ):
-    ASM: tl.constexpr = "cvt.rna.tf32.f32 $0, $1;"
     i_t, i_bh = tl.program_id(0), tl.program_id(1)
     i_b, i_h = i_bh // H, i_bh % H
     if USE_OFFSETS:
@@ -138,11 +139,11 @@ def fwd_prepare_wy_repr_kernel_chunk64(
         b_A = tl.inline_asm_elementwise(ASM, "=r, r", [b_A], dtype=tl.float32, is_pure=True, pack=1)
     b_A3 = tl.dot(tl.dot(b_A2, b_A3, allow_tf32=ALLOW_TF32), b_A, allow_tf32=ALLOW_TF32)
     tl.debug_barrier()
-    tl.store(p_A_inv1, b_A.to(p_A_inv1.dtype.element_ty), boundary_check=(0, 1))
-    tl.store(p_A_inv2, b_A2.to(p_A_inv2.dtype.element_ty), boundary_check=(0, 1))
-    tl.store(p_A_inv3, b_A3.to(p_A_inv3.dtype.element_ty), boundary_check=(0, 1))
+    tl.store(p_A_inv1, b_A.to(p_A_inv1.dtype.element_ty, fp_downcast_rounding="rtne"), boundary_check=(0, 1))
+    tl.store(p_A_inv2, b_A2.to(p_A_inv2.dtype.element_ty, fp_downcast_rounding="rtne"), boundary_check=(0, 1))
+    tl.store(p_A_inv3, b_A3.to(p_A_inv3.dtype.element_ty, fp_downcast_rounding="rtne"), boundary_check=(0, 1))
     # causal mask
-    tl.store(p_A_inv4, tl.zeros([BC, BC], dtype=tl.float32).to(p_A_inv4.dtype.element_ty), boundary_check=(0, 1))
+    tl.store(p_A_inv4, tl.zeros([BC, BC], dtype=tl.float32).to(p_A_inv4.dtype.element_ty, fp_downcast_rounding="rtne"), boundary_check=(0, 1))
 
 
 @triton.heuristics({
@@ -175,7 +176,9 @@ def fwd_wu_kernel(
     BK: tl.constexpr,
     BV: tl.constexpr,
     USE_OFFSETS: tl.constexpr,
-    HEAD_FIRST: tl.constexpr
+    HEAD_FIRST: tl.constexpr,
+    ALLOW_TF32: tl.constexpr = is_tf32_supported,
+    ASM: tl.constexpr = fp32_to_tf32_asm(),
 ):
     i_t, i_bh = tl.program_id(0), tl.program_id(1)
     i_b, i_h = i_bh // H, i_bh % H
@@ -198,10 +201,13 @@ def fwd_wu_kernel(
     b_Aab_inv = tl.where(o_s[:, None] >= o_s[None, :], b_Aab_inv, 0)
     b_Aak = tl.where(o_s[:, None] > o_s[None, :], b_Aak, 0)
     # let's use fp32 here
-    b_Aak = tl.dot(b_Aab_inv, b_Aak, allow_tf32=True)
+    if ALLOW_TF32:
+        b_Aab_inv = tl.inline_asm_elementwise(ASM, "=r, r", [b_Aab_inv], dtype=tl.float32, is_pure=True, pack=1)
+        b_Aak = tl.inline_asm_elementwise(ASM,  "=r, r", [b_Aak], dtype=tl.float32, is_pure=True, pack=1)
+    b_Aak = tl.dot(b_Aab_inv, b_Aak, allow_tf32=ALLOW_TF32)
     # (SY 01/04) should be bf16 or tf32? To verify.
-    b_Aak = b_Aak.to(u.dtype.element_ty)
-    b_Aab_inv = b_Aab_inv.to(u.dtype.element_ty)
+    b_Aak = b_Aak.to(v.dtype.element_ty, fp_downcast_rounding="rtne")
+    b_Aab_inv = b_Aab_inv.to(ag.dtype.element_ty, fp_downcast_rounding="rtne")
 
     for i_k in range(tl.cdiv(K, BK)):
         if HEAD_FIRST:
@@ -211,8 +217,8 @@ def fwd_wu_kernel(
             p_ag = tl.make_block_ptr(ag + (bos*H + i_h) * K, (T, K), (H*K, 1), (i_t * BT, i_k * BK), (BT, BK), (1, 0))
             p_w = tl.make_block_ptr(w + (bos*H + i_h) * K, (T, K), (H*K, 1), (i_t * BT, i_k * BK), (BT, BK), (1, 0))
         b_ag = tl.load(p_ag, boundary_check=(0, 1))
-        b_w = tl.dot(b_Aab_inv.to(b_ag.dtype), b_ag)  # both bf16 or fp16
-        tl.store(p_w, b_w.to(p_w.dtype.element_ty), boundary_check=(0, 1))
+        b_w = tl.dot(b_Aab_inv, b_ag)  # both bf16 or fp16
+        tl.store(p_w, b_w.to(p_w.dtype.element_ty, fp_downcast_rounding="rtne"), boundary_check=(0, 1))
 
     for i_v in range(tl.cdiv(V, BV)):
         if HEAD_FIRST:
@@ -222,8 +228,8 @@ def fwd_wu_kernel(
             p_v = tl.make_block_ptr(v + (bos*H + i_h) * V, (T, V), (H*V, 1), (i_t * BT, i_v * BV), (BT, BV), (1, 0))
             p_u = tl.make_block_ptr(u + (bos*H + i_h) * V, (T, V), (H*V, 1), (i_t * BT, i_v * BV), (BT, BV), (1, 0))
         b_v = tl.load(p_v, boundary_check=(0, 1))
-        b_u = tl.dot(b_Aak.to(b_v.dtype), b_v)  # both bf16 or fp16
-        tl.store(p_u, b_u.to(p_u.dtype.element_ty), boundary_check=(0, 1))
+        b_u = tl.dot(b_Aak, b_v)  # both bf16 or fp16
+        tl.store(p_u, b_u.to(p_u.dtype.element_ty, fp_downcast_rounding="rtne"), boundary_check=(0, 1))
 
 
 def fwd_prepare_wy_repr(

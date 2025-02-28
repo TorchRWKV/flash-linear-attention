@@ -7,7 +7,8 @@ from typing import Optional
 import torch
 import triton
 import triton.language as tl
-from fla.utils import use_cuda_graph
+from fla.utils import is_tf32_supported, use_cuda_graph
+from fla.ops.utils.asm import fp32_to_tf32_asm
 
 
 @triton.heuristics({
@@ -46,7 +47,9 @@ def chunk_dplr_fwd_A_kernel_intra_sub_inter(
     BK: tl.constexpr,
     NC: tl.constexpr,
     USE_OFFSETS: tl.constexpr,
-    HEAD_FIRST: tl.constexpr
+    HEAD_FIRST: tl.constexpr,
+    ALLOW_TF32: tl.constexpr = is_tf32_supported,
+    ASM: tl.constexpr = fp32_to_tf32_asm(),
 ):
     i_t, i_c, i_bh = tl.program_id(0), tl.program_id(1), tl.program_id(2)
     i_b, i_h = i_bh // H, i_bh % H
@@ -106,10 +109,16 @@ def chunk_dplr_fwd_A_kernel_intra_sub_inter(
         b_kg = b_k * tmp
         b_bg = b_b * tmp
         # [BC, BC] using tf32 to improve precision here.
-        b_Aab += tl.dot(b_ag, b_bg)
-        b_Aak += tl.dot(b_ag, b_kg)
-        b_Aqk += tl.dot(b_qg, b_kg)
-        b_Aqb += tl.dot(b_qg, b_bg)
+        if ALLOW_TF32:
+            b_ag = tl.inline_asm_elementwise(ASM, "=r, r", [b_ag], dtype=tl.float32, is_pure=True, pack=1)
+            b_bg = tl.inline_asm_elementwise(ASM, "=r, r", [b_bg], dtype=tl.float32, is_pure=True, pack=1)
+            b_kg = tl.inline_asm_elementwise(ASM, "=r, r", [b_kg], dtype=tl.float32, is_pure=True, pack=1)
+            b_qg = tl.inline_asm_elementwise(ASM, "=r, r", [b_qg], dtype=tl.float32, is_pure=True, pack=1)
+
+        b_Aab += tl.dot(b_ag, b_bg, allow_tf32=ALLOW_TF32)
+        b_Aak += tl.dot(b_ag, b_kg, allow_tf32=ALLOW_TF32)
+        b_Aqk += tl.dot(b_qg, b_kg, allow_tf32=ALLOW_TF32)
+        b_Aqb += tl.dot(b_qg, b_bg, allow_tf32=ALLOW_TF32)
 
     if HEAD_FIRST:
         p_Aqk = tl.make_block_ptr(Aqk + i_bh*T*BT, (T, BT), (BT, 1), (i_t * BT + i_i * BC, i_j * BC), (BC, BC), (1, 0))
@@ -121,10 +130,10 @@ def chunk_dplr_fwd_A_kernel_intra_sub_inter(
         p_Aqb = tl.make_block_ptr(Aqb + (bos*H+i_h)*BT, (T, BT), (H*BT, 1), (i_t * BT + i_i * BC, i_j * BC), (BC, BC), (1, 0))
         p_Aab = tl.make_block_ptr(Aab + (bos*H+i_h)*BT, (T, BT), (H*BT, 1), (i_t * BT + i_i * BC, i_j * BC), (BC, BC), (1, 0))
         p_Aak = tl.make_block_ptr(Aak + (bos*H+i_h)*BT, (T, BT), (H*BT, 1), (i_t * BT + i_i * BC, i_j * BC), (BC, BC), (1, 0))
-    tl.store(p_Aqk, b_Aqk.to(Aqk.dtype.element_ty), boundary_check=(0, 1))
-    tl.store(p_Aqb, b_Aqb.to(Aqb.dtype.element_ty), boundary_check=(0, 1))
-    tl.store(p_Aab, b_Aab.to(Aab.dtype.element_ty), boundary_check=(0, 1))
-    tl.store(p_Aak, b_Aak.to(Aak.dtype.element_ty), boundary_check=(0, 1))
+    tl.store(p_Aqk, b_Aqk.to(Aqk.dtype.element_ty, fp_downcast_rounding="rtne"), boundary_check=(0, 1))
+    tl.store(p_Aqb, b_Aqb.to(Aqb.dtype.element_ty, fp_downcast_rounding="rtne"), boundary_check=(0, 1))
+    tl.store(p_Aab, b_Aab.to(Aab.dtype.element_ty, fp_downcast_rounding="rtne"), boundary_check=(0, 1))
+    tl.store(p_Aak, b_Aak.to(Aak.dtype.element_ty, fp_downcast_rounding="rtne"), boundary_check=(0, 1))
 
 
 @triton.heuristics({
@@ -230,10 +239,10 @@ def chunk_dplr_fwd_A_kernel_intra_sub_intra(
     b_kg = b_k * g_exp_inv
     b_bg = b_b * g_exp_inv
     b_ag = b_a * tl.exp(b_ge)
-    tl.store(p_qg, b_qg.to(p_qg.dtype.element_ty), boundary_check=(0, 1))
-    tl.store(p_bg, b_bg.to(p_bg.dtype.element_ty), boundary_check=(0, 1))
-    tl.store(p_ag, b_ag.to(p_ag.dtype.element_ty), boundary_check=(0, 1))
-    tl.store(p_kg, b_kg.to(p_kg.dtype.element_ty), boundary_check=(0, 1))
+    tl.store(p_qg, b_qg.to(p_qg.dtype.element_ty, fp_downcast_rounding="rtne"), boundary_check=(0, 1))
+    tl.store(p_bg, b_bg.to(p_bg.dtype.element_ty, fp_downcast_rounding="rtne"), boundary_check=(0, 1))
+    tl.store(p_ag, b_ag.to(p_ag.dtype.element_ty, fp_downcast_rounding="rtne"), boundary_check=(0, 1))
+    tl.store(p_kg, b_kg.to(p_kg.dtype.element_ty, fp_downcast_rounding="rtne"), boundary_check=(0, 1))
     b_qg, b_kg, b_ag, b_bg = None, None, None, None
     tl.debug_barrier()
 
@@ -255,10 +264,10 @@ def chunk_dplr_fwd_A_kernel_intra_sub_intra(
         b_A_ak = tl.where(o_i > j, b_A_ak, 0.)
         b_A_ab = tl.sum(b_a * b_b_j[None, :] * tmp2, 1)
         b_A_ab = tl.where(o_i > j, b_A_ab, 0.)
-        tl.store(Aqk + o_A + j, b_A_qk, mask=m_A)
-        tl.store(Aqb + o_A + j, b_A_qb, mask=m_A)
-        tl.store(Aab + o_A + j, b_A_ab, mask=m_A)
-        tl.store(Aak + o_A + j, b_A_ak, mask=m_A)
+        tl.store(Aqk + o_A + j, b_A_qk.to(dtype=Aqk.dtype.element_ty, fp_downcast_rounding="rtne"), mask=m_A)
+        tl.store(Aqb + o_A + j, b_A_qb.to(dtype=Aqb.dtype.element_ty, fp_downcast_rounding="rtne"), mask=m_A)
+        tl.store(Aab + o_A + j, b_A_ab.to(dtype=Aqb.dtype.element_ty, fp_downcast_rounding="rtne"), mask=m_A)
+        tl.store(Aak + o_A + j, b_A_ak.to(dtype=Aqk.dtype.element_ty, fp_downcast_rounding="rtne"), mask=m_A)
 
 
 def chunk_fwd_intra_dplr_fn(

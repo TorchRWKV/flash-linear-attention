@@ -120,8 +120,6 @@ def chunk_dplr_bwd_o_kernel(
     dh,
     dk,
     db,
-    dA_qk,
-    dA_qb,
     w,
     dq,
     dv,
@@ -170,8 +168,6 @@ def chunk_dplr_bwd_o_kernel(
     dv += i_bh * T * V if HEAD_FIRST else (bos * H + i_h) * V
     dq += i_bh * T * K if HEAD_FIRST else (bos * H + i_h) * K
     w += i_bh * T * K if HEAD_FIRST else (bos * H + i_h) * K
-    dA_qk += i_bh * T * BT if HEAD_FIRST else (bos * H + i_h) * BT
-    dA_qb += i_bh * T * BT if HEAD_FIRST else (bos * H + i_h) * BT
     # CHECK HEAD_FIRST is FALSE
     dgk_last += (i_bh * NT + i_t) * K if HEAD_FIRST else (i_tg * H + i_h) * K
     gk += i_bh * T * K if HEAD_FIRST else (bos * H + i_h) * K
@@ -181,8 +177,6 @@ def chunk_dplr_bwd_o_kernel(
 
     b_dq = tl.zeros([BT, BK], dtype=tl.float32)
     b_dk = tl.zeros([BT, BK], dtype=tl.float32)
-    b_dA_qk = tl.zeros([BT, BT], dtype=tl.float32)
-    b_dA_qb = tl.zeros([BT, BT], dtype=tl.float32)
     b_dw = tl.zeros([BT, BK], dtype=tl.float32)
     b_db = tl.zeros([BT, BK], dtype=tl.float32)
     b_dgk_last = tl.zeros([BK], dtype=tl.float32)
@@ -202,9 +196,6 @@ def chunk_dplr_bwd_o_kernel(
         b_dh = tl.load(p_dh, boundary_check=(0, 1))
         b_dgk_last += tl.sum((b_h * b_dh).to(tl.float32), axis=0)
 
-        # [BT, BV] @ [BV, BT] -> [BT, BT]
-        b_dA_qk += tl.dot(b_do, tl.trans(b_v))
-        b_dA_qb += tl.dot(b_do, tl.trans(b_v_new))
         # [BT, BV] @ [BV, BK] -> [BT, BK]
         b_dq += tl.dot(b_do, b_h.to(b_do.dtype))
         # [BT, BV] @ [BV, BK] -> [BT, BK]
@@ -225,22 +216,15 @@ def chunk_dplr_bwd_o_kernel(
     b_dgk_last += tl.sum(b_k * b_dk, axis=0)
     b_dgk_last += tl.sum(b_b * b_db, axis=0)
     tl.store(dgk_last + tl.arange(0, BK) + i_k * BK, b_dgk_last, mask=m_k)
-    m_s = tl.arange(0, BT)[:, None] >= tl.arange(0, BT)[None, :]
-    b_dA_qk = tl.where(m_s, b_dA_qk, 0.)
-    b_dA_qb = tl.where(m_s, b_dA_qb, 0.)
 
     p_dw = tl.make_block_ptr(dw, (T, K), (stride_qk, 1), (i_t * BT, i_k * BK), (BT, BK), (1, 0))
     p_dk = tl.make_block_ptr(dk, (T, K), (stride_qk, 1), (i_t * BT, i_k * BK), (BT, BK), (1, 0))
     p_db = tl.make_block_ptr(db, (T, K), (stride_qk, 1), (i_t * BT, i_k * BK), (BT, BK), (1, 0))
     p_dq = tl.make_block_ptr(dq, (T, K), (stride_qk, 1), (i_t * BT, i_k * BK), (BT, BK), (1, 0))
-    p_dA_qk = tl.make_block_ptr(dA_qk, (T, BT), (BT, 1), (i_t * BT, 0), (BT, BT), (1, 0))
-    p_dA_qb = tl.make_block_ptr(dA_qb, (T, BT), (BT, 1), (i_t * BT, 0), (BT, BT), (1, 0))
     tl.store(p_dw, b_dw.to(p_dw.dtype.element_ty), boundary_check=(0, 1))
     tl.store(p_dk, b_dk.to(p_dk.dtype.element_ty), boundary_check=(0, 1))
     tl.store(p_db, b_db.to(p_db.dtype.element_ty), boundary_check=(0, 1))
     tl.store(p_dq, b_dq.to(p_dq.dtype.element_ty), boundary_check=(0, 1))
-    tl.store(p_dA_qk, b_dA_qk.to(p_dA_qk.dtype.element_ty), boundary_check=(0, 1))
-    tl.store(p_dA_qb, b_dA_qb.to(p_dA_qb.dtype.element_ty), boundary_check=(0, 1))
 
 
 @triton.heuristics({
@@ -406,10 +390,7 @@ def chunk_dplr_bwd_o(
     dw = torch.empty_like(w)
     db = torch.empty_like(b)
     grid = (NK, NT, B * H)
-    dA_qk = torch.empty(B, H, T, BT, dtype=torch.float, device=w.device) if head_first \
-        else torch.empty(B, T, H, BT, dtype=torch.float, device=w.device)
-    dA_qb = torch.empty(B, H, T, BT, dtype=torch.float, device=w.device) if head_first \
-        else torch.empty(B, T, H, BT, dtype=torch.float, device=w.device)
+
     dgk_last = torch.empty(B, H, NT, K, dtype=torch.float, device=w.device) if head_first \
         else torch.empty(B, NT, H, K, dtype=torch.float, device=w.device)
 
@@ -424,8 +405,6 @@ def chunk_dplr_bwd_o(
         dq=dq,
         dk=dk,
         db=db,
-        dA_qk=dA_qk,
-        dA_qb=dA_qb,
         dgk_last=dgk_last,
         w=w,
         dv=dv,

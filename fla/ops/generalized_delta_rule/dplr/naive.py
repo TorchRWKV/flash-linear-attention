@@ -114,6 +114,7 @@ def dplr_chunkwise(q, k, v, alpha, beta, gk, initial_state=None, output_final_st
 
 if __name__ == '__main__':
     from fla.utils import device
+
     # disallow tf32
     torch.set_float32_matmul_precision('high')
     torch.set_default_dtype(torch.float32)

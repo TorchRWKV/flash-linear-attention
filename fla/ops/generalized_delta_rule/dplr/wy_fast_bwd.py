@@ -7,7 +7,11 @@ from typing import Optional, Tuple
 import torch
 import triton
 import triton.language as tl
+
 from fla.utils import device_capacity, is_intel_a770, use_cuda_graph
+
+triton_config = {'grf_mode': 'large'} if is_intel_a770 else {}
+
 
 triton_config = {'grf_mode': 'large'} if is_intel_a770 else {}
 

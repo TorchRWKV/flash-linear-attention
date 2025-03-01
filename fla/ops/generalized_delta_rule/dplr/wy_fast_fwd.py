@@ -7,8 +7,9 @@ from typing import Optional, Tuple
 import torch
 import triton
 import triton.language as tl
-from fla.utils import is_tf32_supported, use_cuda_graph
+
 from fla.ops.utils.asm import fp32_to_tf32_asm
+from fla.utils import is_tf32_supported, use_cuda_graph
 
 
 @triton.heuristics({
@@ -143,7 +144,8 @@ def fwd_prepare_wy_repr_kernel_chunk64(
     tl.store(p_A_inv2, b_A2.to(p_A_inv2.dtype.element_ty, fp_downcast_rounding="rtne"), boundary_check=(0, 1))
     tl.store(p_A_inv3, b_A3.to(p_A_inv3.dtype.element_ty, fp_downcast_rounding="rtne"), boundary_check=(0, 1))
     # causal mask
-    tl.store(p_A_inv4, tl.zeros([BC, BC], dtype=tl.float32).to(p_A_inv4.dtype.element_ty, fp_downcast_rounding="rtne"), boundary_check=(0, 1))
+    tl.store(p_A_inv4, tl.zeros([BC, BC], dtype=tl.float32).to(
+        p_A_inv4.dtype.element_ty, fp_downcast_rounding="rtne"), boundary_check=(0, 1))
 
 
 @triton.heuristics({

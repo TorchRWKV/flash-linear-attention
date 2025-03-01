@@ -1,14 +1,17 @@
 # -*- coding: utf-8 -*-
 # Copyright (c) 2023-2025, Songlin Yang, Yu Zhang
 
-from fla.ops.common.utils import prepare_chunk_offsets
 from typing import Optional, Tuple
 
 import torch
 import triton
 import triton.language as tl
-from fla.utils import is_triton_shared_mem_enough, use_cuda_graph, is_tf32_supported
+
+from fla.ops.common.utils import prepare_chunk_offsets
 from fla.ops.utils.asm import fp32_to_tf32_asm
+from fla.utils import (is_tf32_supported, is_triton_shared_mem_enough,
+                       use_cuda_graph)
+
 
 @triton.heuristics({
     'USE_INITIAL_STATE': lambda args: args['h0'] is not None,

@@ -7,8 +7,9 @@ from typing import Optional
 import torch
 import triton
 import triton.language as tl
-from fla.utils import is_tf32_supported, use_cuda_graph
+
 from fla.ops.utils.asm import fp32_to_tf32_asm
+from fla.utils import is_tf32_supported, use_cuda_graph
 
 
 @triton.heuristics({

@@ -673,6 +673,7 @@ def chunk_gsa_fwd_k(
         h0=h0,
         output_final_state=output_final_state,
         offsets=offsets,
+        indices=indices,
         head_first=head_first,
         chunk_size=BT,
         states_in_fp32=False

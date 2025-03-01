@@ -6,6 +6,7 @@ import torch
 from fla.ops.utils.cumsum import chunk_global_cumsum, chunk_local_cumsum
 from fla.utils import device
 
+
 def get_abs_err(x, y):
     return (x-y).flatten().abs().max().item()
 

@@ -12,7 +12,7 @@ from fla.ops.gla.chunk import (chunk_gla_bwd_dA, chunk_gla_bwd_dv,
                                chunk_gla_fwd_o_gk)
 from fla.utils import (contiguous, device_capacity,
                        autocast_custom_bwd, autocast_custom_fwd,
-                       is_tf32_supported, use_cuda_graph)
+                       use_cuda_graph)
 
 BK_LIST = [32, 64] if device_capacity else [16, 32]
 BV_LIST = [32, 64] if device_capacity else [16, 32]
@@ -45,9 +45,7 @@ def chunk_rwkv6_fwd_cumsum_kernel(
     BS: tl.constexpr,
     HEAD_FIRST: tl.constexpr,
     USE_OFFSETS: tl.constexpr,
-    ALLOW_TF32: tl.constexpr = is_tf32_supported,
 ):
-    ASM: tl.constexpr = "cvt.rna.tf32.f32 $0, $1;"
     i_s, i_t, i_bh = tl.program_id(0), tl.program_id(1), tl.program_id(2)
     i_b, i_h = i_bh // H, i_bh % H
     if USE_OFFSETS:
@@ -71,14 +69,10 @@ def chunk_rwkv6_fwd_cumsum_kernel(
         p_oe = tl.make_block_ptr(oe + (bos * H + i_h) * S, (T, S), (H*S, 1), (i_t * BT, i_s * BS), (BT, BS), (1, 0))
     # [BT, BS]
     b_s = tl.load(p_s, boundary_check=(0, 1)).to(tl.float32)
-    if ALLOW_TF32:
-        m_i = tl.inline_asm_elementwise(ASM, "=r, r", [m_i], dtype=tl.float32, is_pure=True, pack=1)
-        m_e = tl.inline_asm_elementwise(ASM, "=r, r", [m_e], dtype=tl.float32, is_pure=True, pack=1)
-        b_s = tl.inline_asm_elementwise(ASM, "=r, r", [b_s], dtype=tl.float32, is_pure=True, pack=1)
-    b_oi = tl.dot(m_i, b_s, allow_tf32=ALLOW_TF32)
-    b_oe = tl.dot(m_e, b_s, allow_tf32=ALLOW_TF32)
-    tl.store(p_oi, b_oi.to(p_oi.dtype.element_ty), boundary_check=(0, 1))
-    tl.store(p_oe, b_oe.to(p_oe.dtype.element_ty), boundary_check=(0, 1))
+    b_oi = tl.dot(m_i, b_s)
+    b_oe = tl.dot(m_e, b_s)
+    tl.store(p_oi, b_oi.to(p_oi.dtype.element_ty, fp_downcast_rounding="rtne"), boundary_check=(0, 1))
+    tl.store(p_oe, b_oe.to(p_oe.dtype.element_ty, fp_downcast_rounding="rtne"), boundary_check=(0, 1))
 
 
 def chunk_rwkv6_fwd_cumsum(

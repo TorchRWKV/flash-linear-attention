@@ -5,23 +5,21 @@ import pytest
 import torch
 import torch.nn.functional as F
 
-
-from fla.utils import device
+from fla.ops.rwkv7.channel_mixing import (channel_mixing_rwkv7,
+                                          channel_mixing_rwkv7_torch,
+                                          rwkv_mix_fwd, rwkv_mix_torch,
+                                          rwkv_relu_and_square_fwd,
+                                          rwkv_relu_and_square_torch)
+from fla.ops.rwkv7.chunk import chunk_rwkv7
+from fla.ops.rwkv7.fused_addcmul import (fused_addcmul_rwkv7,
+                                         torch_addcmul_rwkv7)
+from fla.ops.rwkv7.fused_recurrent import fused_recurrent_rwkv7
 from fla.ops.rwkv7.recurrent_naive import (naive_recurrent_rwkv7,
                                            naive_recurrent_rwkv7_2,
                                            native_recurrent_rwkv7)
-from fla.ops.rwkv7.channel_mixing import (
-    rwkv_mix_fwd,
-    rwkv_mix_torch,
-    rwkv_relu_and_square_fwd,
-    rwkv_relu_and_square_torch,
-    channel_mixing_rwkv7_torch,
-    channel_mixing_rwkv7,
-)
-from fla.ops.rwkv7.fused_recurrent import fused_recurrent_rwkv7
-from fla.ops.rwkv7.chunk import chunk_rwkv7
-from fla.ops.rwkv7.fused_addcmul import fused_addcmul_rwkv7, torch_addcmul_rwkv7
+from fla.utils import device
 from utils import assert_close
+
 torch.backends.cudnn.allow_tf32 = False
 torch.backends.cuda.matmul.allow_tf32 = False
 
@@ -183,12 +181,14 @@ def test_channel_mixing_gradients(batch_size, seq_len, n_embd, dim_ffn, dtype):
 @pytest.mark.parametrize("H", [64])
 @pytest.mark.parametrize("D", [64])
 @pytest.mark.parametrize("dtype", [torch.float16])
+@pytest.mark.parametrize("compile", [True, False])
 def test_fused_recurrent_rwkv7(
     B: int,
     T: int,
     H: int,
     D: int,
-    dtype: torch.dtype
+    dtype: torch.dtype,
+    compile: bool
 ):
     require_grad = True
     torch.manual_seed(44)
@@ -209,15 +209,16 @@ def test_fused_recurrent_rwkv7(
     a_scale = torch.empty(B, H, T, D, device=device).uniform_(0, 0.1).to(dtype=dtype)
     b = (kk * a_scale).requires_grad_(True)  # kk*a
 
-    do = torch.rand_like(v).to(device).fill_(torch.rand(1).item())
     h = torch.rand(B, H, D, D, device=device, dtype=torch.float32).requires_grad_(require_grad)
+
+    fused_compiled = torch.compile(fused_recurrent_rwkv7) if compile else fused_recurrent_rwkv7
 
     with torch.no_grad():
         q, k, v, w, a, b, h = (x.to(dtype=torch.float64).to('cpu') for x in (q, k, v, w, a, b, h))
         ref_o, ref_state, _ = naive_recurrent_rwkv7(q, k, v, w, a, b, scale=1.0, initial_state=h)
         q, k, v, w, a, b, h = (x.to(dtype=dtype).to(device) for x in (q, k, v, w, a, b, h))
-        result, state = fused_recurrent_rwkv7(q, k, v, a, b, initial_state=h.transpose(-1, -2),
-                                              w=w, head_first=True)
+        result, state = fused_compiled(q, k, v, a, b, initial_state=h.transpose(-1, -2),
+                                       w=w, head_first=True)
         if torch.isnan(result).any():
             raise ValueError("NaN detected in output")
         if torch.isnan(ref_o).any():
@@ -319,13 +320,13 @@ def test_fused_rwkv7_addcmul(
     torch.testing.assert_close(d_xx, d_xx1, rtol=1e-3, atol=1e-3)
 
 
-
 @pytest.mark.parametrize("B", [4])
 @pytest.mark.parametrize("T", [4096])
 @pytest.mark.parametrize("H", [64])
 @pytest.mark.parametrize("D", [64])
 @pytest.mark.parametrize("use_log_w", [True, False])
 @pytest.mark.parametrize("dtype", [torch.bfloat16])
+@pytest.mark.parametrize("compile", [True, False])
 def test_rwkv7_chunk_forward(
     B: int,
     T: int,
@@ -333,6 +334,7 @@ def test_rwkv7_chunk_forward(
     D: int,
     use_log_w: bool,
     dtype: torch.dtype,
+    compile: bool,
 ):
     require_grad = True
     torch.manual_seed(44)
@@ -353,19 +355,22 @@ def test_rwkv7_chunk_forward(
     a_scale = torch.empty(B, T, H, D, device=device).uniform_(0, 0.1).to(dtype=dtype)
     b = (kk * a_scale).requires_grad_(True)  # kk*a
 
-    h = torch.rand(B, H, D, D, device=device, dtype=torch.float32).requires_grad_(require_grad)
+    if compile:
+        chunk_func = torch.compile(chunk_rwkv7)
+    else:
+        chunk_func = chunk_rwkv7
 
     with torch.no_grad():
         if use_log_w:
             ref_o, ref_state = fused_recurrent_rwkv7(q, k, v, a, b, initial_state=None,
-                                                log_w=-w.exp(), scale=1.0,  head_first=False)
-            result, state = chunk_rwkv7(q, k, v, a, b, initial_state=None,
-                                                log_w=-w.exp(), scale=1.0, head_first=False)
+                                                     log_w=-w.exp(), scale=1.0,  head_first=False)
+            result, state = chunk_func(q, k, v, a, b, initial_state=None,
+                                       log_w=-w.exp(), scale=1.0, head_first=False)
         else:
             ref_o, ref_state = fused_recurrent_rwkv7(q, k, v, a, b, initial_state=None,
-                                                w=w, scale=1.0,  head_first=False)
-            result, state = chunk_rwkv7(q, k, v, a, b, initial_state=None,
-                                                w=w, scale=1.0, head_first=False)
+                                                     w=w, scale=1.0,  head_first=False)
+            result, state = chunk_func(q, k, v, a, b, initial_state=None,
+                                       w=w, scale=1.0, head_first=False)
         if torch.isnan(result).any():
             raise ValueError("NaN detected in output")
         if torch.isnan(ref_o).any():
@@ -384,6 +389,7 @@ def test_rwkv7_chunk_forward(
 
     print('test passed')
 
+
 @pytest.mark.parametrize("B", [4])
 @pytest.mark.parametrize("T", [1024])
 @pytest.mark.parametrize("H", [64])
@@ -397,9 +403,10 @@ def test_rwkv7_model(
     vocab_size: int
 ):
     import torch
-    from torch import nn
     import torch.nn.functional as F
-    from fla.layers import RWKV7Attention # type: ignore
+    from torch import nn
+
+    from fla.layers import RWKV7Attention  # type: ignore
     from fla.utils import device
 
     class TMix(nn.Module):

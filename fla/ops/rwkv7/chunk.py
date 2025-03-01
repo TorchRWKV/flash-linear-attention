@@ -13,7 +13,6 @@ def cal_log_w(w: torch.Tensor) -> torch.Tensor:
     return -torch.exp(w)
 
 
-@torch.compiler.disable
 def chunk_rwkv7(
     r: torch.Tensor,
     k: torch.Tensor,

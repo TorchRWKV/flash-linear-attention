@@ -100,20 +100,25 @@ def get_available_device() -> str:
 @lru_cache(maxsize=None)
 def _check_platform() -> Literal['nvidia', 'amd', 'intel', 'musa']:
     device = get_available_device()
-    if device == 'cuda' and 'NVIDIA' in torch.cuda.get_device_name(0):
+    if device == 'cuda':
         return 'nvidia'
-    elif device == 'cuda' and 'AMD' in torch.cuda.get_device_name(0):
+    elif device == 'hip':
         return 'amd'
     else:
         return device
 
 
-device = get_available_device()
-device_capacity = is_triton_shared_mem_enough()
+# For AMD GPUs, the triton backend is 'hip', while for Nvidia GPUs, the triton backend is 'cuda'.
+# However, the torch backend is 'cuda' for both Nvidia and AMD GPUs.
+# Therefore, we need to check the triton backend to determine the actual GPU vendor.
+device = get_available_device() if get_available_device() != 'hip' else 'cuda'
 device_torch_lib = getattr(torch, device)
 device_platform = _check_platform()
+device_capacity = is_triton_shared_mem_enough()
+
 is_intel_a770 = (device_platform == 'intel' and 'Intel(R) Arc(TM) A' in torch.xpu.get_device_name(0))
 is_nvidia = (device_platform == 'nvidia')
+is_amd = (device_platform == 'amd')
 use_cuda_graph = (is_nvidia and os.environ.get('FLA_USE_CUDA_GRAPH', '0') == '1')
 
 # Nvidia Ampere or newer, haven't check AMD and intel yet.

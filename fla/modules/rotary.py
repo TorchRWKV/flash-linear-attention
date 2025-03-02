@@ -11,7 +11,7 @@ import triton
 import triton.language as tl
 from einops import rearrange, repeat
 
-from fla.utils import contiguous, use_cuda_graph
+from fla.utils import input_guard, use_cuda_graph
 
 
 def rotate_half(x, interleaved=False):
@@ -133,7 +133,7 @@ def rotary_embedding_kernel(
         tl.store(p_y, b_y, mask=mask)
 
 
-@contiguous
+@input_guard
 def rotary_embedding_fwdbwd(
     x: torch.Tensor,
     cos: torch.Tensor,
@@ -188,9 +188,6 @@ def rotary_embedding_fwdbwd(
     BD = triton.next_power_of_2(R2)
 
     def grid(META): return (triton.cdiv(T, META['BT']), N, H)  # noqa
-    # Need this, otherwise Triton tries to launch from cuda:0 and we get
-    # ValueError: Pointer argument (at 0) cannot be accessed from Triton (cpu tensor?)
-
     rotary_embedding_kernel[grid](
         x,
         cos,
@@ -216,7 +213,7 @@ def rotary_embedding_fwdbwd(
 class RotaryEmbeddingFunction(torch.autograd.Function):
 
     @staticmethod
-    @contiguous
+    @input_guard
     def forward(
         ctx,
         x,
@@ -251,7 +248,7 @@ class RotaryEmbeddingFunction(torch.autograd.Function):
         return y if not inplace else x
 
     @staticmethod
-    @contiguous
+    @input_guard
     def backward(ctx, do):
         seqlen_offsets = ctx.seqlen_offsets
         if seqlen_offsets is None:

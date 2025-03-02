@@ -51,7 +51,8 @@
 import torch
 import triton
 import triton.language as tl
-from fla.utils import contiguous, use_cuda_graph
+
+from fla.utils import input_guard, use_cuda_graph
 
 
 @triton.autotune(
@@ -206,7 +207,7 @@ def grpo_bwd_kernel(
 
 class GrpoLoss(torch.autograd.Function):
 
-    @contiguous
+    @input_guard
     @staticmethod
     def forward(ctx, logits, ref_logp, input_ids, advantages, beta, completion_mask, save_kl):
         ctx.input_shape = logits.shape
@@ -245,7 +246,7 @@ class GrpoLoss(torch.autograd.Function):
         ctx.ref_logp = ref_logp
         return loss
 
-    @contiguous
+    @input_guard
     @staticmethod
     def backward(ctx, dloss):
         # The grad of logits comes from two parts, the reward part and the kl part

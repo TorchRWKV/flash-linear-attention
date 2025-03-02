@@ -1,9 +1,11 @@
+import logging
+
+import torch
 import triton
 import triton.language as tl
-import torch
-from fla.utils import (autocast_custom_bwd, autocast_custom_fwd, contiguous,
-                       check_pytorch_version, use_cuda_graph)
-import logging
+
+from fla.utils import (autocast_custom_bwd, autocast_custom_fwd,
+                       check_pytorch_version, input_guard, use_cuda_graph)
 
 logger = logging.getLogger(__name__)
 
@@ -295,7 +297,7 @@ def rwkv_channel_mixing_bwd(grad_output, x, x_prev, x_k, key_weight, value_weigh
 
 class Rwkv7ChannelMixing(torch.autograd.Function):
     @staticmethod
-    @contiguous
+    @input_guard
     @autocast_custom_fwd
     def forward(ctx, x, x_prev, x_k, key_weight, value_weight, inplace: bool = True):
         k1 = rwkv_mix_fwd(x, x_prev, x_k)
@@ -306,7 +308,7 @@ class Rwkv7ChannelMixing(torch.autograd.Function):
         return k @ value_weight
 
     @staticmethod
-    @contiguous
+    @input_guard
     @autocast_custom_bwd
     def backward(ctx, dkv):
         x, x_prev, x_k, key_weight, value_weight = ctx.saved_tensors

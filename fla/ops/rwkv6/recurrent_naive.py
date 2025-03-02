@@ -3,8 +3,9 @@
 from typing import Optional, Tuple
 
 import torch
-from fla.utils import autocast_custom_bwd, autocast_custom_fwd, contiguous
-from fla.utils import device
+
+from fla.utils import (autocast_custom_bwd, autocast_custom_fwd, input_guard,
+                       device)
 
 
 def naive_recurrent_rwkv6(
@@ -133,7 +134,7 @@ def naive_recurrent_rwkv6_bwd(
 
 class NativeRecurrentRWKV6Function(torch.autograd.Function):
     @staticmethod
-    @contiguous
+    @input_guard
     @autocast_custom_fwd
     def forward(ctx, q, k, v, w, u, scale, initial_state, output_final_state: bool = False, training: bool = True):
         o, ht = naive_recurrent_rwkv6(q, k, v, w, u, scale, initial_state, output_final_state)

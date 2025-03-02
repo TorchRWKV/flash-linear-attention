@@ -19,7 +19,7 @@ import torch.nn.functional as F
 import triton
 import triton.language as tl
 
-from fla.utils import contiguous, use_cuda_graph
+from fla.utils import input_guard, use_cuda_graph
 
 
 @triton.autotune(
@@ -131,6 +131,7 @@ def layer_norm_fwd(
     if N > BLOCK_N:
         raise RuntimeError("This layer norm doesn't support feature dim >= 64KB.")
     # heuristics for number of warps
+
     layer_norm_fwd_kernel[(M,)](
         x,
         o,
@@ -318,7 +319,6 @@ def layer_norm_bwd(
     db = torch.empty((sm_count, N), dtype=torch.float, device=bias.device) if bias is not None else None
     rows_per_program = math.ceil(M / sm_count)
     grid = (sm_count,)
-
     layer_norm_bwd_kernel[grid](
         x,
         o,
@@ -356,7 +356,7 @@ def layer_norm_bwd(
 class LayerNormSwishGateFn(torch.autograd.Function):
 
     @staticmethod
-    @contiguous
+    @input_guard
     def forward(
         ctx,
         x,
@@ -397,7 +397,7 @@ class LayerNormSwishGateFn(torch.autograd.Function):
         return y if not prenorm else (y, residual_out.reshape(x_shape_og))
 
     @staticmethod
-    @contiguous
+    @input_guard
     def backward(ctx, dy, *args):
         x, o, weight, bias, mean, rstd = ctx.saved_tensors
         dy = dy.reshape(-1, dy.shape[-1])
@@ -438,7 +438,7 @@ class LayerNormSwishGateFn(torch.autograd.Function):
 class LayerNormSwishGateLinearFn(torch.autograd.Function):
 
     @staticmethod
-    @contiguous
+    @input_guard
     def forward(
         ctx,
         x,
@@ -494,7 +494,7 @@ class LayerNormSwishGateLinearFn(torch.autograd.Function):
         return out if not prenorm else (out, residual_out.reshape(x_shape_og))
 
     @staticmethod
-    @contiguous
+    @input_guard
     def backward(ctx, dout, *args):
         x, o, norm_weight, norm_bias, linear_weight, mean, rstd = ctx.saved_tensors
         dout = dout.reshape(-1, dout.shape[-1])

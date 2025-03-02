@@ -9,7 +9,7 @@ import torch.nn as nn
 import triton
 import triton.language as tl
 
-from fla.utils import contiguous
+from fla.utils import input_guard
 
 # `all_gather_into_tensor` and `reduce_scatter_tensor` are new placeholders for
 # `_all_gather_base` and `_reduce_scatter_base`. They require the most recent
@@ -171,8 +171,7 @@ def fused_cross_entropy_forward(
     losses = torch.empty(*loss_shape, dtype=torch.float, device=logits.device)
     lse = torch.empty(*loss_shape, dtype=torch.float, device=logits.device)
     z_losses = torch.empty(*loss_shape, dtype=torch.float, device=logits.device)
-    # Need this, otherwise Triton tries to launch from cuda:0 and we get
-    # ValueError: Pointer argument (at 0) cannot be accessed from Triton (cpu tensor?)
+
     cross_entropy_fwd_kernel[(n_rows, n_splits)](
         losses,  # data ptrs
         lse,
@@ -231,7 +230,7 @@ def fused_cross_entropy_forward(
 class CrossEntropyLossFunction(torch.autograd.Function):
 
     @staticmethod
-    @contiguous
+    @input_guard
     def forward(
         ctx,
         logits,
@@ -265,7 +264,7 @@ class CrossEntropyLossFunction(torch.autograd.Function):
         return losses, z_losses
 
     @staticmethod
-    @contiguous
+    @input_guard
     def backward(ctx, grad_losses, grad_z_losses):
         del grad_z_losses  # z_losses are only for logging.
 
@@ -275,8 +274,6 @@ class CrossEntropyLossFunction(torch.autograd.Function):
         BLOCK_SIZE = min(triton.next_power_of_2(n_cols), 4 * 1024)
         num_warps = 4 if BLOCK_SIZE < 2048 else (8 if BLOCK_SIZE < 8192 else 16)
         def grid(META): return (n_rows, triton.cdiv(n_cols, META["BLOCK_SIZE"]))  # noqa
-        # Need this, otherwise Triton tries to launch from cuda:0 and we get
-        # ValueError: Pointer argument (at 0) cannot be accessed from Triton (cpu tensor?)
         cross_entropy_bwd_kernel[grid](
             dlogits,  # data ptrs
             grad_losses,

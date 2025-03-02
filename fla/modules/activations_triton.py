@@ -4,7 +4,8 @@
 import torch
 import triton
 import triton.language as tl
-from fla.utils import contiguous, use_cuda_graph
+
+from fla.utils import input_guard, use_cuda_graph
 
 
 @triton.autotune(
@@ -169,7 +170,7 @@ def logsigmoid_bwd_kernel(
     tl.store(dx + o_i, b_dx.to(dx.dtype.element_ty), mask=m_i)
 
 
-@contiguous
+@input_guard
 def swiglu_fwd(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
     T, D = x.numel(), x.shape[-1]
     B = triton.next_power_of_2(triton.cdiv(
@@ -186,7 +187,7 @@ def swiglu_fwd(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
     return o
 
 
-@contiguous
+@input_guard
 def swiglu_bwd(x: torch.Tensor, y: torch.Tensor, dout: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
     T, D = x.numel(), x.shape[-1]
     B = triton.next_power_of_2(triton.cdiv(
@@ -206,7 +207,7 @@ def swiglu_bwd(x: torch.Tensor, y: torch.Tensor, dout: torch.Tensor) -> tuple[to
     return dx, dy
 
 
-@contiguous
+@input_guard
 def swiglu_fwdbwd(
     x: torch.Tensor,
     y: torch.Tensor,

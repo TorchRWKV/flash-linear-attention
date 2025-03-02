@@ -10,7 +10,7 @@ import torch
 import triton
 import triton.language as tl
 
-from fla.utils import contiguous, use_cuda_graph
+from fla.utils import input_guard, use_cuda_graph
 
 
 # `triton.jit`'ed functions can be auto-tuned by using the `triton.autotune` decorator, which consumes:
@@ -145,7 +145,7 @@ def leaky_relu(x):
     return tl.where(x >= 0, x, 0.01 * x)
 
 
-@contiguous
+@input_guard
 def matmul(a, b, activation=''):
     assert a.shape[1] == b.shape[0], 'Incompatible dimensions (A: {}x{}, B: {}x{})'.format(*a.shape, *b.shape)
 
@@ -167,7 +167,7 @@ def matmul(a, b, activation=''):
     return c
 
 
-@contiguous
+@input_guard
 def addmm(
     x: torch.Tensor,
     a: torch.Tensor,

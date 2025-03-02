@@ -11,7 +11,7 @@ from fla.ops.common.chunk_h import chunk_bwd_dh, chunk_fwd_h
 from fla.ops.common.utils import prepare_chunk_indices
 from fla.ops.utils import chunk_local_cumsum
 from fla.ops.utils.exp import safe_exp
-from fla.utils import contiguous, device_capacity, use_cuda_graph
+from fla.utils import device_capacity, input_guard, use_cuda_graph
 
 BT_LIST = [16, 32, 64] if device_capacity else [16, 32]
 BK_LIST = [64, 128] if device_capacity else [16, 32]
@@ -1338,7 +1338,7 @@ def chunk_gla_bwd(
 class ChunkGLAFunction(torch.autograd.Function):
 
     @staticmethod
-    @contiguous
+    @input_guard
     def forward(
         ctx,
         q,
@@ -1387,7 +1387,7 @@ class ChunkGLAFunction(torch.autograd.Function):
         return o, ht
 
     @staticmethod
-    @contiguous
+    @input_guard
     def backward(ctx, do, dht):
         q, k, v, g, g_cumsum, initial_state, A = ctx.saved_tensors
         chunk_size, scale, offsets, indices, head_first = ctx.chunk_size, ctx.scale, ctx.offsets, ctx.indices, ctx.head_first

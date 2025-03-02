@@ -3,18 +3,18 @@
 
 import torch
 import torch.nn.functional as F
-from fla.utils import (autocast_custom_bwd, autocast_custom_fwd,
-                       contiguous, device)
-from fla.modules.activations_triton import (logsigmoid_fwd,
-                                            logsigmoid_bwd)
+
+from fla.modules.activations_triton import logsigmoid_bwd, logsigmoid_fwd
+from fla.utils import (autocast_custom_bwd, autocast_custom_fwd, device,
+                       input_guard)
 
 if device == 'cuda':
-    from fla.modules.activations_cuda import (sigmoid, swish, swiglu_fwd,
-                                              swiglu_bwd, swiglu_fwdbwd)
+    from fla.modules.activations_cuda import (sigmoid, swiglu_bwd, swiglu_fwd,
+                                              swiglu_fwdbwd, swish)
 else:
     sigmoid = F.sigmoid
     swish = F.silu
-    from fla.modules.activations_triton import (swiglu_fwd, swiglu_bwd,
+    from fla.modules.activations_triton import (swiglu_bwd, swiglu_fwd,
                                                 swiglu_fwdbwd)
 
 
@@ -114,14 +114,14 @@ class SwiGLULinearFunction(torch.autograd.Function):
 class LogSigmoidFunction(torch.autograd.Function):
 
     @staticmethod
-    @contiguous
+    @input_guard
     def forward(ctx, x, temperature):
         ctx.save_for_backward(x,)
         ctx.temperature = temperature
         return logsigmoid_fwd(x, temperature)
 
     @staticmethod
-    @contiguous
+    @input_guard
     def backward(ctx, dy):
         x, = ctx.saved_tensors
         return logsigmoid_bwd(x, dy, ctx.temperature), None

@@ -9,9 +9,8 @@ import triton.language as tl
 
 from fla.ops.utils import chunk_global_cumsum, chunk_local_cumsum
 from fla.ops.utils.exp import safe_exp
-from fla.utils import (autocast_custom_bwd, autocast_custom_fwd,
-                       contiguous, is_triton_shared_mem_enough,
-                       use_cuda_graph)
+from fla.utils import (autocast_custom_bwd, autocast_custom_fwd, input_guard,
+                       is_triton_shared_mem_enough, use_cuda_graph)
 
 
 @triton.heuristics({
@@ -620,7 +619,7 @@ def parallel_simple_gla_bwd(
 class ParallelSimpleGLAFunction(torch.autograd.Function):
 
     @staticmethod
-    @contiguous
+    @input_guard
     @autocast_custom_fwd
     def forward(ctx, q, k, v, g, scale, output_attentions, head_first, offsets):
         chunk_size = 128
@@ -653,7 +652,7 @@ class ParallelSimpleGLAFunction(torch.autograd.Function):
         return o.to(q.dtype), attn
 
     @staticmethod
-    @contiguous
+    @input_guard
     @autocast_custom_bwd
     def backward(ctx, do, da=None):
         q, k, v, g, offsets, indices = ctx.saved_tensors

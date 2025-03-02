@@ -11,6 +11,7 @@ import torch.nn.functional as F
 import triton
 import triton.language as tl
 from einops import rearrange
+
 from fla.utils import get_multiprocessor_count
 
 
@@ -146,7 +147,6 @@ def layer_norm_fwd(
     # heuristics for number of warps
     num_warps = min(max(BLOCK_N // 256, 1), 8)
     grid = (M, ngroups)
-
     layer_norm_fwd_kernel[grid](
         x,
         out,
@@ -351,7 +351,6 @@ def layer_norm_bwd(
     _db = torch.empty((nrow_groups, N), dtype=torch.float32, device=bias.device) if bias is not None else None
     rows_per_program = math.ceil(M / nrow_groups)
     grid = (nrow_groups, ngroups)
-
     layer_norm_bwd_kernel[grid](
         x,
         weight,

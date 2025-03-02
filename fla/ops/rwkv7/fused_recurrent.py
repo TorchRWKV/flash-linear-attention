@@ -8,7 +8,7 @@ import triton
 import triton.language as tl
 
 from fla.ops.generalized_delta_rule import fused_recurrent_dplr_delta_rule
-from fla.utils import contiguous, use_cuda_graph
+from fla.utils import input_guard, use_cuda_graph
 
 
 @triton.heuristics({
@@ -109,7 +109,7 @@ def fused_rwkv7_kernel(
 class FusedRecurrentRWKV7Function(torch.autograd.Function):
 
     @staticmethod
-    @contiguous
+    @input_guard
     def forward(ctx, q, k, v, w, a, b,
                 scale=None,
                 initial_state=None,
@@ -151,7 +151,7 @@ class FusedRecurrentRWKV7Function(torch.autograd.Function):
         return output, final_state
 
     @staticmethod
-    @contiguous
+    @input_guard
     def backward(ctx, do, dht):
         raise NotImplementedError(
             "Fused wkv7 backward function is not implemented. "

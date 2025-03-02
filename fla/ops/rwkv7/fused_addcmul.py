@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
 
+import logging
 from typing import Optional
 
 import torch
 import triton
 import triton.language as tl
-from fla.utils import (device, check_pytorch_version,
-                       contiguous, use_cuda_graph)
-import logging
+
+from fla.utils import check_pytorch_version, input_guard, device, use_cuda_graph
 
 logger = logging.getLogger(__name__)
 
@@ -178,7 +178,7 @@ def addcmul_bwd2(d_oxr, d_oxw, d_oxk, d_oxv, d_oxa, d_oxg, xx, use_xg: bool):
 
 class Rwkv7FusedAddcmul(torch.autograd.Function):
     @staticmethod
-    @contiguous
+    @input_guard
     def forward(ctx, hidden_states, xx,
                 x_r, x_w, x_k, x_v, x_a, x_g,
                 num_elements
@@ -221,7 +221,7 @@ class Rwkv7FusedAddcmul(torch.autograd.Function):
         return oxr, oxw, oxk, oxv, oxa, oxg
 
     @staticmethod
-    @contiguous
+    @input_guard
     def backward(ctx, dxr,
                  dxw, dxk, dxv, dxa, dxg):
         hidden_states, xx, x_r, x_w, x_k, x_v, x_a, x_g = ctx.saved_tensors

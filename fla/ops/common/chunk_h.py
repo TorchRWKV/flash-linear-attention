@@ -6,9 +6,9 @@ from typing import Optional, Tuple
 import torch
 import triton
 import triton.language as tl
-from fla.utils import device_capacity, use_cuda_graph
 
 from fla.ops.common.utils import prepare_chunk_offsets
+from fla.utils import device_capacity, use_cuda_graph
 
 BV_LIST = [16, 32, 64] if device_capacity else [16, 32]
 BK_LIST = [16, 32, 64] if device_capacity else [16, 32]

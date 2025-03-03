@@ -123,8 +123,6 @@ class TransformerPreTrainedModel(PreTrainedModel):
                 nn.init.zeros_(module.bias)
         elif isinstance(module, nn.Embedding):
             nn.init.normal_(module.weight, mean=0.0, std=self.config.initializer_range)
-            if module.padding_idx is not None:
-                module.weight.data[module.padding_idx].zero_()
         elif hasattr(module, 'reset_parameters'):
             module.reset_parameters()
 
@@ -308,11 +306,11 @@ class TransformerForCausalLM(TransformerPreTrainedModel, GenerationMixin):
         num_logits_to_keep: Optional[int] = None,
         **kwargs
     ):
-        # only last token for `inputs_ids` if the `past_key_values` is passed along.
-        if past_key_values is not None:
+        # decoding stage, only use the last token. otherwise it is the prefilling stage.
+        if past_key_values is not None and isinstance(past_key_values, Cache):
             input_ids = input_ids[:, -1:]
         # if `inputs_embeds` are passed, we only want to use them in the 1st generation step
-        if inputs_embeds is not None and past_key_values is None:
+        if inputs_embeds is not None and len(past_key_values) == 0:
             model_inputs = {'inputs_embeds': inputs_embeds}
         else:
             # The `contiguous()` here is necessary to have a static stride during decoding. torchdynamo otherwise

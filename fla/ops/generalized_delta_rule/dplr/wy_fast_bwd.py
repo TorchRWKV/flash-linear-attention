@@ -13,9 +13,6 @@ from fla.utils import device_capacity, is_intel_a770, use_cuda_graph
 triton_config = {'grf_mode': 'large'} if is_intel_a770 else {}
 
 
-triton_config = {'grf_mode': 'large'} if is_intel_a770 else {}
-
-
 @triton.heuristics({
     'USE_OFFSETS': lambda args: args['offsets'] is not None
 })

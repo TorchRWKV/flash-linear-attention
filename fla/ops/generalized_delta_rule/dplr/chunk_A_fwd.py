@@ -8,6 +8,7 @@ import torch
 import triton
 import triton.language as tl
 
+from fla.ops.utils.math import exp
 from fla.utils import use_cuda_graph
 
 
@@ -18,7 +19,7 @@ from fla.utils import use_cuda_graph
     configs=[
         triton.Config({'BK': BK}, num_warps=num_warps, num_stages=num_stages)
         for BK in [32, 64]
-        for num_warps in [1, 2, 4, 8]
+        for num_warps in [2, 4, 8, 16]
         for num_stages in [2, 3, 4]
     ],
     key=['BC', 'K'],
@@ -97,13 +98,13 @@ def chunk_dplr_fwd_A_kernel_intra_sub_inter(
         b_a = tl.load(p_a, boundary_check=(0, 1))
         b_gq_i = tl.load(p_gq_i, boundary_check=(0, 1))
         b_gq_e = tl.load(p_gq_e, boundary_check=(0, 1))
-        b_ag = b_a * tl.exp(b_gq_e - b_gn[None, :])
-        b_qg = b_q * tl.exp(b_gq_i - b_gn[None, :]) * scale
+        b_ag = b_a * exp(b_gq_e - b_gn[None, :])
+        b_qg = b_q * exp(b_gq_i - b_gn[None, :]) * scale
         # [BK, BC]
         b_k = tl.load(p_k, boundary_check=(0, 1))
         b_b = tl.load(p_b, boundary_check=(0, 1))
         b_gk = tl.load(p_gk, boundary_check=(0, 1)).to(tl.float32)
-        tmp = tl.exp(b_gn[:, None] - b_gk)
+        tmp = exp(b_gn[:, None] - b_gk)
         b_kg = b_k * tmp
         b_bg = b_b * tmp
         # [BC, BC] using tf32 to improve precision here.
@@ -133,8 +134,9 @@ def chunk_dplr_fwd_A_kernel_intra_sub_inter(
 })
 @triton.autotune(
     configs=[
-        triton.Config({}, num_warps=num_warps)
+        triton.Config({}, num_warps=num_warps, num_stages=num_stages)
         for num_warps in [2, 4, 8, 16, 32]
+        for num_stages in [2, 3, 4]
     ],
     key=['BK', 'BT'],
     use_cuda_graph=use_cuda_graph,
@@ -225,12 +227,12 @@ def chunk_dplr_fwd_A_kernel_intra_sub_intra(
     b_ge = tl.load(p_ge, boundary_check=(0, 1)).to(tl.float32)
 
     # deal with decay term.
-    g_exp = tl.exp(b_gi)
-    g_exp_inv = tl.exp(-b_gi + b_g_last[None, :])
+    g_exp = exp(b_gi)
+    g_exp_inv = exp(-b_gi + b_g_last[None, :])
     b_qg = b_q * g_exp
     b_kg = b_k * g_exp_inv
     b_bg = b_b * g_exp_inv
-    b_ag = b_a * tl.exp(b_ge)
+    b_ag = b_a * exp(b_ge)
     tl.store(p_qg, b_qg.to(p_qg.dtype.element_ty, fp_downcast_rounding="rtne"), boundary_check=(0, 1))
     tl.store(p_bg, b_bg.to(p_bg.dtype.element_ty, fp_downcast_rounding="rtne"), boundary_check=(0, 1))
     tl.store(p_ag, b_ag.to(p_ag.dtype.element_ty, fp_downcast_rounding="rtne"), boundary_check=(0, 1))
@@ -246,12 +248,12 @@ def chunk_dplr_fwd_A_kernel_intra_sub_intra(
         b_k_j = tl.sum(tl.where(mask[:, None], b_k, 0), 0)
         b_gk_j = tl.sum(tl.where(mask[:, None], b_gi, 0), 0)
         b_b_j = tl.sum(tl.where(mask[:, None], b_b, 0), 0)
-        tmp = tl.exp(b_gi - b_gk_j[None, :])
+        tmp = exp(b_gi - b_gk_j[None, :])
         b_A_qk = tl.sum(b_q * b_k_j[None, :] * tmp, 1)
         b_A_qk = tl.where(o_i >= j, b_A_qk, 0.)
         b_A_qb = tl.sum(b_q * b_b_j[None] * tmp, 1)
         b_A_qb = tl.where(o_i >= j, b_A_qb, 0.)
-        tmp2 = tl.exp(b_ge - b_gk_j[None, :])
+        tmp2 = exp(b_ge - b_gk_j[None, :])
         b_A_ak = tl.sum(b_a * b_k_j[None, :] * tmp2, 1)
         b_A_ak = tl.where(o_i > j, b_A_ak, 0.)
         b_A_ab = tl.sum(b_a * b_b_j[None, :] * tmp2, 1)

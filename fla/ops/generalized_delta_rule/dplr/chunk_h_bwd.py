@@ -8,6 +8,7 @@ import triton
 import triton.language as tl
 
 from fla.ops.common.utils import prepare_chunk_offsets
+from fla.ops.utils.math import exp
 from fla.utils import is_triton_shared_mem_enough, use_cuda_graph
 
 
@@ -111,7 +112,7 @@ def chunk_dplr_bwd_kernel_dhu(
             bg_last = tl.load(gk + (i_nh * T + last_idx) * K + tl.arange(0, BK), mask=mask_k)
         else:
             bg_last = tl.load(gk + ((bos + last_idx) * H + i_h) * K + tl.arange(0, BK), mask=mask_k)
-        b_dh *= tl.exp(bg_last)[:, None]
+        b_dh *= exp(bg_last)[:, None]
         b_dh += b_dh_tmp
 
     if USE_INITIAL_STATE:

@@ -8,6 +8,7 @@ import triton
 import triton.language as tl
 
 from fla.ops.common.utils import prepare_chunk_offsets
+from fla.ops.utils.math import exp
 from fla.utils import is_triton_shared_mem_enough, use_cuda_graph
 
 
@@ -111,7 +112,7 @@ def chunk_dplr_fwd_kernel_h(
         else:
             b_g_last = tl.load(gk + (bos + last_idx) * H * K + i_h * K +
                                tl.arange(0, BK), mask=tl.arange(0, BK) < K).to(tl.float32)
-        b_h *= tl.exp(b_g_last[:, None])
+        b_h *= exp(b_g_last[:, None])
         b_h += b_hc
 
     if STORE_FINAL_STATE:

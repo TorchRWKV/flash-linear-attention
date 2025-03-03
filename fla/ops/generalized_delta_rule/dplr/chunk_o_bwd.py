@@ -10,7 +10,7 @@ import triton.language as tl
 
 from fla.utils import (device_capacity, is_triton_shared_mem_enough,
                        use_cuda_graph)
-
+from fla.ops.utils.math import exp
 BK_LIST = [64, 128] if device_capacity else [16, 32]
 
 
@@ -212,7 +212,7 @@ def chunk_dplr_bwd_o_kernel(
     m_k = (i_k*BK+tl.arange(0, BK)) < K
     last_idx = min(i_t * BT + BT, T) - 1
     b_gk_last = tl.load(gk + last_idx * stride_qk + i_k*BK + tl.arange(0, BK), mask=m_k, other=float('-inf'))
-    b_dgk_last *= tl.exp(b_gk_last)
+    b_dgk_last *= exp(b_gk_last)
     p_k = tl.make_block_ptr(k, (T, K), (stride_qk, 1), (i_t * BT, i_k * BK), (BT, BK), (1, 0))
     p_b = tl.make_block_ptr(b, (T, K), (stride_qk, 1), (i_t * BT, i_k * BK), (BT, BK), (1, 0))
     b_k = tl.load(p_k, boundary_check=(0, 1))

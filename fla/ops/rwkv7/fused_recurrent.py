@@ -9,6 +9,7 @@ import triton.language as tl
 
 from fla.ops.generalized_delta_rule import fused_recurrent_dplr_delta_rule
 from fla.utils import input_guard, use_cuda_graph
+from fla.ops.utils.math import exp
 
 
 @triton.heuristics({
@@ -89,7 +90,7 @@ def fused_rwkv7_kernel(
         b_b = tl.load(p_b, mask=mask_k, other=0).to(tl.float32)
         # to store
         tmp = tl.sum(b_h * b_a[None, :], axis=1)
-        b_h = tl.exp(-tl.exp(b_w))[None, :] * b_h + (tmp[:, None] * b_b[None, :] + b_k[None, :] * b_v[:, None])
+        b_h = exp(-exp(b_w))[None, :] * b_h + (tmp[:, None] * b_b[None, :] + b_k[None, :] * b_v[:, None])
         _o = b_h * b_q[None, :]
         _o = tl.sum(_o, axis=1)
         tl.store(p_o, _o.to(p_o.dtype.element_ty), mask=mask_v)

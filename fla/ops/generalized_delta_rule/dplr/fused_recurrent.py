@@ -7,6 +7,7 @@ import torch
 import triton
 import triton.language as tl
 
+from fla.ops.utils.math import exp
 from fla.utils import (autocast_custom_bwd, autocast_custom_fwd, input_guard,
                        use_cuda_graph)
 
@@ -99,7 +100,7 @@ def fused_recurrent_dplr_delta_rule_fwd_kernel(
         b_v = tl.load(p_v, mask=mask_v, other=0).to(tl.float32)
 
         tmp = tl.sum(b_h * b_a[None, :], axis=1)
-        b_h = tl.exp(b_gk)[None, :] * b_h + (tmp[:, None] * b_b[None, :] + b_k[None, :] * b_v[:, None])
+        b_h = exp(b_gk)[None, :] * b_h + (tmp[:, None] * b_b[None, :] + b_k[None, :] * b_v[:, None])
         b_o = tl.sum(b_h * b_q[None, :], axis=1)
 
         tl.store(p_o, b_o.to(p_o.dtype.element_ty), mask=mask_v)

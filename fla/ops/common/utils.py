@@ -13,8 +13,13 @@ def prepare_lens(offsets: torch.LongTensor) -> torch.LongTensor:
 
 
 @tensor_cache
+def prepare_position_ids(offsets: torch.LongTensor) -> torch.LongTensor:
+    return torch.cat([torch.arange(n) for n in prepare_lens(offsets).tolist()]).to(offsets.device)
+
+
+@tensor_cache
 def prepare_token_indices(offsets: torch.LongTensor) -> torch.LongTensor:
-    indices = torch.cat([torch.arange(n) for n in (prepare_lens(offsets)).tolist()])
+    indices = prepare_position_ids(offsets)
     indices = torch.stack([indices.eq(0).cumsum(0) - 1, indices], 1).to(offsets)
     return indices
 

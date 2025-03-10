@@ -189,6 +189,9 @@ def input_guard(
     return wrapper
 
 
+contiguous = input_guard
+
+
 def autocast_contiguous_custom_device_fwd(
     fn: callable
 ) -> callable:

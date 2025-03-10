@@ -34,7 +34,7 @@ class RWKV7Config(PretrainedConfig):
         bos_token_id: int = 1,
         eos_token_id: int = 2,
         tie_word_embeddings: bool = False,
-        initializer_range: float = 0.02,
+        initializer_range: float = 0.006,
         fuse_norm: bool = True,
         fuse_cross_entropy: bool = True,
         vocab_size: int = 32000,
@@ -46,8 +46,15 @@ class RWKV7Config(PretrainedConfig):
         self.intermediate_size = intermediate_size
         self.norm_first = norm_first
         self.num_hidden_layers = num_hidden_layers
+
+        if head_dim is None and num_heads is not None:
+            head_dim = int(hidden_size // num_heads)
+        elif head_dim is not None and num_heads is None:
+            num_heads = int(hidden_size // head_dim)
+
         self.head_dim = head_dim
         self.num_heads = num_heads
+
         self.decay_low_rank_dim = decay_low_rank_dim
         self.gate_low_rank_dim = gate_low_rank_dim
         self.a_low_rank_dim = a_low_rank_dim

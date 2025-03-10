@@ -41,12 +41,13 @@ def chunk_fwd_kernel_h(
     h0,
     ht,
     offsets,
-    chunk_offsets,
+    split_offsets,
     T,
     H: tl.constexpr,
     K: tl.constexpr,
     V: tl.constexpr,
     BT: tl.constexpr,
+    BS: tl.constexpr,
     BK: tl.constexpr,
     BV: tl.constexpr,
     USE_G: tl.constexpr,
@@ -63,11 +64,13 @@ def chunk_fwd_kernel_h(
         bos, eos = tl.load(offsets + i_n).to(tl.int32), tl.load(offsets + i_n + 1).to(tl.int32)
         T = eos - bos
         NT = tl.cdiv(T, BT)
-        boh = tl.load(chunk_offsets + i_n).to(tl.int32)
+        NS = tl.cdiv(T, BS)
+        boh = tl.load(split_offsets + i_n).to(tl.int32)
     else:
         bos, eos = i_n * T, i_n * T + T
         NT = tl.cdiv(T, BT)
-        boh = i_n * NT
+        NS = tl.cdiv(T, BS)
+        boh = i_n * NS
 
     # [BK, BV]
     b_h = tl.zeros([BK, BV], dtype=tl.float32)
@@ -76,20 +79,22 @@ def chunk_fwd_kernel_h(
         b_h = tl.load(p_h0, boundary_check=(0, 1)).to(tl.float32)
 
     for i_t in range(NT):
+        i_s = i_t // (BS // BT)
         if HEAD_FIRST:
             p_k = tl.make_block_ptr(k + i_nh * T*K, (K, T), (1, K), (i_k * BK, i_t * BT), (BK, BT), (0, 1))
             p_v = tl.make_block_ptr(v + i_nh * T*V, (T, V), (V, 1), (i_t * BT, i_v * BV), (BT, BV), (1, 0))
 
-            o_h = (i_nh * NT + i_t).to(tl.int64) * K*V
+            o_h = (i_nh * NS + i_s).to(tl.int64) * K*V
             p_h = tl.make_block_ptr(h + o_h, (K, V), (V, 1), (i_k * BK, i_v * BV), (BK, BV), (1, 0))
         else:
             p_k = tl.make_block_ptr(k + (bos*H + i_h) * K, (K, T), (1, H*K), (i_k * BK, i_t * BT), (BK, BT), (0, 1))
             p_v = tl.make_block_ptr(v + (bos*H + i_h) * V, (T, V), (H*V, 1), (i_t * BT, i_v * BV), (BT, BV), (1, 0))
 
-            o_h = ((boh + i_t) * H + i_h).to(tl.int64) * K*V
+            o_h = ((boh + i_s) * H + i_h).to(tl.int64) * K*V
             p_h = tl.make_block_ptr(h + o_h, (K, V), (V, 1), (i_k * BK, i_v * BV), (BK, BV), (1, 0))
 
-        tl.store(p_h, b_h.to(p_h.dtype.element_ty), boundary_check=(0, 1))
+        if i_t % (BS // BT) == 0:
+            tl.store(p_h, b_h.to(p_h.dtype.element_ty), boundary_check=(0, 1))
         # [BK, BT]
         b_k = tl.load(p_k, boundary_check=(0, 1))
         # [BT, BV]
@@ -175,7 +180,7 @@ def chunk_bwd_kernel_dh(
     dht,
     dh0,
     offsets,
-    chunk_offsets,
+    split_offsets,
     scale,
     T,
     HQ: tl.constexpr,
@@ -183,6 +188,7 @@ def chunk_bwd_kernel_dh(
     K: tl.constexpr,
     V: tl.constexpr,
     BT: tl.constexpr,
+    BS: tl.constexpr,
     BK: tl.constexpr,
     BV: tl.constexpr,
     NG: tl.constexpr,
@@ -202,11 +208,13 @@ def chunk_bwd_kernel_dh(
         bos, eos = tl.load(offsets + i_n).to(tl.int32), tl.load(offsets + i_n + 1).to(tl.int32)
         T = eos - bos
         NT = tl.cdiv(T, BT)
-        boh = tl.load(chunk_offsets + i_n).to(tl.int32)
+        NS = tl.cdiv(T, BS)
+        boh = tl.load(split_offsets + i_n).to(tl.int32)
     else:
         bos, eos = i_n * T, i_n * T + T
         NT = tl.cdiv(T, BT)
-        boh = i_n * NT
+        NS = tl.cdiv(T, BS)
+        boh = i_n * NS
 
     # [BK, BV]
     b_dh = tl.zeros([BK, BV], dtype=tl.float32)
@@ -215,13 +223,16 @@ def chunk_bwd_kernel_dh(
         b_dh += tl.load(p_dht, boundary_check=(0, 1)).to(tl.float32)
 
     for i_t in range(NT - 1, -1, -1):
+        i_s = i_t // (BS // BT)
         if HEAD_FIRST:
-            o_dh = (i_nh * NT + i_t).to(tl.int64) * K*V
+            o_dh = (i_nh * NS + i_s).to(tl.int64) * K*V
             p_dh = tl.make_block_ptr(dh + o_dh, (K, V), (V, 1), (i_k * BK, i_v * BV), (BK, BV), (1, 0))
         else:
-            o_dh = ((boh + i_t) * H + i_h).to(tl.int64) * K*V
+            o_dh = ((boh + i_s) * H + i_h).to(tl.int64) * K*V
             p_dh = tl.make_block_ptr(dh + o_dh, (K, V), (V, 1), (i_k * BK, i_v * BV), (BK, BV), (1, 0))
-        tl.store(p_dh, b_dh.to(p_dh.dtype.element_ty), boundary_check=(0, 1))
+
+        if i_t % (BS // BT) == 0:
+            tl.store(p_dh, b_dh.to(p_dh.dtype.element_ty), boundary_check=(0, 1))
         last_idx = min(i_t * BT + BT, T) - 1
         # [BK, BT]
         if HEAD_FIRST:
@@ -293,9 +304,9 @@ def chunk_fwd_h(
     h0: torch.Tensor,
     output_final_state: bool,
     offsets: Optional[torch.Tensor] = None,
-    indices: Optional[torch.Tensor] = None,
     head_first: bool = True,
     chunk_size: int = 64,
+    split_size: Optional[int] = None,
     states_in_fp32: bool = False
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     if head_first:
@@ -303,17 +314,20 @@ def chunk_fwd_h(
     else:
         B, T, H, K, V = *k.shape, v.shape[-1]
     BT = min(chunk_size, max(16, triton.next_power_of_2(T)))
+    BS = BT if split_size is None else min(split_size, max(16, triton.next_power_of_2(T)))
+    assert BS % BT == 0, f"The `split_size` (got {BS}) must be a multiple of `chunk_size` {BT}"
     # N: the actual number of sequences in the batch with either equal or variable lengths
     if offsets is None:
-        N, NT, chunk_offsets = B, triton.cdiv(T, BT), None
+        N, NS, split_offsets = B, triton.cdiv(T, BS), None
     else:
-        N, NT = len(offsets) - 1, len(indices)
-        chunk_offsets = prepare_chunk_offsets(offsets, BT)
+        N = len(offsets) - 1
+        split_offsets = prepare_chunk_offsets(offsets, BS)
+        NS = len(split_offsets)
 
     if head_first:
-        h = k.new_empty(B, H, NT, K, V, dtype=k.dtype if not states_in_fp32 else torch.float)
+        h = k.new_empty(B, H, NS, K, V, dtype=k.dtype if not states_in_fp32 else torch.float)
     else:
-        h = k.new_empty(B, NT, H, K, V, dtype=k.dtype if not states_in_fp32 else torch.float)
+        h = k.new_empty(B, NS, H, K, V, dtype=k.dtype if not states_in_fp32 else torch.float)
     ht = k.new_empty(N, H, K, V, dtype=torch.float) if output_final_state else None
     def grid(meta): return (triton.cdiv(K, meta['BK']), triton.cdiv(V, meta['BV']), N * H)
     chunk_fwd_kernel_h[grid](
@@ -326,12 +340,13 @@ def chunk_fwd_h(
         h0=h0,
         ht=ht,
         offsets=offsets,
-        chunk_offsets=chunk_offsets,
+        split_offsets=split_offsets,
         T=T,
         H=H,
         K=K,
         V=V,
         BT=BT,
+        BS=BS,
         USE_G=g is not None,
         USE_GK=gk is not None,
         USE_GV=gv is not None,
@@ -352,9 +367,9 @@ def chunk_bwd_dh(
     dht: torch.Tensor,
     scale: float,
     offsets: Optional[torch.Tensor] = None,
-    indices: Optional[torch.Tensor] = None,
     head_first: bool = True,
     chunk_size: int = 64,
+    split_size: Optional[int] = None,
     states_in_fp32: bool = False
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     if head_first:
@@ -364,19 +379,22 @@ def chunk_bwd_dh(
         B, T, H, K, V = *k.shape, v.shape[-1]
         HQ = q.shape[2]
     BT = min(chunk_size, max(16, triton.next_power_of_2(T)))
+    BS = BT if split_size is None else min(split_size, max(16, triton.next_power_of_2(T)))
+    assert BS % BT == 0, f"The `split_size` (got {BS}) must be a multiple of `chunk_size` {BT}"
     # N: the actual number of sequences in the batch with either equal or variable lengths
     # NG: number of groups in GQA
     if offsets is None:
-        N, NT, chunk_offsets = B, triton.cdiv(T, BT), None
+        N, NS, split_offsets = B, triton.cdiv(T, BS), None
     else:
-        N, NT = len(offsets) - 1, len(indices)
-        chunk_offsets = prepare_chunk_offsets(offsets, BT)
+        N = len(offsets) - 1
+        split_offsets = prepare_chunk_offsets(offsets, BS)
+        NS = len(split_offsets) - 1
     NG = HQ // H
 
     if head_first:
-        dh = k.new_empty(B, HQ, NT, K, V, dtype=k.dtype if not states_in_fp32 else torch.float)
+        dh = k.new_empty(B, HQ, NS, K, V, dtype=k.dtype if not states_in_fp32 else torch.float)
     else:
-        dh = k.new_empty(B, NT, HQ, K, V, dtype=k.dtype if not states_in_fp32 else torch.float)
+        dh = k.new_empty(B, NS, HQ, K, V, dtype=k.dtype if not states_in_fp32 else torch.float)
     dh0 = torch.empty_like(h0, dtype=torch.float) if h0 is not None else None
 
     def grid(meta): return (triton.cdiv(K, meta['BK']), triton.cdiv(V, meta['BV']), N * H)
@@ -390,7 +408,7 @@ def chunk_bwd_dh(
         dht=dht,
         dh0=dh0,
         offsets=offsets,
-        chunk_offsets=chunk_offsets,
+        split_offsets=split_offsets,
         scale=scale,
         T=T,
         HQ=HQ,
@@ -398,6 +416,7 @@ def chunk_bwd_dh(
         K=K,
         V=V,
         BT=BT,
+        BS=BS,
         NG=NG,
         USE_G=g is not None,
         USE_GK=gk is not None,

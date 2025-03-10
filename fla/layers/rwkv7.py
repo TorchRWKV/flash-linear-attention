@@ -44,16 +44,14 @@ class RWKV7Attention(nn.Module):
 
         self.key_dim = hidden_size
         self.value_dim = hidden_size
-        if head_dim is not None and num_heads is not None:
-            raise ValueError("Cannot specify both `head_dim` and `num_heads`.")
+        if head_dim is None and num_heads is None:
+            raise ValueError("Either `head_dim` or `num_heads` must be specified.")
         elif head_dim is not None:
             self.head_dim = head_dim
             self.num_heads = int(hidden_size // head_dim)
         elif num_heads is not None:
             self.head_dim = int(hidden_size // num_heads)
             self.num_heads = num_heads
-        else:
-            raise ValueError("Either `head_dim` or `num_heads` must be specified.")
 
         self.decay_low_rank_dim = decay_low_rank_dim
         self.gate_low_rank_dim = gate_low_rank_dim

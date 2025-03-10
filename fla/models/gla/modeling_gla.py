@@ -14,6 +14,7 @@ from transformers.modeling_outputs import (BaseModelOutputWithPast,
                                            CausalLMOutputWithPast)
 from transformers.modeling_utils import PreTrainedModel
 from transformers.utils import logging
+from transformers.utils.deprecation import deprecate_kwarg
 
 from fla.layers.attn import Attention
 from fla.layers.gla import GatedLinearAttention
@@ -123,7 +124,7 @@ class GLAPreTrainedModel(PreTrainedModel):
     def _init_weights(
         self,
         module: nn.Module,
-        rescale_prenorm_residual: bool = True,
+        prenorm_residual_strategy: Optional[str] = 'rescale',
         num_residuals_per_layer: int = 2,
     ):
         if isinstance(module, (nn.Linear, nn.Conv1d)):
@@ -137,21 +138,31 @@ class GLAPreTrainedModel(PreTrainedModel):
         elif hasattr(module, 'reset_parameters'):
             module.reset_parameters()
 
-        if rescale_prenorm_residual:
+        if prenorm_residual_strategy is not None:
             # Reinitialize selected weights subject to the OpenAI GPT-2 Paper Scheme:
             #   > A modified initialization which accounts for the accumulation on the residual path with model depth. Scale
             #   > the weights of residual layers at initialization by a factor of 1/√N where N is the # of residual layers.
             #   >   -- GPT-2 :: https://openai.com/blog/better-language-models/
             #
             # Reference (Megatron-LM): https://github.com/NVIDIA/Megatron-LM/blob/main/megatron/model/gpt_model.py
-            for name, p in module.named_parameters():
-                if name in ["o_proj.weight", "down_proj.weight"]:
-                    # Special Scaled Initialization --> There are 2 Layer Norms per Transformer Block
-                    # Following Pytorch init, except scale by 1/sqrt(2 * n_layer)
-                    # We need to reinit p since this code could be called multiple times
-                    # Having just p *= scale would repeatedly scale it down
+            p = None
+            if hasattr(module, 'o_proj'):
+                p = module.o_proj.weight
+            elif hasattr(module, 'down_proj'):
+                p = module.down_proj.weight
+            if p is not None:
+                # Special Scaled Initialization --> There are 2 Layer Norms per Transformer Block
+                # Following Pytorch init, except scale by 1/sqrt(2 * n_layer)
+                # We need to reinit p since this code could be called multiple times
+                # Having just p *= scale would repeatedly scale it down
+                if prenorm_residual_strategy == 'rescale':
+                    nn.init.kaiming_uniform_(p, a=math.sqrt(5))
                     with torch.no_grad():
                         p /= math.sqrt(num_residuals_per_layer * self.config.num_hidden_layers)
+                elif prenorm_residual_strategy == 'zero':
+                    nn.init.zeros_(p)
+                else:
+                    raise ValueError(f"Invalid prenorm_residual_strategy: {prenorm_residual_strategy}")
 
 
 class GLAModel(GLAPreTrainedModel):
@@ -304,6 +315,7 @@ class GLAForCausalLM(GLAPreTrainedModel, GenerationMixin):
             else:
                 raise exception
 
+    @deprecate_kwarg("num_logits_to_keep", version="4.50", new_name="logits_to_keep")
     def prepare_inputs_for_generation(
         self,
         input_ids: torch.LongTensor = None,
@@ -311,11 +323,11 @@ class GLAForCausalLM(GLAPreTrainedModel, GenerationMixin):
         attention_mask: Optional[torch.Tensor] = None,
         inputs_embeds: Optional[torch.Tensor] = None,
         use_cache: bool = True,
-        num_logits_to_keep: Optional[int] = None,
+        logits_to_keep: Optional[int] = None,
         **kwargs
     ):
-        # only last token for `inputs_ids` if the `past_key_values` is passed along.
-        if past_key_values is not None:
+        # only last token for `inputs_ids` if the `past_key_values` is not empty.
+        if past_key_values is not None and len(past_key_values) > 0:
             input_ids = input_ids[:, -1:]
         # if `inputs_embeds` are passed, we only want to use them in the 1st generation step
         if inputs_embeds is not None and len(past_key_values) == 0:
@@ -327,17 +339,18 @@ class GLAForCausalLM(GLAPreTrainedModel, GenerationMixin):
             # TODO: use `next_tokens` directly instead.
             model_inputs = {'input_ids': input_ids.contiguous()}
 
-        if num_logits_to_keep is not None:
-            model_inputs['num_logits_to_keep'] = num_logits_to_keep
+        if logits_to_keep is not None:
+            model_inputs['logits_to_keep'] = logits_to_keep
 
         model_inputs.update({
             'past_key_values': past_key_values,
             'use_cache': use_cache,
             'attention_mask': attention_mask,
-            'num_logits_to_keep': num_logits_to_keep,
+            'logits_to_keep': logits_to_keep,
         })
         return model_inputs
 
+    @deprecate_kwarg("num_logits_to_keep", version="4.50", new_name="logits_to_keep")
     def forward(
         self,
         input_ids: torch.LongTensor = None,
@@ -349,7 +362,7 @@ class GLAForCausalLM(GLAPreTrainedModel, GenerationMixin):
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
-        num_logits_to_keep: Optional[int] = 0,
+        logits_to_keep: Optional[int] = 0,
         **kwargs: Unpack[Dict]
     ) -> Union[Tuple, CausalLMOutputWithPast]:
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
@@ -375,7 +388,7 @@ class GLAForCausalLM(GLAPreTrainedModel, GenerationMixin):
 
         loss, logits = None, None
         if not fuse_linear_and_cross_entropy or labels is None:
-            logits = self.lm_head(hidden_states if num_logits_to_keep is None else hidden_states[:, -num_logits_to_keep:])
+            logits = self.lm_head(hidden_states if logits_to_keep is None else hidden_states[:, -logits_to_keep:])
         if labels is not None:
             if getattr(self, 'criterion', None) is None:
                 if fuse_linear_and_cross_entropy:

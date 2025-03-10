@@ -1148,7 +1148,6 @@ def chunk_rwkv6_fwd(
         h0=initial_state,
         output_final_state=output_final_state,
         offsets=offsets,
-        indices=indices,
         head_first=head_first,
         chunk_size=chunk_size,
         states_in_fp32=True
@@ -1209,7 +1208,6 @@ def chunk_rwkv6_bwd(
         h0=initial_state,
         output_final_state=False,
         offsets=offsets,
-        indices=indices,
         head_first=head_first,
         chunk_size=chunk_size,
         states_in_fp32=True

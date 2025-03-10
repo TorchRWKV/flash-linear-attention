@@ -27,6 +27,7 @@ from transformers.configuration_utils import PretrainedConfig
 from transformers.generation import GenerationMixin
 from transformers.modeling_utils import PreTrainedModel
 from transformers.utils import ModelOutput, logging
+from transformers.utils.deprecation import deprecate_kwarg
 
 from fla.models.mamba.configuration_mamba import MambaConfig
 from fla.modules import (FusedCrossEntropyLoss, FusedLinearCrossEntropyLoss,
@@ -726,6 +727,7 @@ class MambaForCausalLM(MambaPreTrainedModel, GenerationMixin):
 
         return model_kwargs
 
+    @deprecate_kwarg("num_logits_to_keep", version="4.50", new_name="logits_to_keep")
     def prepare_inputs_for_generation(
         self,
         input_ids,
@@ -734,7 +736,7 @@ class MambaForCausalLM(MambaPreTrainedModel, GenerationMixin):
         cache_params: Optional[MambaCache] = None,
         cache_position: Optional[torch.LongTensor] = None,
         attention_mask: Optional[torch.LongTensor] = None,
-        num_logits_to_keep: Optional[int] = None,
+        logits_to_keep: Optional[int] = None,
         **kwargs,
     ):
         if use_cache:
@@ -763,18 +765,19 @@ class MambaForCausalLM(MambaPreTrainedModel, GenerationMixin):
         else:
             model_inputs = {"input_ids": input_ids.contiguous()}
 
-        if num_logits_to_keep is not None:
-            model_inputs['num_logits_to_keep'] = num_logits_to_keep
+        if logits_to_keep is not None:
+            model_inputs['logits_to_keep'] = logits_to_keep
 
         model_inputs.update({
             'cache_params': cache_params,
             'use_cache': use_cache,
             'cache_position': cache_position,
             'attention_mask': attention_mask,
-            'num_logits_to_keep': num_logits_to_keep,
+            'logits_to_keep': logits_to_keep,
         })
         return model_inputs
 
+    @deprecate_kwarg("num_logits_to_keep", version="4.50", new_name="logits_to_keep")
     def forward(
         self,
         input_ids: Optional[torch.LongTensor] = None,
@@ -786,7 +789,7 @@ class MambaForCausalLM(MambaPreTrainedModel, GenerationMixin):
         return_dict: Optional[bool] = None,
         use_cache: Optional[bool] = None,
         cache_position: Optional[torch.Tensor] = None,
-        num_logits_to_keep: Optional[int] = 0,
+        logits_to_keep: Optional[int] = 0,
         **kwargs,  # for now we need this for generation
     ) -> Union[Tuple, MambaCausalLMOutput]:
         r"""
@@ -812,7 +815,7 @@ class MambaForCausalLM(MambaPreTrainedModel, GenerationMixin):
 
         loss, logits = None, None
         if not fuse_linear_and_cross_entropy or labels is None:
-            logits = self.lm_head(hidden_states if num_logits_to_keep is None else hidden_states[:, -num_logits_to_keep:])
+            logits = self.lm_head(hidden_states if logits_to_keep is None else hidden_states[:, -logits_to_keep:])
         if labels is not None:
             if getattr(self, 'criterion', None) is None:
                 if fuse_linear_and_cross_entropy:

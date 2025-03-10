@@ -12,6 +12,7 @@ from torch import nn
 from transformers.generation import GenerationMixin
 from transformers.modeling_utils import PreTrainedModel
 from transformers.utils import ModelOutput, logging
+from transformers.utils.deprecation import deprecate_kwarg
 
 from fla.layers.attn import Attention
 from fla.models.mamba.modeling_mamba import MambaCache, MambaMixer
@@ -314,6 +315,7 @@ class SambaForCausalLM(SambaPreTrainedModel, GenerationMixin):
         model_kwargs["cache_params"] = outputs.get("cache_params", None)
         return model_kwargs
 
+    @deprecate_kwarg("num_logits_to_keep", version="4.50", new_name="logits_to_keep")
     def prepare_inputs_for_generation(
         self,
         input_ids,
@@ -322,7 +324,7 @@ class SambaForCausalLM(SambaPreTrainedModel, GenerationMixin):
         inputs_embeds=None,
         attention_mask=None,
         use_cache: Optional[bool] = True,
-        num_logits_to_keep: Optional[int] = None,
+        logits_to_keep: Optional[int] = None,
         **kwargs: Unpack[Dict]
     ):
         # only last token for inputs_ids if the state is passed along.
@@ -334,17 +336,18 @@ class SambaForCausalLM(SambaPreTrainedModel, GenerationMixin):
         else:
             model_inputs = {"input_ids": input_ids}
 
-        if num_logits_to_keep is not None:
-            model_inputs['num_logits_to_keep'] = num_logits_to_keep
+        if logits_to_keep is not None:
+            model_inputs['logits_to_keep'] = logits_to_keep
 
         model_inputs.update({
             'cache_params': cache_params,
             'use_cache': use_cache,
             'attention_mask': attention_mask,
-            'num_logits_to_keep': num_logits_to_keep,
+            'logits_to_keep': logits_to_keep,
         })
         return model_inputs
 
+    @deprecate_kwarg("num_logits_to_keep", version="4.50", new_name="logits_to_keep")
     def forward(
         self,
         input_ids: Optional[torch.LongTensor] = None,
@@ -355,7 +358,7 @@ class SambaForCausalLM(SambaPreTrainedModel, GenerationMixin):
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
         use_cache: Optional[bool] = None,
-        num_logits_to_keep: Optional[int] = 0,
+        logits_to_keep: Optional[int] = 0,
         **kwargs: Unpack[Dict]
     ) -> Union[Tuple, SambaCausalLMOutput]:
         r"""
@@ -380,7 +383,7 @@ class SambaForCausalLM(SambaPreTrainedModel, GenerationMixin):
 
         loss, logits = None, None
         if not fuse_linear_and_cross_entropy or labels is None:
-            logits = self.lm_head(hidden_states if num_logits_to_keep is None else hidden_states[:, -num_logits_to_keep:])
+            logits = self.lm_head(hidden_states if logits_to_keep is None else hidden_states[:, -logits_to_keep:])
         if labels is not None:
             if getattr(self, 'criterion', None) is None:
                 if fuse_linear_and_cross_entropy:

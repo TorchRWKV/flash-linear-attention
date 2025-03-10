@@ -87,7 +87,9 @@ class ShortConvolution(nn.Conv1d):
         kernel_size: int,
         bias: bool = False,
         activation: Optional[str] = 'silu',
-        use_fast_conv1d: Optional[bool] = True
+        use_fast_conv1d: Optional[bool] = True,
+        device: Optional[torch.device] = None,
+        dtype: Optional[torch.dtype] = None,
     ):
         super().__init__(
             in_channels=hidden_size,
@@ -95,7 +97,9 @@ class ShortConvolution(nn.Conv1d):
             kernel_size=kernel_size,
             groups=hidden_size,
             bias=bias,
-            padding=kernel_size - 1
+            padding=kernel_size - 1,
+            device=device,
+            dtype=dtype,
         )
 
         self.hidden_size = hidden_size

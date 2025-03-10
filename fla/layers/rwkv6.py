@@ -190,7 +190,6 @@ class RWKV6Attention(nn.Module):
         return o, None, past_key_values
 
 
-@torch.compile(fullgraph=True)
 class LoRA(nn.Module):
 
     def __init__(

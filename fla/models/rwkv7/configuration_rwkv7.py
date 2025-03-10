@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-from typing import Dict, Optional
+from typing import Dict, List, Optional, Union
 
 from transformers.configuration_utils import PretrainedConfig
 
@@ -38,6 +38,7 @@ class RWKV7Config(PretrainedConfig):
         fuse_norm: bool = True,
         fuse_cross_entropy: bool = True,
         vocab_size: int = 32000,
+        value_dim: Optional[Union[int, List[int]]] = None,
         **kwargs
     ):
         self.attn_mode = attn_mode
@@ -52,8 +53,21 @@ class RWKV7Config(PretrainedConfig):
         elif head_dim is not None and num_heads is None:
             num_heads = int(hidden_size // head_dim)
 
+        if value_dim is None:
+            value_dim = [hidden_size] * num_hidden_layers
+        elif isinstance(value_dim, int):
+            assert value_dim >= hidden_size, "value_dim must be greater than hidden_size"
+            assert value_dim % hidden_size == 0, "value_dim must be divisible by hidden_size"
+            value_dim = [value_dim] * num_hidden_layers
+        else:
+            assert len(value_dim) == num_hidden_layers, "value_dim must have the same length as num_hidden_layers"
+            for v in value_dim:
+                assert v >= hidden_size, "value_dim must be greater than hidden_size"
+                assert v % hidden_size == 0, "value_dim must be divisible by hidden_size"
+
         self.head_dim = head_dim
         self.num_heads = num_heads
+        self.value_dim = value_dim
 
         self.decay_low_rank_dim = decay_low_rank_dim
         self.gate_low_rank_dim = gate_low_rank_dim

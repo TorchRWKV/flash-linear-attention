@@ -127,7 +127,8 @@ class RWKV7Block(nn.Module):
                 v_low_rank_dim=config.v_low_rank_dim,
                 norm_eps=config.norm_eps,
                 fuse_norm=config.fuse_norm,
-                layer_idx=layer_idx
+                layer_idx=layer_idx,
+                value_dim=config.value_dim[layer_idx]
             )
         self.ffn_norm = (LayerNorm if config.fuse_norm else nn.LayerNorm)(
             config.hidden_size,

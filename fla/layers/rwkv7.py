@@ -34,6 +34,7 @@ class RWKV7Attention(nn.Module):
         norm_eps: float = 1e-5,
         layer_idx: int = None,
         fuse_norm: bool = False,
+        value_dim: int = None,
         **kwargs
     ) -> RWKV7Attention:
         super().__init__()
@@ -43,7 +44,7 @@ class RWKV7Attention(nn.Module):
         self.hidden_size = hidden_size
 
         self.key_dim = hidden_size
-        self.value_dim = hidden_size
+        self.value_dim = value_dim if value_dim is not None else hidden_size
         if head_dim is None and num_heads is None:
             raise ValueError("Either `head_dim` or `num_heads` must be specified.")
         elif head_dim is not None:
@@ -71,7 +72,7 @@ class RWKV7Attention(nn.Module):
         self.r_proj = nn.Linear(hidden_size, self.key_dim, bias=False)
         self.k_proj = nn.Linear(hidden_size, self.key_dim, bias=False)
         self.v_proj = nn.Linear(hidden_size, self.value_dim, bias=False)
-        self.o_proj = nn.Linear(hidden_size, self.value_dim, bias=False)
+        self.o_proj = nn.Linear(self.value_dim, hidden_size, bias=False)
 
         self.w_lora = LoRA(hidden_size, self.key_dim, low_rank_dim=decay_low_rank_dim, activation='tanh')
         if self.layer_idx != 0:
@@ -170,7 +171,7 @@ class RWKV7Attention(nn.Module):
         # dealing with left-padding
         if attention_mask is not None:
             v = v * attention_mask[:, -v.shape[-2]:, None]
-        r, log_w, k, v, kk, a = map(lambda x: rearrange(x, 'b t (h d) -> b t h d', d=self.head_dim), (r, log_w, k, v, kk, a))
+        r, log_w, k, v, kk, a = map(lambda x: rearrange(x, 'b t (h d) -> b t h d', h=self.num_heads), (r, log_w, k, v, kk, a))
 
         recurrent_state = last_state['recurrent_state'] if last_state is not None else None
 
@@ -201,7 +202,7 @@ class RWKV7Attention(nn.Module):
         if self.fuse_norm:
             o = self.g_norm(rearrange(o, '... h d -> ... (h d)'))
         else:
-            o = self.g_norm(rearrange(o, 'b t h d -> (b t) (h d)')).view(batch_size, seq_len, self.hidden_size)
+            o = self.g_norm(rearrange(o, 'b t h d -> (b t) (h d)')).view(batch_size, seq_len, -1)
 
         o = o + ((r * k * self.r_k).sum(-1, keepdim=True) * v).view(batch_size, seq_len, -1)
         o = self.o_proj(o * g)

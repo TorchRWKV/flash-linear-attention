@@ -12,7 +12,7 @@ import triton
 import triton.language as tl
 from einops import rearrange
 
-from fla.utils import get_multiprocessor_count
+from fla.utils import get_multiprocessor_count, input_guard
 
 
 def rms_norm_ref(x, weight, bias, z=None, eps=1e-6, group_size=None, norm_before_gate=True, upcast=True):
@@ -386,6 +386,7 @@ def layer_norm_bwd(
 
 class LayerNormFn(torch.autograd.Function):
 
+    @input_guard
     @staticmethod
     def forward(ctx, x, weight, bias, z=None, eps=1e-6, group_size=None, norm_before_gate=True,
                 is_rms_norm=False):
@@ -423,6 +424,7 @@ class LayerNormFn(torch.autograd.Function):
         ctx.is_rms_norm = is_rms_norm
         return y.reshape(x_shape_og)
 
+    @input_guard
     @staticmethod
     def backward(ctx, dy):
         x, weight, bias, mean, rstd, z = ctx.saved_tensors

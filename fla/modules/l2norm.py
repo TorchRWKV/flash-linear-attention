@@ -6,7 +6,7 @@ import torch
 import triton
 import triton.language as tl
 
-from fla.utils import use_cuda_graph
+from fla.utils import use_cuda_graph, input_guard
 
 
 @triton.autotune(
@@ -171,6 +171,7 @@ def l2norm_bwd(
 
 class L2NormFunction(torch.autograd.Function):
 
+    @input_guard
     @staticmethod
     def forward(
         ctx,
@@ -185,6 +186,7 @@ class L2NormFunction(torch.autograd.Function):
         ctx.save_for_backward(x)
         return y
 
+    @input_guard
     @staticmethod
     def backward(ctx, dy, *args):
         x, = ctx.saved_tensors

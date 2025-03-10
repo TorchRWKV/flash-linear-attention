@@ -144,14 +144,14 @@ if check_pytorch_version('2.4'):
     autocast_custom_fwd = functools.partial(torch.amp.custom_fwd, device_type=device)
     autocast_custom_bwd = functools.partial(torch.amp.custom_bwd, device_type=device)
 
-    def custom_device_ctx(type: str, index: int):
-        return torch.device(type, index)
+    def custom_device_ctx(index: int):
+        return device_torch_lib.device(index)
 else:
     assert device == 'cuda', 'Only cuda device is supported for PyTorch version < 2.4.0.'
     autocast_custom_fwd = device_torch_lib.amp.custom_fwd
     autocast_custom_bwd = device_torch_lib.amp.custom_bwd
 
-    def custom_device_ctx(type: str, index: int):
+    def custom_device_ctx(index: int):
         return torch.cuda.device(index)
 
 
@@ -179,7 +179,7 @@ def input_guard(
                     break
 
         if tensor is not None:
-            ctx = custom_device_ctx(tensor.device.type, tensor.device.index)
+            ctx = custom_device_ctx(tensor.device.index)
         else:
             ctx = contextlib.nullcontext()
 

@@ -153,7 +153,7 @@ class RWKV7Attention(nn.Module):
 
         r = self.r_proj(xr)
         # -math.exp(-0.5) = -0.6065306597126334
-        log_w = -0.6065306597126334 * self.w_lora(xw).to(torch.float).sigmoid()
+        log_w = -0.6065306597126334 * self.w_lora(xw).sigmoid()
         k = self.k_proj(xk)
         v = self.v_proj(xv)
 

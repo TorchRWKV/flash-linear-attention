@@ -202,7 +202,7 @@ class RWKV7Attention(nn.Module):
             o = self.g_norm(rearrange(o, '... h d -> ... (h d)'))
         else:
             o = self.g_norm(rearrange(o, 'b t h d -> (b t) (h d)')).view(batch_size, seq_len, self.hidden_size)
-        
+
         o = o + ((r * k * self.r_k).sum(-1, keepdim=True) * v).view(batch_size, seq_len, -1)
         o = self.o_proj(o * g)
 

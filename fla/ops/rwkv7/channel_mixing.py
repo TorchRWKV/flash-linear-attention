@@ -83,9 +83,10 @@ def rwkv_channel_mixing_pow_and_relu(
 
 
 def rwkv_mix_torch(x: torch.Tensor, x_prev: torch.Tensor, x_k: torch.Tensor):
-    x_prev = x_prev.unsqueeze(1)  # (batch_size, 1, hidden_dim)
+    if x_prev.dim() == 2:
+        x_prev = x_prev.unsqueeze(1)  # (batch_size, 1, hidden_dim)
     xx = torch.cat((x_prev, x[:, :-1, :]), dim=1) - x
-    k = x + xx * x_k
+    k = x.addcmul(xx, x_k)
     return k
 
 
@@ -244,21 +245,19 @@ def compute_x_k_grad(dk1, x, x_prev):
         x: (batch, seq_len, hidden_dim)
         x_prev: (batch, hidden_dim) or (batch, 1, hidden_dim)
     """
-    hidden_dim = x.shape[2]
 
-    x_prev = x_prev.unsqueeze(1)  # (batch, 1, hidden_dim)
+    if x_prev.dim() == 2:
+        x_prev = x_prev.unsqueeze(1)  # (batch, 1, hidden_dim)
     xx = torch.cat((x_prev, x[:, :-1, :]), dim=1) - x  # (batch, seq_len, hidden_dim)
 
-    grad_x_k = (dk1 * xx.reshape(-1, hidden_dim)).sum(dim=0).unsqueeze(0).unsqueeze(0)    # (hidden_dim,)
-    # (1, 1, hidden_dim)
-
+    # (hidden_dim,) --> (1, 1, hidden_dim)
+    grad_x_k = (dk1 * xx.reshape(-1, x.shape[2])).sum(dim=0).view(1, 1, -1)
     return grad_x_k
 
 
 def rwkv_channel_mixing_bwd(grad_output, x, x_prev, x_k, key_weight, value_weight, k1, k1_K, k, inplace=True):
     batch_size = x.shape[0] if x.dim() == 3 else 1
-    seq_len = x.shape[-2]
-    n_embd = x.shape[-1]
+    seq_len, n_embd = x.shape[-2], x.shape[-1]
 
     dV = k.transpose(-2, -1) @ grad_output
     dk = grad_output @ value_weight.transpose(-2, -1)
@@ -268,17 +267,15 @@ def rwkv_channel_mixing_bwd(grad_output, x, x_prev, x_k, key_weight, value_weigh
     relu_square_bwd_kernel[grid](
         dk,
         k1_K,
-        BLOCK_SIZE=4096
+        BLOCK_SIZE=BLOCK_SIZE
     )
 
     dK = k1.transpose(-2, -1) @ dk
     dk1 = dk @ key_weight.transpose(-2, -1)
     dk1 = dk1.view(-1, n_embd).contiguous()
 
-    dx_prev = torch.empty((batch_size, n_embd), device=x.device, dtype=x.dtype)
-
     dk_reduced = compute_x_k_grad(dk1, x, x_prev)
-
+    dx_prev = torch.empty_like(x_prev) if not inplace else x_prev
     dx = torch.empty_like(x) if not inplace else x
 
     def grid(meta): return ((batch_size * seq_len * n_embd + meta['BLOCK_SIZE'] - 1) // meta['BLOCK_SIZE'], 1, 1)
@@ -317,12 +314,11 @@ class Rwkv7ChannelMixing(torch.autograd.Function):
         k = rwkv_relu_and_square_fwd(k1_K, inplace=False)
         dx, dx_prev, dk_reduced, dK, dV = rwkv_channel_mixing_bwd(
             dkv, x, x_prev, x_k, key_weight, value_weight, k1, k1_K, k, ctx.inplace)
-        return dx, dx_prev, dk_reduced, dK, dV
+        return dx, dx_prev, dk_reduced, dK, dV, None
 
 
 def channel_mixing_rwkv7(x: torch.Tensor, x_prev: torch.Tensor, x_k: torch.Tensor,
-                         key_weight: torch.Tensor, value_weight: torch.Tensor):
+                         key_weight: torch.Tensor, value_weight: torch.Tensor, inplace: bool = True):
     assert x.dim() == 3
-    assert x_prev.dim() == 2
 
-    return Rwkv7ChannelMixing.apply(x, x_prev, x_k, key_weight, value_weight), x[-1, :]
+    return Rwkv7ChannelMixing.apply(x, x_prev, x_k, key_weight, value_weight, inplace), x[-1, :]

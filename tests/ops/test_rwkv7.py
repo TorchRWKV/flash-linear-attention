@@ -131,16 +131,23 @@ def test_rwkv_relu_and_square(seq_len, hidden_dim, dtype, inplace):
 @pytest.mark.parametrize("n_embd", [512, 1024])
 @pytest.mark.parametrize("dim_ffn", [2048, 4096])
 @pytest.mark.parametrize("dtype", [torch.bfloat16])
-def test_channel_mixing_gradients(batch_size, seq_len, n_embd, dim_ffn, dtype):
+@pytest.mark.parametrize("inplace", [True, False])
+@pytest.mark.parametrize("xprevdim", [2, 3])
+def test_channel_mixing_gradients(batch_size, seq_len, n_embd, dim_ffn, dtype, inplace, xprevdim):
     torch.manual_seed(42)
     torch._dynamo.config.cache_size_limit = 512
 
     x = torch.randn(
         batch_size, seq_len, n_embd, device=device, dtype=dtype, requires_grad=True
     )
-    x_prev = torch.randn(
-        batch_size, n_embd, device=device, dtype=dtype, requires_grad=True
-    )
+    if xprevdim == 3:
+        x_prev = torch.randn(
+            batch_size, 1, n_embd, device=device, dtype=dtype, requires_grad=True
+        )
+    else:
+        x_prev = torch.randn(
+            batch_size, n_embd, device=device, dtype=dtype, requires_grad=True
+        )
     x_k = torch.randn(1, 1, n_embd, device=device, dtype=dtype, requires_grad=True)
     K_ = torch.randn(n_embd, dim_ffn, device=device, dtype=dtype, requires_grad=True)
     V_ = torch.randn(dim_ffn, n_embd, device=device, dtype=dtype, requires_grad=True)
@@ -161,7 +168,7 @@ def test_channel_mixing_gradients(batch_size, seq_len, n_embd, dim_ffn, dtype):
     loss1 = out1.mean() + last1.mean()
     loss1.backward()
 
-    out2, last2 = channel_mixing_rwkv7(x2, x_prev2, x_k2, K_2, V_2)
+    out2, last2 = channel_mixing_rwkv7(x2, x_prev2, x_k2, K_2, V_2, inplace)
     loss2 = out2.mean() + last2.mean()
     loss2.backward()
 

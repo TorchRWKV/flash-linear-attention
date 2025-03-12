@@ -318,11 +318,10 @@ def chunk_fwd_h(
     assert BS % BT == 0, f"The `split_size` (got {BS}) must be a multiple of `chunk_size` {BT}"
     # N: the actual number of sequences in the batch with either equal or variable lengths
     if offsets is None:
-        N, NS, split_offsets = B, triton.cdiv(T, BS), None
+        split_offsets, N, NS = None, B, triton.cdiv(T, BS)
     else:
-        N = len(offsets) - 1
         split_offsets = prepare_chunk_offsets(offsets, BS)
-        NS = len(split_offsets)
+        N, NS = len(offsets) - 1, split_offsets[-1]
 
     if head_first:
         h = k.new_empty(B, H, NS, K, V, dtype=k.dtype if not states_in_fp32 else torch.float)
@@ -384,11 +383,10 @@ def chunk_bwd_dh(
     # N: the actual number of sequences in the batch with either equal or variable lengths
     # NG: number of groups in GQA
     if offsets is None:
-        N, NS, split_offsets = B, triton.cdiv(T, BS), None
+        split_offsets, N, NS = None, B, triton.cdiv(T, BS)
     else:
-        N = len(offsets) - 1
         split_offsets = prepare_chunk_offsets(offsets, BS)
-        NS = len(split_offsets) - 1
+        N, NS = len(offsets) - 1, split_offsets[-1]
     NG = HQ // H
 
     if head_first:

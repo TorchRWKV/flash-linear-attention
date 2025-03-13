@@ -28,6 +28,7 @@ def convert(
     while f'blocks.{config.num_hidden_layers}.ffn.key.weight' in weights:
         config.num_hidden_layers += 1
     # 12
+    config.value_dim = [config.hidden_size] * config.num_hidden_layers
     config.decay_low_rank_dim = weights['blocks.0.att.w1'].shape[1]  # 64
     config.gate_low_rank_dim = weights['blocks.0.att.g1'].shape[1]  # 128
     config.a_low_rank_dim = weights['blocks.0.att.a1'].shape[1]  # 64

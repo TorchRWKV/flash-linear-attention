@@ -160,12 +160,13 @@ class MultiScaleRetention(nn.Module):
         if past_key_values is not None and len(past_key_values) > self.layer_idx:
             last_state = past_key_values[self.layer_idx]
 
+        cu_seqlens = kwargs.get('cu_seqlens', None)
         if self.use_short_conv:
             conv_state_q, conv_state_k, conv_state_v = None, None, None
             if last_state is not None:
                 conv_state_q, conv_state_k, conv_state_v = last_state['conv_state']
             conv_mask = attention_mask[:, -hidden_states.shape[1]:] if attention_mask is not None else None
-            position_ids = kwargs.get('position_ids', None)
+            position_ids = kwargs.get('position_ids', None) if cu_seqlens is not None else None
             q, conv_state_q = self.q_conv1d(x=self.q_proj(hidden_states),
                                             mask=conv_mask,
                                             cache=conv_state_q,
@@ -219,6 +220,7 @@ class MultiScaleRetention(nn.Module):
                 v=v,
                 initial_state=recurrent_state,
                 output_final_state=use_cache,
+                cu_seqlens=cu_seqlens,
                 head_first=False
             )
         elif mode == 'fused_chunk':
@@ -228,10 +230,17 @@ class MultiScaleRetention(nn.Module):
                 v=v,
                 initial_state=recurrent_state,
                 output_final_state=use_cache,
+                cu_seqlens=cu_seqlens,
                 head_first=False
             )
         elif mode == 'parallel':
-            o, recurrent_state = parallel_retention(q, k, v, head_first=False)
+            o, recurrent_state = parallel_retention(
+                q=q,
+                k=k,
+                v=v,
+                cu_seqlens=cu_seqlens,
+                head_first=False
+            )
         elif mode == 'fused_recurrent':
             o, recurrent_state = fused_recurrent_retention(
                 q=q,
@@ -239,6 +248,7 @@ class MultiScaleRetention(nn.Module):
                 v=v,
                 initial_state=recurrent_state,
                 output_final_state=use_cache,
+                cu_seqlens=cu_seqlens,
                 head_first=False
             )
         else:

@@ -339,7 +339,6 @@ class ABCForCausalLM(ABCPreTrainedModel, GenerationMixin):
             'past_key_values': past_key_values,
             'use_cache': use_cache,
             'attention_mask': attention_mask,
-            'logits_to_keep': logits_to_keep,
         })
         return model_inputs
 

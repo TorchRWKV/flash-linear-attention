@@ -5,8 +5,10 @@
 # The models we train have hidden dim up to 8k anyway (e.g. Llama 70B), so this is fine.
 
 import math
+from typing import Optional
 
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 import triton
 import triton.language as tl
@@ -458,9 +460,17 @@ def rmsnorm_fn(x, weight, bias, z=None, eps=1e-6, group_size=None, norm_before_g
     return LayerNormFn.apply(x, weight, bias, z, eps, group_size, norm_before_gate, True)
 
 
-class LayerNormGated(torch.nn.Module):
+class LayerNormGated(nn.Module):
 
-    def __init__(self, hidden_size, eps=1e-5, group_size=None, norm_before_gate=True, device=None, dtype=None):
+    def __init__(
+        self,
+        hidden_size,
+        eps: float = 1e-5,
+        group_size: Optional[int] = None,
+        norm_before_gate: bool = True,
+        device: Optional[torch.device] = None,
+        dtype: Optional[torch.dtype] = None,
+    ):
         """If group_size is not None, we do GroupNorm with each group having group_size elements.
         group_size=None is equivalent to group_size=hidden_size (i.e. there's only 1 group).
         """
@@ -468,8 +478,8 @@ class LayerNormGated(torch.nn.Module):
         factory_kwargs = {"device": device, "dtype": dtype}
         super().__init__()
         self.eps = eps
-        self.weight = torch.nn.Parameter(torch.empty(hidden_size, **factory_kwargs))
-        self.bias = torch.nn.Parameter(torch.empty(hidden_size, **factory_kwargs))
+        self.weight = nn.Parameter(torch.empty(hidden_size, **factory_kwargs))
+        self.bias = nn.Parameter(torch.empty(hidden_size, **factory_kwargs))
         self.group_size = group_size
         self.norm_before_gate = norm_before_gate
         self.reset_parameters()
@@ -485,16 +495,24 @@ class LayerNormGated(torch.nn.Module):
                             norm_before_gate=self.norm_before_gate)
 
 
-class RMSNormGated(torch.nn.Module):
+class RMSNormGated(nn.Module):
 
-    def __init__(self, hidden_size, eps=1e-5, group_size=None, norm_before_gate=False, device=None, dtype=None):
+    def __init__(
+        self,
+        hidden_size,
+        eps: float = 1e-5,
+        group_size: Optional[int] = None,
+        norm_before_gate: bool = False,
+        device: Optional[torch.device] = None,
+        dtype: Optional[torch.dtype] = None,
+    ):
         """If group_size is not None, we do GroupNorm with each group having group_size elements.
         group_size=None is equivalent to group_size=hidden_size (i.e. there's only 1 group).
         """
         factory_kwargs = {"device": device, "dtype": dtype}
         super().__init__()
         self.eps = eps
-        self.weight = torch.nn.Parameter(torch.empty(hidden_size, **factory_kwargs))
+        self.weight = nn.Parameter(torch.empty(hidden_size, **factory_kwargs))
         self.register_parameter("bias", None)
         self.group_size = group_size
         self.norm_before_gate = norm_before_gate

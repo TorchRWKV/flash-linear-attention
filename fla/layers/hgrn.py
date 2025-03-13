@@ -87,12 +87,13 @@ class HGRNAttention(nn.Module):
         if past_key_values is not None and len(past_key_values) > self.layer_idx:
             last_state = past_key_values[self.layer_idx]
 
+        cu_seqlens = kwargs.get('cu_seqlens', None)
         if self.use_short_conv:
             conv_state_i, conv_state_f = None, None
             if last_state is not None:
                 conv_state_i, conv_state_f = last_state['conv_state']
             conv_mask = attention_mask[:, -hidden_states.shape[1]:] if attention_mask is not None else None
-            position_ids = kwargs.get('position_ids', None)
+            position_ids = kwargs.get('position_ids', None) if cu_seqlens is not None else None
             i, conv_state_i = self.i_conv1d(x=self.i_proj(hidden_states),
                                             mask=conv_mask,
                                             cache=conv_state_i,
@@ -120,10 +121,11 @@ class HGRNAttention(nn.Module):
 
         recurrent_state = last_state['recurrent_state'] if last_state is not None else None
         if mode == 'chunk':
+            if cu_seqlens is not None:
+                raise NotImplementedError("Chunk mode with `cu_seqlens` is not supported yet.")
             o, recurrent_state = chunk_hgrn(i, f, recurrent_state, use_cache)
         elif mode == 'fused_recurrent':
-            o, recurrent_state = fused_recurrent_hgrn(i, f, recurrent_state, use_cache,
-                                                      cu_seqlens=kwargs.get('cu_seqlens', None))
+            o, recurrent_state = fused_recurrent_hgrn(i, f, recurrent_state, use_cache, cu_seqlens=cu_seqlens)
         else:
             raise NotImplementedError(f"Not supported mode `{mode}`.")
 

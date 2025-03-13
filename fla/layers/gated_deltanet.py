@@ -126,8 +126,6 @@ class GatedDeltaNet(nn.Module):
         A_log = torch.log(A)
         self.A_log = nn.Parameter(A_log)
         self.A_log._no_weight_decay = True
-        self.D = nn.Parameter(torch.ones(self.num_heads))
-        self.D._no_weight_decay = True
         # hard coded for now
         dt_min = 0.001
         dt_max = 0.1
@@ -197,12 +195,13 @@ class GatedDeltaNet(nn.Module):
         if past_key_values is not None and len(past_key_values) > self.layer_idx:
             last_state = past_key_values[self.layer_idx]
 
+        cu_seqlens = kwargs.get('cu_seqlens', None)
         if self.use_short_conv:
             conv_state_q, conv_state_k, conv_state_v = None, None, None
             if last_state is not None:
                 conv_state_q, conv_state_k, conv_state_v = last_state['conv_state']
             conv_mask = attention_mask[:, -hidden_states.shape[1]:] if attention_mask is not None else None
-            position_ids = kwargs.get('position_ids', None)
+            position_ids = kwargs.get('position_ids', None) if cu_seqlens is not None else None
             q, conv_state_q = self.q_conv1d(x=self.q_proj(hidden_states),
                                             mask=conv_mask,
                                             cache=conv_state_q,
@@ -234,7 +233,6 @@ class GatedDeltaNet(nn.Module):
             g = g.mul(attention_mask[:, -g.shape[-2]:, None])
 
         recurrent_state = last_state['recurrent_state'] if last_state is not None else None
-        cu_seqlens = kwargs.get('cu_seqlens', None)
         if mode == 'chunk':
             o, recurrent_state = chunk_gated_delta_rule(
                 q=q,

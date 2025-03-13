@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import math
+from typing import Optional
 
 import torch
 import torch.nn as nn
@@ -644,8 +645,11 @@ class FusedLayerNormSwishGate(nn.Module):
         self,
         hidden_size,
         elementwise_affine: bool = True,
-        eps=1e-5
+        eps: float = 1e-5,
+        device: Optional[torch.device] = None,
+        dtype: Optional[torch.dtype] = None,
     ) -> FusedLayerNormSwishGate:
+        factory_kwargs = {"device": device, "dtype": dtype}
         super().__init__()
 
         self.hidden_size = hidden_size
@@ -653,7 +657,7 @@ class FusedLayerNormSwishGate(nn.Module):
         self.eps = eps
 
         if elementwise_affine:
-            self.weight = nn.Parameter(torch.ones(hidden_size))
+            self.weight = nn.Parameter(torch.ones(hidden_size, **factory_kwargs))
         else:
             self.register_parameter("weight", None)
         self.register_parameter("bias", None)
@@ -685,8 +689,11 @@ class FusedRMSNormSwishGate(nn.Module):
         self,
         hidden_size,
         elementwise_affine: bool = True,
-        eps=1e-5
+        eps: float = 1e-5,
+        device: Optional[torch.device] = None,
+        dtype: Optional[torch.dtype] = None,
     ) -> FusedRMSNormSwishGate:
+        factory_kwargs = {"device": device, "dtype": dtype}
         super().__init__()
 
         self.hidden_size = hidden_size
@@ -694,7 +701,7 @@ class FusedRMSNormSwishGate(nn.Module):
         self.eps = eps
 
         if elementwise_affine:
-            self.weight = nn.Parameter(torch.ones(hidden_size))
+            self.weight = nn.Parameter(torch.ones(hidden_size, **factory_kwargs))
         else:
             self.register_parameter("weight", None)
         self.register_parameter("bias", None)
@@ -726,8 +733,11 @@ class FusedLayerNormSwishGateLinear(nn.Module):
         self,
         hidden_size,
         elementwise_affine: bool = True,
-        eps=1e-5
+        eps: float = 1e-5,
+        device: Optional[torch.device] = None,
+        dtype: Optional[torch.dtype] = None,
     ) -> FusedLayerNormSwishGateLinear:
+        factory_kwargs = {"device": device, "dtype": dtype}
         super().__init__()
 
         self.hidden_size = hidden_size
@@ -735,7 +745,7 @@ class FusedLayerNormSwishGateLinear(nn.Module):
         self.eps = eps
 
         if elementwise_affine:
-            self.weight = nn.Parameter(torch.ones(hidden_size))
+            self.weight = nn.Parameter(torch.ones(hidden_size, **factory_kwargs))
         else:
             self.register_parameter("weight", None)
         self.register_parameter("bias", None)
@@ -769,8 +779,11 @@ class FusedRMSNormSwishGateLinear(nn.Module):
         self,
         hidden_size,
         elementwise_affine: bool = True,
-        eps=1e-5
+        eps: float = 1e-5,
+        device: Optional[torch.device] = None,
+        dtype: Optional[torch.dtype] = None,
     ) -> FusedRMSNormSwishGateLinear:
+        factory_kwargs = {"device": device, "dtype": dtype}
         super().__init__()
 
         self.hidden_size = hidden_size
@@ -778,7 +791,7 @@ class FusedRMSNormSwishGateLinear(nn.Module):
         self.eps = eps
 
         if elementwise_affine:
-            self.weight = nn.Parameter(torch.ones(hidden_size))
+            self.weight = nn.Parameter(torch.ones(hidden_size, **factory_kwargs))
         else:
             self.register_parameter("weight", None)
         self.register_parameter("bias", None)

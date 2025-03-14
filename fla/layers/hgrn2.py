@@ -15,6 +15,7 @@ from einops import rearrange
 from fla.modules import RMSNorm, ShortConvolution
 from fla.modules.activations import swish
 from fla.modules.layernorm import rms_norm_linear
+from fla.ops.common.utils import prepare_position_ids, prepare_sequence_ids
 from fla.ops.gla import chunk_gla, fused_chunk_gla, fused_recurrent_gla
 
 if TYPE_CHECKING:
@@ -104,28 +105,33 @@ class HGRN2Attention(nn.Module):
         if past_key_values is not None and len(past_key_values) > self.layer_idx:
             last_state = past_key_values[self.layer_idx]
 
-        cu_seqlens = kwargs.get('cu_seqlens', None)
+        cu_seqlens, position_ids, seq_idx = kwargs.get('cu_seqlens', None), kwargs.get('position_ids', None), None
         if self.use_short_conv:
             conv_state_q, conv_state_f, conv_state_i = None, None, None
             if last_state is not None:
                 conv_state_q, conv_state_f, conv_state_i = last_state['conv_state']
             conv_mask = attention_mask[:, -hidden_states.shape[1]:] if attention_mask is not None else None
-            position_ids = kwargs.get('position_ids', None) if cu_seqlens is not None else None
+            if cu_seqlens is not None:
+                if position_ids is not None:
+                    seq_idx = prepare_sequence_ids(position_ids)
+                else:
+                    seq_idx = prepare_sequence_ids(prepare_position_ids(cu_seqlens))
+                seq_idx = seq_idx.to(torch.int32).unsqueeze(0)
             q, conv_state_q = self.q_conv1d(x=self.q_proj(hidden_states),
                                             mask=conv_mask,
                                             cache=conv_state_q,
                                             output_final_state=use_cache,
-                                            seq_idx=position_ids)
+                                            seq_idx=seq_idx)
             f, conv_state_f = self.f_conv1d(x=self.f_proj(hidden_states),
                                             mask=conv_mask,
                                             cache=conv_state_f,
                                             output_final_state=use_cache,
-                                            seq_idx=position_ids)
+                                            seq_idx=seq_idx)
             i, conv_state_i = self.i_conv1d(x=self.i_proj(hidden_states),
                                             mask=conv_mask,
                                             cache=conv_state_i,
                                             output_final_state=use_cache,
-                                            seq_idx=position_ids)
+                                            seq_idx=seq_idx)
         else:
             q = self.q_proj(hidden_states)
             f = self.f_proj(hidden_states)

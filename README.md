@@ -404,6 +404,22 @@ $ python -m evals.harness --model hf \
 We've made `fla` compatible with hf-style evaluations, you can call [evals.harness](evals/harness.py) to finish the evaluations.
 Running the command above will provide the task results reported in the GLA paper.
 
+3. Multi-GPU Evaluation with Hugging Face accelerate 🚀
+
+To perform data-parallel evaluation (where each GPU loads a separate full copy of the model), we leverage the accelerate launcher as follows:
+```sh
+$ PATH='fla-hub/gla-1.3B-100B'
+$ accelerate launch -m evals.harness --model hf \
+    --model_args pretrained=$PATH,dtype=bfloat16 \
+    --tasks wikitext,lambada_openai,piqa,hellaswag,winogrande,arc_easy,arc_challenge,boolq,sciq,copa,openbookqa \
+    --batch_size 64 \
+    --num_fewshot 0 \
+    --device cuda \
+    --show_config  
+```
+
+If a GPU can't load a full copy of the model, please refer to [this link](https://github.com/EleutherAI/lm-evaluation-harness?tab=readme-ov-file#multi-gpu-evaluation-with-hugging-face-accelerate) for FSDP settings.
+
 > [!Tip]
 > If you are using `lm-evaluation-harness` as an external library and can't find (almost) any tasks available, before calling `lm_eval.evaluate()` or `lm_eval.simple_evaluate()`, simply run the following to load the library's stock tasks!
 ```py

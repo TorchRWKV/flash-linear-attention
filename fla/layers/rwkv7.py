@@ -8,11 +8,11 @@ from typing import TYPE_CHECKING, Optional, Tuple
 import torch
 import torch.nn as nn
 from einops import rearrange
-
 from fla.layers.rwkv6 import LoRA
 from fla.modules import GroupNorm
 from fla.modules.l2norm import l2_norm
 from fla.ops.rwkv7 import chunk_rwkv7, fused_recurrent_rwkv7
+from torch.nn import functional as F
 
 if TYPE_CHECKING:
     from fla.models.utils import Cache
@@ -165,7 +165,12 @@ class RWKV7Attention(nn.Module):
         a = self.a_lora(xa).sigmoid()
         g = self.g_lora(xg)
 
-        kk = l2_norm((k * self.k_k).view(batch_size, seq_len, self.num_heads, -1)).view(batch_size, seq_len, -1)
+        if self.fuse_norm:
+            kk = l2_norm((k * self.k_k).view(batch_size, seq_len, self.num_heads, -1)).view(batch_size, seq_len, -1)
+        else:
+            kk = F.normalize((k * self.k_k).view(batch_size, seq_len, self.num_heads, -1),
+                             dim=-1, p=2.0).view(batch_size, seq_len, -1)
+
         k = k.addcmul(k * (a - 1), self.k_a)
 
         # dealing with left-padding

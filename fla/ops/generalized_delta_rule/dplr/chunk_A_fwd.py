@@ -8,7 +8,7 @@ import torch
 import triton
 import triton.language as tl
 
-from fla.ops.utils.math import exp
+from fla.ops.utils.fastmath import exp
 from fla.utils import use_cuda_graph
 
 

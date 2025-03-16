@@ -18,8 +18,6 @@ from fla.ops.rwkv6 import chunk_rwkv6, fused_recurrent_rwkv6
 if TYPE_CHECKING:
     from fla.models.utils import Cache
 
-torch._dynamo.config.cache_size_limit = 512
-
 
 class RWKV6Attention(nn.Module):
 

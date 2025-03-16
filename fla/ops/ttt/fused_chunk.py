@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # Copyright (c) 2023-2025, Songlin Yang, Yu Zhang, Yuqi Pan
 
-from typing import Optional, Tuple
+from typing import Optional
 
 import torch
 import triton
@@ -83,7 +83,7 @@ def fused_chunk_ttt_linear_fwd_kernel(
     if USE_INITIAL_STATE_B:
         p_hb0 = tl.make_block_ptr(hb0 + i_nh * V, (V,), (1,), (0,), (BV,), (0,))
         b_hb = tl.load(p_hb0, boundary_check=(0,), padding_option="zero").to(tl.float32)
-    
+
     for i_t in range(NT):
         if HEAD_FIRST:
             p_q = tl.make_block_ptr(q+i_nh*T*K, (T, K), (K, 1), (i_t*BT, 0), (BT, BK), (1, 0))
@@ -117,14 +117,14 @@ def fused_chunk_ttt_linear_fwd_kernel(
             b_b[None, :].to(b_k.dtype) - b_v.to(b_k.dtype) + tl.trans(b_k)
         b_v = tl.where((v_i < V)[None, :], b_v * b_w[None, :].to(b_k.dtype), 0.)
         b_v2 = rstd * (V * b_v - tl.sum(b_v, axis=1, keep_dims=True) - b_kh_hat.to(b_k.dtype)
-                        * tl.sum(b_v * b_kh_hat.to(b_k.dtype), axis=1, keep_dims=True)) / V
+                       * tl.sum(b_v * b_kh_hat.to(b_k.dtype), axis=1, keep_dims=True)) / V
 
         # [BT, BK]
         b_q = tl.load(p_q, boundary_check=(0, 1), padding_option="zero")
         # [BT]
         b_e = tl.load(p_e, boundary_check=(0,), padding_option="zero")
         b_q = (b_q * scale).to(b_k.dtype)
-        
+
         # [BT, BT]
         b_A = tl.dot(b_q, b_k, allow_tf32=False)
         b_A = tl.where(m_A, b_A, 0)
@@ -200,7 +200,7 @@ def fused_chunk_ttt_linear_bwd_kernel_h(
     m_A = o_i[:, None] >= o_i[None, :]
     b_w = tl.load(w + i_h * V + v_i, mask=v_i < V, other=0.)
     b_b = tl.load(b + i_h * V + v_i, mask=v_i < V, other=0.)
-    
+
     # [BK, BV]
     b_h = tl.zeros([BK, BV], dtype=tl.float32)
     # [BV]
@@ -211,7 +211,7 @@ def fused_chunk_ttt_linear_bwd_kernel_h(
     if USE_INITIAL_STATE_B:
         p_hb0 = tl.make_block_ptr(hb0 + i_nh * V, (V,), (1,), (0,), (BV,), (0,))
         b_hb = tl.load(p_hb0, boundary_check=(0,), padding_option="zero").to(tl.float32)
-    
+
     for i_t in range(NT):
         if HEAD_FIRST:
             p_h = tl.make_block_ptr(h+(i_nh*NT+i_t)*K*V, (K, V), (V, 1), (0, 0), (BK, BV), (1, 0))
@@ -255,7 +255,7 @@ def fused_chunk_ttt_linear_bwd_kernel_h(
             b_b[None, :].to(b_k.dtype) - b_v.to(b_k.dtype) + tl.trans(b_k)
         b_v = tl.where((v_i < V)[None, :], b_v * b_w[None, :].to(b_k.dtype), 0.)
         b_v2 = rstd * (V * b_v - tl.sum(b_v, axis=1, keep_dims=True) - b_kh_hat.to(b_k.dtype)
-                        * tl.sum(b_v * b_kh_hat.to(b_k.dtype), axis=1, keep_dims=True)) / V
+                       * tl.sum(b_v * b_kh_hat.to(b_k.dtype), axis=1, keep_dims=True)) / V
         tl.store(p_x, b_kh_hat.to(p_x.dtype.element_ty), boundary_check=(0, 1))
         tl.store(p_y, b_v.to(p_y.dtype.element_ty), boundary_check=(0, 1))
         tl.store(p_r, rstd.to(p_r.dtype.element_ty), boundary_check=(0, 1))
@@ -431,7 +431,7 @@ def fused_chunk_ttt_linear_bwd_kernel_dh(
         b_dkh -= b_rstd * b_rstd * b_drstd * b_x / V
         b_dkh = tl.where((v_i < V)[None, :] * (o_i < T-i_t*BT)[:, None], b_dkh, 0.)
         b_dk += tl.dot(b_dkh, b_h.to(b_dkh.dtype)).to(b_k.dtype)
-        
+
         b_ds = tl.dot(b_do, tl.trans(b_v2))
         b_ds = tl.where(m_A, b_ds, 0)
         b_ds = b_ds.to(b_k.dtype)
@@ -487,7 +487,7 @@ def fused_chunk_ttt_linear_bwd_h(
     N, NT = B, triton.cdiv(T, BT)
     BK, BV = triton.next_power_of_2(K), triton.next_power_of_2(V)
     assert max(BK, BV) <= 128, "current kernel does not support head dimension larger than 128."
-    
+
     if head_first:
         h = k.new_empty(B, H, NT, K, V)
         r = v.new_empty(B, H, T, 1, dtype=torch.float32)
@@ -560,7 +560,7 @@ def fused_chunk_ttt_linear_bwd_dh(
     N = B
     BK, BV = triton.next_power_of_2(K), triton.next_power_of_2(V)
     assert max(BK, BV) <= 128, "current kernel does not support head dimension larger than 128."
-    
+
     dh0 = torch.empty_like(initial_state, dtype=torch.float32) if initial_state is not None else None
     dhb0 = torch.empty_like(initial_state_bias, dtype=torch.float32) if initial_state_bias is not None else None
     dk = torch.empty_like(k)
@@ -634,7 +634,7 @@ def fused_chunk_ttt_linear_fwd(
     o = torch.empty_like(v)
     final_state = k.new_empty(N, H, K, V, dtype=torch.float32) if output_final_state else None
     final_state_bias = k.new_empty(N, H, 1, V, dtype=torch.float32) if output_final_state else None
-    
+
     grid = (N * H,)
     fused_chunk_ttt_linear_fwd_kernel[grid](
         q=q,
@@ -728,7 +728,8 @@ class FusedChunkTTTLinearFunction(torch.autograd.Function):
     @staticmethod
     @input_guard
     @autocast_custom_fwd
-    def forward(ctx, q, k, v, w, b, BT, eta, scale, eps, initial_state, initial_state_bias, output_final_state, offsets, head_first):
+    def forward(ctx, q, k, v, w, b, BT, eta, scale, eps, initial_state,
+                initial_state_bias, output_final_state, offsets, head_first):
         o, final_state, final_state_bias = fused_chunk_ttt_linear_fwd(
             q=q,
             k=k,

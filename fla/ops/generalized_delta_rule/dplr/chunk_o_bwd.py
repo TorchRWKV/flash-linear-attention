@@ -11,8 +11,6 @@ import triton.language as tl
 from fla.utils import (device_capacity, is_triton_shared_mem_enough,
                        use_cuda_graph)
 from fla.ops.utils.fastmath import exp
-BK_LIST = [64, 128] if device_capacity else [16, 32]
-
 
 BK_LIST = [64, 128] if device_capacity else [16, 32]
 

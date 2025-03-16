@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# Copyright (c) 2023-2025, Songlin Yang, Yu Zhang
 
 from .abc import ABCAttention
 from .attn import Attention
@@ -13,6 +14,7 @@ from .hgrn2 import HGRN2Attention
 from .lightnet import LightNetAttention
 from .linear_attn import LinearAttention
 from .multiscale_retention import MultiScaleRetention
+from .nsa import NativeSparseAttention
 from .rebased import ReBasedLinearAttention
 from .rwkv6 import RWKV6Attention
 from .rwkv7 import RWKV7Attention
@@ -31,6 +33,7 @@ __all__ = [
     'LightNetAttention',
     'LinearAttention',
     'MultiScaleRetention',
+    'NativeSparseAttention',
     'ReBasedLinearAttention',
     'RWKV6Attention',
     'RWKV7Attention',

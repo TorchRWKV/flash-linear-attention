@@ -12,6 +12,7 @@ from .cumsum import (chunk_global_cumsum, chunk_global_cumsum_scalar,
 from .logcumsumexp import logcumsumexp_fwd_kernel
 from .logsumexp import logsumexp_fwd, logsumexp_fwd_kernel
 from .matmul import addmm, matmul, matmul_kernel
+from .pooling import mean_pooling
 from .softmax import (softmax_bwd, softmax_bwd_kernel, softmax_fwd,
                       softmax_fwd_kernel)
 
@@ -32,6 +33,7 @@ __all__ = [
     'addmm',
     'matmul',
     'matmul_kernel',
+    'mean_pooling',
     'softmax_bwd',
     'softmax_bwd_kernel',
     'softmax_fwd',

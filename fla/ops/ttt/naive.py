@@ -16,6 +16,7 @@ def ttt_linear(
     eps: float,
     mini_batch_size: int,
     initial_state: torch.Tensor,
+    initial_state_bias: torch.Tensor,
     output_final_state: bool
 ):
     B, H, T, D = q.shape
@@ -32,13 +33,14 @@ def ttt_linear(
     b = b.reshape(H, 1, D).to(torch.float32)
 
     h = torch.zeros((B, H, D, D), device=v.device, dtype=torch.float32) if initial_state is None else initial_state
+    hb = torch.zeros((B, H, 1, D), device=v.device, dtype=torch.float32) if initial_state_bias is None else initial_state_bias
     q *= scale
     # [NT, B, H, BT, D]
     o = torch.empty_like(_v)
 
     for i in range(NT):
         q_i, k_i, v_i, eta_i = [x[i] for x in [_q, _k, _v, _eta]]
-        kh = k_i @ h
+        kh = k_i @ h + hb
         reconstruction_target = v_i - k_i
 
         mean = kh.mean(-1, True)
@@ -51,8 +53,9 @@ def ttt_linear(
         v_new = (D * g - g.sum(-1, True) - kh_hat * (g * kh_hat).sum(-1, True)) / (rstd * D)
 
         Attn = torch.tril(q_i @ k_i.transpose(-2, -1))
-        o_i = q_i @ h - 2 * (eta_i * Attn) @ v_new
-        h = h - 2 * (eta_i[:, :, -1, :, None] * k_i).transpose(-1, -2) @ v_new
+        o_i = q_i @ h - (eta_i * Attn) @ v_new + hb - torch.tril(eta_i.expand_as(Attn)) @ v_new
+        h = h - (eta_i[:, :, -1, :, None] * k_i).transpose(-1, -2) @ v_new
+        hb = hb - torch.sum(eta_i[:, :, -1, :, None] * v_new, dim=-2, keepdim=True)
         # layer norm with residuals
 
         mean = o_i.mean(dim=-1, keepdim=True)
@@ -63,7 +66,8 @@ def ttt_linear(
     # [B, H, T, D]
     o = o.permute(1, 2, 0, 3, 4).reshape(B, H, T, D)
     h = h if output_final_state else None
-    return o, h
+    hb = hb if output_final_state else None
+    return o, h, hb
 
 
 def chunk_ttt_linear_ref(
@@ -77,6 +81,7 @@ def chunk_ttt_linear_ref(
     eps: float = 1e-6,
     mini_batch_size: int = 16,
     initial_state: torch.Tensor = None,
+    initial_state_bias: torch.Tensor = None,
     output_final_state: bool = False,
     head_first: bool = True,
 ):
@@ -100,9 +105,22 @@ def chunk_ttt_linear_ref(
         eta = F.pad(eta, (0, 0, 0, padded))
         eta[:, :, -1, :] = eta[:, :, -(padded+1), :]
     assert q.shape[-2] % mini_batch_size == 0, "Sequence length should be a multiple of mini_batch_size."
-    q, k, v, w, b = map(lambda x: x.to(torch.float32), [q, k, v, w, b])
-    o, final_state = ttt_linear(q, k, v, w, b, eta, scale, eps, mini_batch_size, initial_state, output_final_state)
+    q, k, v, eta, w, b = map(lambda x: x.to(torch.float32), [q, k, v, eta, w, b])
+    o, final_state, final_state_bias = ttt_linear(
+        q,
+        k,
+        v,
+        w,
+        b,
+        eta,
+        scale,
+        eps,
+        mini_batch_size,
+        initial_state,
+        initial_state_bias,
+        output_final_state,
+    )
     o = o[:, :, :T, :].contiguous()
     if not head_first:
         o = o.transpose(1, 2)
-    return o, final_state
+    return o, final_state, final_state_bias

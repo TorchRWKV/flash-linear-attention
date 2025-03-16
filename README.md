@@ -459,16 +459,14 @@ If you find this repository helpful, please cite our work:
   year   = {2024}
 }
 
-@misc{yang2024gated,
-    title         = {Gated Delta Networks: Improving Mamba2 with Delta Rule},
-    author        = {Songlin Yang and Jan Kautz and Ali Hatamizadeh},
-    year          = {2024},
-    eprint        = {2412.06464},
-    archivePrefix = {arXiv},
-    primaryClass  = {cs.CL}
+@misc{yang2024gdn,
+    title     = {Gated Delta Networks: Improving Mamba2 with Delta Rule},
+    author    = {Songlin Yang and Jan Kautz and Ali Hatamizadeh},
+    booktitle = {Proceedings of ICLR},
+    year      = {2025}
 }
 
-@inproceedings{yang2024parallelizing,
+@inproceedings{yang2024deltanet,
   title     = {Parallelizing Linear Transformers with the Delta Rule over Sequence Length},
   author    = {Yang, Songlin and Wang, Bailin and Zhang, Yu and Shen, Yikang and Kim, Yoon},
   booktitle = {Proceedings of NeurIPS},
@@ -479,6 +477,13 @@ If you find this repository helpful, please cite our work:
   title     = {Gated Slot Attention for Efficient Linear-Time Sequence Modeling},
   author    = {Zhang, Yu and Yang, Songlin and Zhu, Ruijie and Zhang, Yue and Cui, Leyang and Wang, Yiqiao and Wang, Bolun and Shi, Freda and Wang, Bailin and Bi, Wei and Zhou, Peng and Fu, Guohong},
   booktitle = {Proceedings of NeurIPS},
+  year      = {2024}
+}
+
+@inproceedings{qin2024hgrn2,
+  title     = {Gated Slot Attention for Efficient Linear-Time Sequence Modeling},
+  author    = {Qin, Zhen and Yang, Songlin and Sun, Weixuan and Shen, Xuyang and Li, Dong and Sun, Weigao and Zhong, Yiran},
+  booktitle = {Proceedings of COLM},
   year      = {2024}
 }
 

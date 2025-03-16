@@ -242,15 +242,7 @@ def chunk_local_cumsum_scalar(
         B = len(offsets) - 1
     assert chunk_size == 2**(chunk_size.bit_length()-1), "chunk_size must be a power of 2"
     BT = chunk_size
-    if offsets is None:
-        NT = triton.cdiv(T, BT)
-    else:
-        if indices is None:
-            indices = torch.cat([
-                torch.stack([offsets.new_full((n,), i), offsets.new_tensor(range(n))], 1)
-                for i, n in enumerate(triton.cdiv(offsets[1:] - offsets[:-1], BT).tolist())
-            ])
-        NT = len(indices)
+    NT = triton.cdiv(T, BT) if offsets is None else len(indices)
     g_org, g = g, torch.empty_like(g, dtype=output_dtype or g.dtype)
     grid = (NT, B * H)
     chunk_local_cumsum_scalar_kernel[grid](
@@ -281,16 +273,9 @@ def chunk_local_cumsum_vector(
     else:
         B, T, H, S = g.shape
     BT = chunk_size
+    NT = triton.cdiv(T, BT) if offsets is None else len(indices)
     assert chunk_size == 2**(chunk_size.bit_length()-1), "chunk_size must be a power of 2"
-    if offsets is None:
-        NT = triton.cdiv(T, BT)
-    else:
-        if indices is None:
-            indices = torch.cat([
-                torch.stack([offsets.new_full((n,), i), offsets.new_tensor(range(n))], 1)
-                for i, n in enumerate(triton.cdiv(offsets[1:] - offsets[:-1], BT).tolist())
-            ])
-        NT = len(indices)
+
     g_org, g = g, torch.empty_like(g, dtype=output_dtype or g.dtype)
     def grid(meta): return (triton.cdiv(meta['S'], meta['BS']), NT, B * H)
     # keep cummulative normalizer in fp32

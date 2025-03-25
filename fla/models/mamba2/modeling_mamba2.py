@@ -28,8 +28,7 @@ from transformers.utils import ModelOutput, logging
 from transformers.utils.deprecation import deprecate_kwarg
 
 from fla.models.mamba2.configuration_mamba2 import Mamba2Config
-from fla.modules import (FusedCrossEntropyLoss, FusedLinearCrossEntropyLoss,
-                         RMSNorm)
+from fla.modules import FusedCrossEntropyLoss, FusedLinearCrossEntropyLoss, RMSNorm
 from fla.modules.layernorm_gated import RMSNormGated
 
 logger = logging.get_logger(__name__)
@@ -37,10 +36,8 @@ logger = logging.get_logger(__name__)
 with warnings.catch_warnings():
     warnings.simplefilter('ignore')
     try:
-        from mamba_ssm.ops.triton.selective_state_update import \
-            selective_state_update
-        from mamba_ssm.ops.triton.ssd_combined import (
-            mamba_chunk_scan_combined, mamba_split_conv1d_scan_combined)
+        from mamba_ssm.ops.triton.selective_state_update import selective_state_update
+        from mamba_ssm.ops.triton.ssd_combined import mamba_chunk_scan_combined, mamba_split_conv1d_scan_combined
     except ImportError:
         (
             selective_state_update,

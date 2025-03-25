@@ -8,8 +8,8 @@ import torch.nn.functional as F
 from einops import rearrange
 
 from fla.ops.generalized_delta_rule.iplr.chunk import chunk_iplr_delta_rule
-from fla.ops.generalized_delta_rule.iplr.fused_recurrent import \
-    fused_recurrent_iplr_delta_rule
+from fla.ops.generalized_delta_rule.iplr.fused_recurrent import fused_recurrent_iplr_delta_rule
+from fla.utils import device
 from utils import assert_close
 from fla.utils import device
 
@@ -159,7 +159,7 @@ def test_chunk(
         v = torch.randn(B, T, H, D, dtype=dtype)
         a = torch.rand(B, T, H, D, dtype=dtype)
 
-    a = torch.nn.functional.normalize(a, p=2, dim=-1)
+    a = F.normalize(a, p=2, dim=-1)
     b = -a
     h0 = torch.zeros(B, H, D, D, dtype=torch.float32)
     q, k, v, a, b, h0 = map(lambda x: x.to(device).requires_grad_(), (q, k, v, a, b, h0))
@@ -216,7 +216,7 @@ def test_recurrent(
         v = torch.randn(B, T, H, D, dtype=dtype)
         a = torch.rand(B, T, H, D, dtype=dtype)
 
-    a = torch.nn.functional.normalize(a, p=2, dim=-1)
+    a = F.normalize(a, p=2, dim=-1)
     b = -a
     h0 = torch.zeros(B, H, D, D, dtype=torch.float32)
     q, k, v, a, b, h0 = map(lambda x: x.to(device).requires_grad_(True), (q, k, v, a, b, h0))

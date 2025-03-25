@@ -6,6 +6,7 @@ from typing import Optional, Tuple
 import torch
 import triton
 import triton.language as tl
+from einops import rearrange
 
 from fla.modules.l2norm import l2norm_bwd, l2norm_fwd
 from fla.utils import input_guard
@@ -506,13 +507,13 @@ def fused_recurrent_delta_rule(
     r"""
     Args:
         q (torch.Tensor):
-            queries of shape `[B, H, T, K]` if `head_first=True` else `[B, T, H, K]`.
+            queries of shape `[B, T, H, K]` if `head_first=False` else `[B, H, T, K]`.
         k (torch.Tensor):
-            keys of shape `[B, H, T, K]` if `head_first=True` else `[B, T, H, K]`.
+            keys of shape `[B, T, H, K]` if `head_first=False` else `[B, H, T, K]`.
         v (torch.Tensor):
-            values of shape `[B, H, T, V]` if `head_first=True` else `[B, T, H, V]`.
+            values of shape `[B, T, H, V]` if `head_first=False` else `[B, H, T, V]`.
         beta (torch.Tensor):
-             betas of shape `[B, H, T]` if `head_first=True` else `(B, T, H)`.
+             betas of shape `[B, T, H]` if `head_first=False` else `(B, H, T)`.
         scale (Optional[int]):
             Scale factor for the RetNet attention scores.
             If not provided, it will default to `1 / sqrt(K)`. Default: `None`.
@@ -527,11 +528,11 @@ def fused_recurrent_delta_rule(
             consistent with the FlashAttention API.
         head_first (Optional[bool]):
             Whether the inputs are in the head-first format, which is not supported for variable-length inputs.
-            Default: `True`.
+            Default: `False`.
 
     Returns:
         o (torch.Tensor):
-            Outputs of shape `[B, H, T, V]` if `head_first=True` else `[B, T, H, V]`.
+            Outputs of shape `[B, T, H, V]` if `head_first=False` else `[B, H, T, V]`.
         final_state (torch.Tensor):
             Final state of shape `[N, H, K, V]` if `output_final_state=True` else `None`.
 
@@ -547,37 +548,48 @@ def fused_recurrent_delta_rule(
         >>> v = torch.randn(B, T, H, V, device='cuda')
         >>> beta = torch.rand(B, T, H, device='cuda').sigmoid()
         >>> h0 = torch.randn(B, H, K, V, device='cuda')
-        >>> o, ht = fused_recurrent_delta_rule(q, k, v, beta,
-                                               initial_state=h0,
-                                               output_final_state=True,
-                                               head_first=False)
+        >>> o, ht = fused_recurrent_delta_rule(
+            q, k, v, beta,
+            initial_state=h0,
+            output_final_state=True
+        )
         # for variable-length inputs, the batch size `B` is expected to be 1 and `cu_seqlens` is required
         >>> q, k, v, beta = map(lambda x: rearrange(x, 'b t ... -> 1 (b t) ...'), (q, k, v, beta))
         # for a batch with 4 sequences, `cu_seqlens` with 5 start/end positions are expected
         >>> cu_seqlens = q.new_tensor([0, 2048, 4096, 6144, 8192], dtype=torch.long)
-        >>> o_var, ht_var = fused_recurrent_delta_rule(q, k, v, beta,
-                                                       initial_state=h0,
-                                                       output_final_state=True,
-                                                       cu_seqlens=cu_seqlens,
-                                                       head_first=False)
+        >>> o_var, ht_var = fused_recurrent_delta_rule(
+            q, k, v, beta,
+            initial_state=h0,
+            output_final_state=True,
+            cu_seqlens=cu_seqlens
+        )
         >>> assert o.allclose(o_var.view(o.shape))
         >>> assert ht.allclose(ht_var)
     """
     if cu_seqlens is not None:
         if q.shape[0] != 1:
-            raise ValueError(f"The batch size is expected to be 1 rather than {q.shape[0]} when using `cu_seqlens`."
-                             f"Please flatten variable-length inputs before processing.")
+            raise ValueError(
+                f"The batch size is expected to be 1 rather than {q.shape[0]} when using `cu_seqlens`."
+                f"Please flatten variable-length inputs before processing."
+            )
         if head_first:
-            raise RuntimeError("Sequences with variable lengths are not supported for head-first mode")
+            raise RuntimeError(
+                "Sequences with variable lengths are not supported for head-first mode"
+            )
         if initial_state is not None and initial_state.shape[0] != len(cu_seqlens) - 1:
-            raise ValueError(f"The number of initial states is expected to be equal to the number of input sequences, "
-                             f"i.e., {len(cu_seqlens) - 1} rather than {initial_state.shape[0]}.")
+            raise ValueError(
+                f"The number of initial states is expected to be equal to the number of input sequences, "
+                f"i.e., {len(cu_seqlens) - 1} rather than {initial_state.shape[0]}."
+            )
     if scale is None:
         scale = k.shape[-1] ** -0.5
     else:
         assert scale > 0, "scale must be positive"
     if beta is None:
         beta = torch.ones_like(q[..., 0])
+    if head_first:
+        q, k, v = map(lambda x: rearrange(x, 'b h t d -> b t h d'), (q, k, v))
+        beta = rearrange(beta, 'b h t -> b t h')
     o, final_state = FusedRecurrentFunction.apply(
         q,
         k,
@@ -587,7 +599,9 @@ def fused_recurrent_delta_rule(
         initial_state,
         output_final_state,
         cu_seqlens,
-        head_first,
+        False,
         use_qk_l2norm_in_kernel
     )
+    if head_first:
+        o = rearrange(o, 'b t h v -> b h t v')
     return o, final_state

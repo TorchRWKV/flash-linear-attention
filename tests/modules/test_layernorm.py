@@ -6,8 +6,7 @@ import torch.nn as nn
 from einops import rearrange
 from transformers.models.llama.modeling_llama import LlamaRMSNorm
 
-from fla.modules import (GroupNorm, GroupNormLinear, LayerNorm,
-                         LayerNormLinear, RMSNorm, RMSNormLinear)
+from fla.modules import GroupNorm, GroupNormLinear, LayerNorm, LayerNormLinear, RMSNorm, RMSNormLinear
 from fla.utils import device
 
 

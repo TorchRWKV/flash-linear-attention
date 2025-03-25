@@ -12,8 +12,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange
 
-from fla.modules import FusedRMSNormSwishGate, ShortConvolution
-from fla.modules.fused_norm_gate import rms_norm_swish_gate_linear_fn
+from fla.modules import FusedRMSNormGated, ShortConvolution
+from fla.modules.fused_norm_gate import rms_norm_swish_gate_linear
 from fla.ops.common.utils import prepare_position_ids, prepare_sequence_ids
 from fla.ops.gla import chunk_gla, fused_recurrent_gla
 
@@ -79,9 +79,15 @@ class LightNetAttention(nn.Module):
             self.k_conv1d = ShortConvolution(self.key_dim, conv_size, activation=None)
             self.v_conv1d = ShortConvolution(self.value_dim, conv_size, activation=None)
 
-        self.g_proj = nn.Sequential(nn.Linear(hidden_size, gate_low_rank_dim, bias=False),
-                                    nn.Linear(gate_low_rank_dim, hidden_size, bias=False))
-        self.g_norm = FusedRMSNormSwishGate(hidden_size, elementwise_affine, norm_eps)
+        self.g_proj = nn.Sequential(
+            nn.Linear(hidden_size, gate_low_rank_dim, bias=False),
+            nn.Linear(gate_low_rank_dim, hidden_size, bias=False)
+        )
+        self.g_norm = FusedRMSNormGated(
+            hidden_size=hidden_size,
+            elementwise_affine=elementwise_affine,
+            eps=norm_eps
+        )
         self.o_proj = nn.Linear(self.value_dim, hidden_size, bias=False)
 
     def forward(
@@ -184,7 +190,7 @@ class LightNetAttention(nn.Module):
                 offset=q.shape[1]
             )
 
-        o = rms_norm_swish_gate_linear_fn(
+        o = rms_norm_swish_gate_linear(
             rearrange(o, 'b t h d -> b t (h d)'),
             self.g_proj(hidden_states),
             self.g_norm.weight,

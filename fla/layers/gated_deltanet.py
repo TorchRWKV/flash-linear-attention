@@ -11,10 +11,9 @@ import torch.nn as nn
 from einops import rearrange
 from torch.nn import functional as F
 
-from fla.modules import FusedRMSNormSwishGate, RMSNorm, ShortConvolution
+from fla.modules import FusedRMSNormGated, RMSNorm, ShortConvolution
 from fla.ops.common.utils import prepare_position_ids, prepare_sequence_ids
-from fla.ops.gated_delta_rule import (chunk_gated_delta_rule,
-                                      fused_recurrent_gated_delta_rule)
+from fla.ops.gated_delta_rule import chunk_gated_delta_rule, fused_recurrent_gated_delta_rule
 
 if TYPE_CHECKING:
     from transformers.processing_utils import Unpack
@@ -22,14 +21,14 @@ if TYPE_CHECKING:
     from fla.models.utils import Cache
 
 
+@torch.compile
 def elu_p1(x):
     return (F.elu(x, 1., False) + 1.).to(x)
 
 
+@torch.compile
 def sum_norm(x):
     return (x / x.sum(-1, keepdim=True)).to(x)
-
-# https://github.com/IDSIA/recurrent-fwp/blob/master/algorithmic/layers.py#L86C1-L146C1
 
 
 class GatedDeltaNet(nn.Module):
@@ -37,6 +36,7 @@ class GatedDeltaNet(nn.Module):
     The layer implementaion for [Gated Delta Networks: Improving Mamba2 with Delta Rule](https://arxiv.org/abs/2412.06464).  # noqa
 
     Similar to Mamba2, each layer contains around 6*hidden_size*hidden_size parameters.
+
     Parameter alloation when use_gate=True:
         - 0.75 * hidden_size * hidden_size for the q_proj and k_proj each
         - 1.5 * hidden_size * hidden_size for the v_proj, g_proj and o_proj each
@@ -109,26 +109,34 @@ class GatedDeltaNet(nn.Module):
         self.head_dim = head_dim
         self.num_heads = num_heads
 
-        self.key_dim = self.num_heads * self.head_dim
-        self.value_dim = self.key_dim * self.expand_v
+        self.key_dim = int(self.num_heads * self.head_dim)
+        self.value_dim = int(self.key_dim * self.expand_v)
         self.head_k_dim = head_dim
-        self.head_v_dim = head_dim * self.expand_v
+        self.head_v_dim = int(head_dim * self.expand_v)
         self.layer_idx = layer_idx
-        self.silu = nn.SiLU()
 
+        # Consistency check: Ensure expand_v produces integer values
+        if not math.isclose(self.key_dim * expand_v, self.value_dim, rel_tol=1e-5):
+            raise ValueError(
+                f"expand_v={expand_v} does not produce an integer value when multiplied by key_dim={self.key_dim}. "
+                f"Resulting value_dim would be {self.key_dim * expand_v}, which is invalid for nn.Linear."
+            )
+        if not math.isclose(head_dim * expand_v, self.head_v_dim, rel_tol=1e-5):
+            raise ValueError(
+                f"expand_v={expand_v} does not produce an integer value when multiplied by head_dim={head_dim}. "
+                f"Resulting head_v_dim would be {head_dim * expand_v}, which is invalid for FusedRMSNormGated."
+            )
         assert mode in ['chunk', 'fused_recurrent'], f"Not suppoerted mode `{mode}`."
 
         self.q_proj = nn.Linear(hidden_size, self.key_dim, bias=False)
         self.k_proj = nn.Linear(hidden_size, self.key_dim, bias=False)
         self.v_proj = nn.Linear(hidden_size, self.value_dim, bias=False)
-        self.b_proj = nn.Linear(hidden_size, self.num_heads, bias=False)
         self.a_proj = nn.Linear(hidden_size, self.num_heads, bias=False)
+        self.b_proj = nn.Linear(hidden_size, self.num_heads, bias=False)
+
         A = torch.empty(self.num_heads, dtype=torch.float32).uniform_(0, 16)
-        A_log = torch.log(A)
-        self.A_log = nn.Parameter(A_log)
+        self.A_log = nn.Parameter(torch.log(A))
         self.A_log._no_weight_decay = True
-        self.D = nn.Parameter(torch.ones(self.num_heads))
-        self.D._no_weight_decay = True
         # hard coded for now
         dt_min = 0.001
         dt_max = 0.1
@@ -169,7 +177,7 @@ class GatedDeltaNet(nn.Module):
             )
         if use_gate:
             self.g_proj = nn.Linear(hidden_size, self.value_dim, bias=False)
-            self.o_norm = FusedRMSNormSwishGate(self.head_v_dim, eps=norm_eps)
+            self.o_norm = FusedRMSNormGated(self.head_v_dim, eps=norm_eps)
         else:
             self.o_norm = RMSNorm(self.head_v_dim, eps=norm_eps)
         self.o_proj = nn.Linear(self.value_dim, hidden_size, bias=False)
@@ -208,25 +216,31 @@ class GatedDeltaNet(nn.Module):
                 if position_ids is None:
                     position_ids = prepare_position_ids(cu_seqlens)
                 seq_idx = prepare_sequence_ids(position_ids).to(torch.int32).unsqueeze(0)
-            q, conv_state_q = self.q_conv1d(x=self.q_proj(hidden_states),
-                                            mask=conv_mask,
-                                            cache=conv_state_q,
-                                            output_final_state=use_cache,
-                                            seq_idx=seq_idx)
-            k, conv_state_k = self.k_conv1d(x=self.k_proj(hidden_states),
-                                            mask=conv_mask,
-                                            cache=conv_state_k,
-                                            output_final_state=use_cache,
-                                            seq_idx=seq_idx)
-            v, conv_state_v = self.v_conv1d(x=self.v_proj(hidden_states),
-                                            mask=conv_mask,
-                                            cache=conv_state_v,
-                                            output_final_state=use_cache,
-                                            seq_idx=seq_idx)
+            q, conv_state_q = self.q_conv1d(
+                x=self.q_proj(hidden_states),
+                mask=conv_mask,
+                cache=conv_state_q,
+                output_final_state=use_cache,
+                seq_idx=seq_idx
+            )
+            k, conv_state_k = self.k_conv1d(
+                x=self.k_proj(hidden_states),
+                mask=conv_mask,
+                cache=conv_state_k,
+                output_final_state=use_cache,
+                seq_idx=seq_idx
+            )
+            v, conv_state_v = self.v_conv1d(
+                x=self.v_proj(hidden_states),
+                mask=conv_mask,
+                cache=conv_state_v,
+                output_final_state=use_cache,
+                seq_idx=seq_idx
+            )
         else:
-            q = self.silu(self.q_proj(hidden_states))
-            k = self.silu(self.k_proj(hidden_states))
-            v = self.silu(self.v_proj(hidden_states))
+            q = F.silu(self.q_proj(hidden_states))
+            k = F.silu(self.k_proj(hidden_states))
+            v = F.silu(self.v_proj(hidden_states))
 
         q, k = map(lambda x: rearrange(x, 'b t (h d) -> b t h d', d=self.head_k_dim), (q, k))
         v = rearrange(v, 'b t (h d) -> b t h d', d=self.head_v_dim)

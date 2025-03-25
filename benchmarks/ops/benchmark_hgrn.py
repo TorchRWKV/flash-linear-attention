@@ -28,6 +28,7 @@ from fla.utils import device
     )
 )
 def benchmark(T, provider):
+    from fla.utils import device
     dtype = torch.bfloat16
     B, D = 16, 512
 

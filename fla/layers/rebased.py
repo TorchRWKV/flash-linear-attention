@@ -19,6 +19,7 @@ from fla.ops.rebased import parallel_rebased
 
 
 class ReBasedLinearAttention(nn.Module):
+
     def __init__(
         self,
         hidden_size: int,
@@ -41,7 +42,6 @@ class ReBasedLinearAttention(nn.Module):
         self.mode = mode
         assert self.mode in ["fused_chunk", "parallel", 'chunk']
 
-        # linear attention
         self.feature_dim = feature_dim
         self.num_key_value_heads = num_key_value_heads
         self.num_heads = num_heads
@@ -50,6 +50,9 @@ class ReBasedLinearAttention(nn.Module):
         self.use_beta = use_beta
         self.normalize = normalize
         self.causal = causal
+        self.eps = eps
+        self.mode = mode
+        self.layer_idx = layer_idx
 
         self.feature_map = RebasedFeatureMap(self.feature_dim, use_gamma, use_beta, normalize)
         self.q_proj = nn.Linear(self.hidden_size, self.feature_dim * self.num_heads, bias=False)
@@ -57,12 +60,11 @@ class ReBasedLinearAttention(nn.Module):
         self.v_proj = nn.Linear(self.hidden_size, self.num_key_value_heads * self.head_dim, bias=False)
         self.o_proj = nn.Linear(self.num_heads * self.head_dim, self.hidden_size, bias=False)
         self.dropout = nn.Identity()
-        self.eps = eps
 
     def forward(self, hidden_states: torch.Tensor, **kwargs):
         mode = self.mode
         q, k, v = self.q_proj(hidden_states), self.k_proj(hidden_states), self.v_proj(hidden_states)
-        q, k, v = map(lambda x: rearrange(x, "... (h d) -> ... h d", h=self.num_heads), [q, k, v])
+        q, k, v = map(lambda x: rearrange(x, "... (h d) -> ... h d", d=self.head_dim), [q, k, v])
         q, k = self.feature_map(q, flatten=(mode != 'parallel')), self.feature_map(k, flatten=(mode != 'parallel'))
         if mode == "fused_chunk":
             o = fused_chunk_linear_attn(
@@ -98,7 +100,13 @@ class ReBasedLinearAttention(nn.Module):
         return o
 
     # https://github.com/HazyResearch/zoology/blob/main/zoology/mixers/based.py#L119
-    def forward_reference(self, hidden_states: torch.Tensor, filters: torch.Tensor = None, *args, **kwargs):
+    def forward_reference(
+        self,
+        hidden_states: torch.Tensor,
+        filters: torch.Tensor = None,
+        *args,
+        **kwargs
+    ):
         """
         x (torch.Tensor): tensor of shape (b, d, t)
         y (torch.Tensor): tensor of shape (b, d, t)

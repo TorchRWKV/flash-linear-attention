@@ -1,4 +1,3 @@
-
 # -*- coding: utf-8 -*-
 # Copyright (c) 2023-2025, Songlin Yang, Yu Zhang
 
@@ -8,14 +7,11 @@ import torch
 import triton
 
 from fla.ops.common.utils import prepare_chunk_indices
-from fla.ops.generalized_delta_rule.dplr.chunk_A_bwd import \
-    chunk_dplr_bwd_dqk_intra
-from fla.ops.generalized_delta_rule.dplr.chunk_A_fwd import \
-    chunk_fwd_intra_dplr_fn
+from fla.ops.generalized_delta_rule.dplr.chunk_A_bwd import chunk_dplr_bwd_dqk_intra
+from fla.ops.generalized_delta_rule.dplr.chunk_A_fwd import chunk_fwd_intra_dplr_fn
 from fla.ops.generalized_delta_rule.dplr.chunk_h_bwd import chunk_dplr_bwd_dhu
 from fla.ops.generalized_delta_rule.dplr.chunk_h_fwd import chunk_dplr_fwd_h
-from fla.ops.generalized_delta_rule.dplr.chunk_o_bwd import (
-    chunk_dplr_bwd_dAu, chunk_dplr_bwd_dv, chunk_dplr_bwd_o)
+from fla.ops.generalized_delta_rule.dplr.chunk_o_bwd import chunk_dplr_bwd_dAu, chunk_dplr_bwd_dv, chunk_dplr_bwd_o
 from fla.ops.generalized_delta_rule.dplr.chunk_o_fwd import chunk_dplr_fwd_o
 from fla.ops.generalized_delta_rule.dplr.wy_fast_bwd import chunk_dplr_bwd_wy
 from fla.ops.generalized_delta_rule.dplr.wy_fast_fwd import fwd_prepare_wy_repr

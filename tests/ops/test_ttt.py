@@ -6,8 +6,7 @@ import pytest
 import torch
 import torch.nn.functional as F
 
-from fla.ops.ttt import chunk_ttt_linear
-from fla.ops.ttt import fused_chunk_ttt_linear
+from fla.ops.ttt import chunk_ttt_linear, fused_chunk_ttt_linear
 from fla.ops.ttt.naive import chunk_ttt_linear_ref
 from fla.utils import device
 
@@ -82,8 +81,9 @@ def test_chunk(
         initial_state_bias=hb0.clone(),
         head_first=head_first
     )
-    ((tri * do).sum() + (tri_ht * dht).sum() +  (tri_hbt * dhbt).sum()).backward(retain_graph=True)
-    tri_dq, tri_dk, tri_dv, tri_dw, tri_db, tri_deta, tri_dh0, tri_dhb0 = q.grad, k.grad, v.grad, w.grad, b.grad, eta.grad, h0.grad, hb0.grad
+    ((tri * do).sum() + (tri_ht * dht).sum() + (tri_hbt * dhbt).sum()).backward(retain_graph=True)
+    tri_dq, tri_dk, tri_dv, tri_dw, tri_db, tri_deta, \
+        tri_dh0, tri_dhb0 = q.grad, k.grad, v.grad, w.grad, b.grad, eta.grad, h0.grad, hb0.grad
     q.grad = k.grad = v.grad = w.grad = b.grad = eta.grad = h0.grad = hb0.grad = None
 
     ref, ref_ht, ref_hbt = chunk_ttt_linear_ref(
@@ -99,9 +99,10 @@ def test_chunk(
         initial_state_bias=hb0.clone(),
         head_first=head_first
     )
-    ((ref * do).sum() + (ref_ht * dht).sum() +  (ref_hbt * dhbt).sum()).backward(retain_graph=True)
-    ref_dq, ref_dk, ref_dv, ref_dw, ref_db, ref_deta, ref_dh0, ref_dhb0 =  q.grad, k.grad, v.grad, w.grad, b.grad, eta.grad, h0.grad, hb0.grad
-    
+    ((ref * do).sum() + (ref_ht * dht).sum() + (ref_hbt * dhbt).sum()).backward(retain_graph=True)
+    ref_dq, ref_dk, ref_dv, ref_dw, ref_db, ref_deta, \
+        ref_dh0, ref_dhb0 = q.grad, k.grad, v.grad, w.grad, b.grad, eta.grad, h0.grad, hb0.grad
+
     assert_close("   o", ref, tri, 0.005)
     assert_close("  ht", ref_ht, tri_ht, 0.005)
     assert_close(" hbt", ref_hbt, tri_hbt, 0.005)
@@ -112,9 +113,9 @@ def test_chunk(
     assert_close("  db", ref_db, tri_db, 0.006)
     assert_close("  de", ref_deta, tri_deta, 0.030)  # because the last element of the chunk
     if head_first:
-        assert_close(" de0", ref_deta[:,:,:14,:], tri_deta[:,:,:14,:], 0.010)
+        assert_close(" de0", ref_deta[:, :, :14, :], tri_deta[:, :, :14, :], 0.010)
     else:
-        assert_close(" de0", ref_deta[:,:14,:,:], tri_deta[:,:14,:,:], 0.010)
+        assert_close(" de0", ref_deta[:, :14, :, :], tri_deta[:, :14, :, :], 0.010)
     assert_close(" dh0", ref_dh0, tri_dh0, 0.007)
     assert_close("dhb0", ref_dhb0, tri_dhb0, 0.005)
 
@@ -173,8 +174,9 @@ def test_fused_chunk_fwd(
         initial_state_bias=hb0.clone(),
         head_first=head_first
     )
-    ((tri * do).sum() + (tri_ht * dht).sum() +  (tri_hbt * dhbt).sum()).backward(retain_graph=True)
-    tri_dq, tri_dk, tri_dv, tri_dw, tri_db, tri_deta, tri_dh0, tri_dhb0 = q.grad, k.grad, v.grad, w.grad, b.grad, eta.grad, h0.grad, hb0.grad
+    ((tri * do).sum() + (tri_ht * dht).sum() + (tri_hbt * dhbt).sum()).backward(retain_graph=True)
+    tri_dq, tri_dk, tri_dv, tri_dw, tri_db, tri_deta, \
+        tri_dh0, tri_dhb0 = q.grad, k.grad, v.grad, w.grad, b.grad, eta.grad, h0.grad, hb0.grad
     q.grad = k.grad = v.grad = w.grad = b.grad = eta.grad = h0.grad = hb0.grad = None
 
     ref, ref_ht, ref_hbt = chunk_ttt_linear_ref(
@@ -190,9 +192,10 @@ def test_fused_chunk_fwd(
         initial_state_bias=hb0.clone(),
         head_first=head_first
     )
-    ((ref * do).sum() + (ref_ht * dht).sum() +  (ref_hbt * dhbt).sum()).backward(retain_graph=True)
-    ref_dq, ref_dk, ref_dv, ref_dw, ref_db, ref_deta, ref_dh0, ref_dhb0 =  q.grad, k.grad, v.grad, w.grad, b.grad, eta.grad, h0.grad, hb0.grad
-    
+    ((ref * do).sum() + (ref_ht * dht).sum() + (ref_hbt * dhbt).sum()).backward(retain_graph=True)
+    ref_dq, ref_dk, ref_dv, ref_dw, ref_db, ref_deta, \
+        ref_dh0, ref_dhb0 = q.grad, k.grad, v.grad, w.grad, b.grad, eta.grad, h0.grad, hb0.grad
+
     assert_close("   o", ref, tri, 0.005)
     assert_close("  ht", ref_ht, tri_ht, 0.005)
     assert_close(" hbt", ref_hbt, tri_hbt, 0.005)
@@ -203,9 +206,9 @@ def test_fused_chunk_fwd(
     assert_close("  db", ref_db, tri_db, 0.005)
     assert_close("  de", ref_deta, tri_deta, 0.03)  # because the last element of the chunk
     if head_first:
-        assert_close(" de0", ref_deta[:,:,:14,:], tri_deta[:,:,:14,:], 0.008)
+        assert_close(" de0", ref_deta[:, :, :14, :], tri_deta[:, :, :14, :], 0.008)
     else:
-        assert_close(" de0", ref_deta[:,:14,:,:], tri_deta[:,:14,:,:], 0.008)
+        assert_close(" de0", ref_deta[:, :14, :, :], tri_deta[:, :14, :, :], 0.008)
     assert_close(" dh0", ref_dh0, tri_dh0, 0.006)
     assert_close("dhb0", ref_dhb0, tri_dhb0, 0.005)
 

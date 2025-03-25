@@ -50,14 +50,14 @@ def test_shortconv(B: int, T: int, H: int, C: int):
 @pytest.mark.parametrize("C", [4])
 def test_shortconv_varlen(N: int, T: int, H: int, C: int):
     torch.manual_seed(42)
-    conv = ShortConvolution(H, C, activation='silu', use_fast_conv1d=True).cuda()
+    conv = ShortConvolution(H, C, activation='silu', use_fast_conv1d=True).to(device)
     offsets = torch.cat([
         torch.tensor([0], dtype=torch.long),
         torch.arange(16, T)[torch.randperm(T - 1)[:N-1]],
         torch.tensor([T], dtype=torch.long)
-    ], 0).cuda().sort()[0]
+    ], 0).to(device).sort()[0]
 
-    x = torch.randn(1, T, H).cuda()
+    x = torch.randn(1, T, H).to(device)
     seq_idx = prepare_sequence_ids(prepare_position_ids(offsets)).to(torch.int32).unsqueeze(0)
 
     ref = torch.cat([conv(x[:, bos:eos].contiguous())[0] for bos, eos in zip(offsets[:-1], offsets[1:])], 1)

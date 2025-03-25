@@ -1,4 +1,3 @@
-
 # -*- coding: utf-8 -*-
 # Copyright (c) 2023-2025, Songlin Yang, Yu Zhang
 
@@ -8,9 +7,8 @@ import torch
 import triton
 import triton.language as tl
 
-from fla.utils import (device_capacity, is_triton_shared_mem_enough,
-                       use_cuda_graph)
-from fla.ops.utils.fastmath import exp
+from fla.ops.utils.exp import exp
+from fla.utils import device_capacity, is_triton_shared_mem_enough, use_cuda_graph
 
 BK_LIST = [64, 128] if device_capacity else [16, 32]
 
@@ -319,13 +317,7 @@ def chunk_dplr_bwd_dv(
     else:
         B, T, H, K, V = *kg.shape, do.shape[-1]
     BT = min(chunk_size, max(16, triton.next_power_of_2(T)))
-    if offsets is None:
-        NT = triton.cdiv(T, BT)
-    else:
-        if indices is None:
-            indices = torch.cat([torch.arange(n) for n in triton.cdiv(offsets[1:] - offsets[:-1], BT).tolist()])
-            indices = torch.stack([indices.eq(0).cumsum(0) - 1, indices], 1).to(offsets)
-        NT = len(indices)
+    NT = triton.cdiv(T, BT) if offsets is None else len(indices)
 
     dv = torch.empty_like(do)
 
@@ -376,13 +368,7 @@ def chunk_dplr_bwd_o(
         B, T, H, K, V = *w.shape, v.shape[-1]
 
     BT = min(chunk_size, max(16, triton.next_power_of_2(T)))
-    if offsets is None:
-        NT = triton.cdiv(T, BT)
-    else:
-        if indices is None:
-            indices = torch.cat([torch.arange(n) for n in triton.cdiv(offsets[1:] - offsets[:-1], BT).tolist()])
-            indices = torch.stack([indices.eq(0).cumsum(0) - 1, indices], 1).to(offsets)
-        NT = len(indices)
+    NT = triton.cdiv(T, BT) if offsets is None else len(indices)
 
     BK = min(triton.next_power_of_2(K), 64) if device_capacity else min(triton.next_power_of_2(K), 32)
     BV = min(triton.next_power_of_2(V), 64) if device_capacity else min(triton.next_power_of_2(K), 32)
@@ -442,13 +428,7 @@ def chunk_dplr_bwd_dAu(
     else:
         B, T, H, V = v.shape
     BT = min(chunk_size, max(16, triton.next_power_of_2(T)))
-    if offsets is None:
-        NT = triton.cdiv(T, BT)
-    else:
-        if indices is None:
-            indices = torch.cat([torch.arange(n) for n in triton.cdiv(offsets[1:] - offsets[:-1], BT).tolist()])
-            indices = torch.stack([indices.eq(0).cumsum(0) - 1, indices], 1).to(offsets)
-        NT = len(indices)
+    NT = triton.cdiv(T, BT) if offsets is None else len(indices)
 
     if is_triton_shared_mem_enough(131072):  # A100
         BV = min(triton.next_power_of_2(V), 128)

@@ -8,10 +8,8 @@ import torch.nn.functional as F
 from einops import rearrange, repeat
 
 from fla.modules import RMSNorm
-from fla.modules.feature_map import (DPFPFeatureMap, HadamardFeatureMap,
-                                     HedgehogFeatureMap, T2RFeatureMap)
-from fla.ops.linear_attn import (chunk_linear_attn, fused_chunk_linear_attn,
-                                 fused_recurrent_linear_attn)
+from fla.modules.feature_map import DPFPFeatureMap, HadamardFeatureMap, HedgehogFeatureMap, T2RFeatureMap
+from fla.ops.linear_attn import chunk_linear_attn, fused_chunk_linear_attn, fused_recurrent_linear_attn
 
 
 class LinearAttention(nn.Module):
@@ -28,7 +26,6 @@ class LinearAttention(nn.Module):
         output_norm: str = 'rmsnorm',
         norm_q: bool = False,
         norm_k: bool = False,
-        # standard linear attention normalization
         do_feature_map_norm: bool = False,
         elementwise_affine: bool = True,
         norm_eps: float = 1e-5,

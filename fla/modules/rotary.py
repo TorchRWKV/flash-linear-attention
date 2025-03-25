@@ -11,7 +11,7 @@ import triton
 import triton.language as tl
 from einops import rearrange, repeat
 
-from fla.utils import input_guard, use_cuda_graph
+from fla.utils import get_multiprocessor_count, input_guard, use_cuda_graph
 
 
 def rotate_half(x, interleaved=False):
@@ -33,11 +33,11 @@ def rotary_embedding_ref(x, cos, sin, interleaved=False):
 
 @triton.autotune(
     configs=[
-        triton.Config({'BT': BT}, num_warps=num_warps)
-        for BT in [4, 8, 16, 32, 64, 128]
-        for num_warps in [2, 4, 8, 16]
+        triton.Config({}, num_warps=num_warps, num_stages=num_stages)
+        for num_warps in [2, 4, 8, 16, 32]
+        for num_stages in [2, 3, 4]
     ],
-    key=['B', 'T', 'H', 'INTERLEAVED'],
+    key=['B', 'H', 'D', 'INTERLEAVED'],
     use_cuda_graph=use_cuda_graph,
 )
 @triton.jit
@@ -55,8 +55,6 @@ def rotary_embedding_kernel(
     D: tl.constexpr,
     R: tl.constexpr,
     TR: tl.constexpr,
-    # strides
-    # Meta-parameters
     BT: tl.constexpr,
     BD: tl.constexpr,
     IS_SEQLEN_OFFSETS_TENSOR: tl.constexpr,
@@ -185,8 +183,9 @@ def rotary_embedding_fwdbwd(
         y[..., R2:].copy_(x[..., R2:])
 
     BD = triton.next_power_of_2(R2)
+    BT = min(128, triton.next_power_of_2(triton.cdiv(T, get_multiprocessor_count(x.device.index))))
 
-    def grid(META): return (triton.cdiv(T, META['BT']), N, H)  # noqa
+    def grid(meta): return (triton.cdiv(T, meta['BT']), N, H)  # noqa
     rotary_embedding_kernel[grid](
         x,
         cos,
@@ -200,6 +199,7 @@ def rotary_embedding_fwdbwd(
         D=D,
         R=R,
         TR=TR,
+        BT=BT,
         BD=BD,
         IS_SEQLEN_OFFSETS_TENSOR=isinstance(seqlen_offsets, torch.Tensor),
         IS_VARLEN=is_varlen,

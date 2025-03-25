@@ -9,8 +9,7 @@ import triton
 import triton.language as tl
 from einops import rearrange
 
-from fla.ops.common.utils import (prepare_chunk_indices, prepare_chunk_offsets,
-                                  prepare_lens, prepare_token_indices)
+from fla.ops.common.utils import prepare_chunk_indices, prepare_chunk_offsets, prepare_lens, prepare_token_indices
 from fla.ops.nsa.utils import _bitonic_merge
 from fla.ops.utils import mean_pooling
 from fla.utils import autocast_custom_bwd, autocast_custom_fwd, contiguous

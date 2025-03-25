@@ -11,6 +11,7 @@ from einops import rearrange
 from fla.ops.simple_gla import chunk_simple_gla
 from fla.ops.simple_gla.fused_recurrent import fused_recurrent_simple_gla
 from fla.ops.simple_gla.parallel import parallel_simple_gla
+from fla.utils import device
 from utils import assert_close
 from fla.utils import device
 
@@ -380,7 +381,6 @@ def test_simple_gla_to_mamba2(vary_A, dtype):
     n_heads = dim // headdim  # (H) in the paper
     ngroups = n_heads  # (G) in the paper; NOTE: do not use group-query here
     dstate = 64  # (N) in the paper
-    device = "cuda"
     atol = 5e-4 if dtype == torch.float else 1e-2
 
     x = 0.1 * torch.randn(batch, seq_len, n_heads, headdim, dtype=dtype, device=device)

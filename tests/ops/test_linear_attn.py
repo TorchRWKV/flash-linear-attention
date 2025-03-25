@@ -3,8 +3,7 @@
 import pytest
 import torch
 
-from fla.ops.linear_attn import (chunk_linear_attn, fused_chunk_linear_attn,
-                                 fused_recurrent_linear_attn)
+from fla.ops.linear_attn import chunk_linear_attn, fused_chunk_linear_attn, fused_recurrent_linear_attn
 from fla.ops.linear_attn.naive import naive_chunk_linear_attn
 from fla.utils import device
 

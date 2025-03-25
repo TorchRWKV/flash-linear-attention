@@ -7,8 +7,7 @@ import torch
 import triton
 import triton.language as tl
 
-from fla.ops.common.fused_recurrent import (fused_recurrent_bwd_kernel,
-                                            fused_recurrent_fwd_kernel)
+from fla.ops.common.fused_recurrent import fused_recurrent_bwd_kernel, fused_recurrent_fwd_kernel
 from fla.ops.utils import chunk_global_cumsum
 from fla.utils import autocast_custom_bwd, autocast_custom_fwd, input_guard
 

@@ -8,8 +8,7 @@ from typing import TYPE_CHECKING, Any, Optional
 
 import torch
 import torch.nn as nn
-from torch.distributed.tensor import (DeviceMesh, DTensor, Placement,
-                                      Replicate, Shard, distribute_module)
+from torch.distributed.tensor import DeviceMesh, DTensor, Placement, Replicate, Shard, distribute_module
 from torch.distributed.tensor.parallel import ParallelStyle
 
 from fla.modules.activations import swiglu, swiglu_linear

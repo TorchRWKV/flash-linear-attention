@@ -19,6 +19,7 @@ def test_gla(
     dtype: torch.dtype,
     activation: str
 ):
+    from fla.utils import device
     naive = GatedLinearAttention(hidden_size=H, gate_fn=activation, fuse_norm=False).to(dtype).to(device)
     fused = GatedLinearAttention(hidden_size=H, gate_fn=activation, fuse_norm=True).to(dtype).to(device)
     fused.q_proj.weight.data.copy_(naive.q_proj.weight.data)

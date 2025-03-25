@@ -1,4 +1,3 @@
-
 # -*- coding: utf-8 -*-
 # Copyright (c) 2023-2025, Songlin Yang, Yu Zhang
 
@@ -8,7 +7,7 @@ import torch
 import triton
 import triton.language as tl
 
-from fla.ops.utils.fastmath import exp
+from fla.ops.utils.exp import exp
 from fla.utils import device_capacity, use_cuda_graph
 
 

@@ -12,8 +12,7 @@ import torch.nn.functional as F
 from einops import rearrange
 
 from fla.modules import RMSNorm, ShortConvolution
-from fla.modules.feature_map import (ReLUFeatureMap, SwishFeatureMap,
-                                     T2RFeatureMap)
+from fla.modules.feature_map import ReLUFeatureMap, SwishFeatureMap, T2RFeatureMap
 from fla.modules.layernorm import rms_norm_linear
 from fla.ops.common.utils import prepare_position_ids, prepare_sequence_ids
 from fla.ops.gsa import chunk_gsa, fused_recurrent_gsa

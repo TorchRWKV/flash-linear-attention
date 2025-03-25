@@ -8,7 +8,7 @@ import triton
 import triton.language as tl
 
 from fla.ops.common.utils import prepare_chunk_offsets
-from fla.ops.utils.fastmath import exp
+from fla.ops.utils.exp import exp
 from fla.utils import is_triton_shared_mem_enough, use_cuda_graph
 
 

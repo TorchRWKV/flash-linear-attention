@@ -30,8 +30,7 @@ from transformers.utils import ModelOutput, logging
 from transformers.utils.deprecation import deprecate_kwarg
 
 from fla.models.mamba.configuration_mamba import MambaConfig
-from fla.modules import (FusedCrossEntropyLoss, FusedLinearCrossEntropyLoss,
-                         RMSNorm)
+from fla.modules import FusedCrossEntropyLoss, FusedLinearCrossEntropyLoss, RMSNorm
 
 logger = logging.get_logger(__name__)
 
@@ -39,10 +38,8 @@ logger = logging.get_logger(__name__)
 with warnings.catch_warnings():
     warnings.simplefilter('ignore')
     try:
-        from mamba_ssm.ops.selective_scan_interface import (mamba_inner_fn,
-                                                            selective_scan_fn)
-        from mamba_ssm.ops.triton.selective_state_update import \
-            selective_state_update
+        from mamba_ssm.ops.selective_scan_interface import mamba_inner_fn, selective_scan_fn
+        from mamba_ssm.ops.triton.selective_state_update import selective_state_update
     except ImportError:
         selective_state_update, selective_scan_fn, mamba_inner_fn = None, None, None
 

@@ -11,7 +11,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from fla.modules import FusedRMSNormSwishGate, ShortConvolution
+from fla.modules import FusedRMSNormGated, ShortConvolution
 from fla.modules.activations import swiglu
 from fla.ops.common.utils import prepare_position_ids, prepare_sequence_ids
 from fla.ops.hgrn import chunk_hgrn, fused_recurrent_hgrn
@@ -61,7 +61,11 @@ class HGRNAttention(nn.Module):
             self.f_conv1d = ShortConvolution(self.input_dim, conv_size, activation=None)
             self.i_conv1d = ShortConvolution(self.input_dim, conv_size, activation=None)
 
-        self.g_norm = FusedRMSNormSwishGate(self.input_dim, elementwise_affine, norm_eps)
+        self.g_norm = FusedRMSNormGated(
+            hidden_size=self.input_dim,
+            elementwise_affine=elementwise_affine,
+            eps=norm_eps
+        )
         self.o_proj = nn.Linear(self.input_dim, hidden_size, bias=False)
 
     def forward(

@@ -18,8 +18,7 @@ import triton
 import triton.language as tl
 
 from fla.modules.layernorm import RMSNorm
-from fla.utils import (get_multiprocessor_count, input_guard, require_version,
-                       use_cuda_graph)
+from fla.utils import get_multiprocessor_count, input_guard, require_version, use_cuda_graph
 
 
 def activation_quant(x):

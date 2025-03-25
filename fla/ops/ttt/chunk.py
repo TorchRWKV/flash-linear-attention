@@ -10,8 +10,7 @@ import triton.language as tl
 
 from fla.modules.layernorm import group_norm
 from fla.ops.common.utils import prepare_chunk_indices, prepare_chunk_offsets
-from fla.utils import (autocast_custom_bwd, autocast_custom_fwd, input_guard,
-                       is_triton_shared_mem_enough, use_cuda_graph)
+from fla.utils import autocast_custom_bwd, autocast_custom_fwd, input_guard, use_cuda_graph
 
 
 @triton.heuristics({
@@ -814,13 +813,7 @@ def chunk_ttt_linear_fwd_o(
     if scale is None:
         scale = k.shape[-1] ** -0.5
     BT = chunk_size
-    if offsets is None:
-        NT = triton.cdiv(T, BT)
-    else:
-        if indices is None:
-            indices = torch.cat([torch.arange(n) for n in triton.cdiv(offsets[1:] - offsets[:-1], BT).tolist()])
-            indices = torch.stack([indices.eq(0).cumsum(0) - 1, indices], 1).to(offsets)
-        NT = len(indices)
+    NT = triton.cdiv(T, BT) if offsets is None else len(indices)
     BK = triton.next_power_of_2(K)
     BV = triton.next_power_of_2(V)
     NK = triton.cdiv(K, BK)
@@ -944,13 +937,7 @@ def chunk_ttt_linear_bwd_dv_local(
     else:
         B, T, H, K, V = *k.shape, do.shape[-1]
     BT = chunk_size
-    if offsets is None:
-        NT = triton.cdiv(T, BT)
-    else:
-        if indices is None:
-            indices = torch.cat([torch.arange(n) for n in triton.cdiv(offsets[1:] - offsets[:-1], BT).tolist()])
-            indices = torch.stack([indices.eq(0).cumsum(0) - 1, indices], 1).to(offsets)
-        NT = len(indices)
+    NT = triton.cdiv(T, BT) if offsets is None else len(indices)
     BK = min(triton.next_power_of_2(K), 128)
     BV = min(triton.next_power_of_2(V), 128)
 

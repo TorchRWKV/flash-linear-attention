@@ -8,11 +8,12 @@ from typing import TYPE_CHECKING, Optional, Tuple
 import torch
 import torch.nn as nn
 from einops import rearrange
+from torch.nn import functional as F
+
 from fla.layers.rwkv6 import LoRA
 from fla.modules import GroupNorm
 from fla.modules.l2norm import l2_norm
 from fla.ops.rwkv7 import chunk_rwkv7, fused_recurrent_rwkv7
-from torch.nn import functional as F
 
 if TYPE_CHECKING:
     from fla.models.utils import Cache
@@ -53,6 +54,7 @@ class RWKV7Attention(nn.Module):
         elif num_heads is not None:
             self.head_dim = int(hidden_size // num_heads)
             self.num_heads = num_heads
+        self.head_v_dim = int(self.value_dim // self.num_heads)
 
         self.decay_low_rank_dim = decay_low_rank_dim
         self.gate_low_rank_dim = gate_low_rank_dim
@@ -166,17 +168,17 @@ class RWKV7Attention(nn.Module):
         g = self.g_lora(xg)
 
         if self.fuse_norm:
-            kk = l2_norm((k * self.k_k).view(batch_size, seq_len, self.num_heads, -1)).view(batch_size, seq_len, -1)
+            kk = l2_norm(rearrange(k * self.k_k, 'b t (h d) -> b t h d', d=self.head_dim))
         else:
-            kk = F.normalize((k * self.k_k).view(batch_size, seq_len, self.num_heads, -1),
-                             dim=-1, p=2.0).view(batch_size, seq_len, -1)
+            kk = F.normalize(rearrange(k * self.k_k, 'b t (h d) -> b t h d', d=self.head_dim), dim=-1, p=2.0)
 
         k = k.addcmul(k * (a - 1), self.k_a)
 
         # dealing with left-padding
         if attention_mask is not None:
             v = v * attention_mask[:, -v.shape[-2]:, None]
-        r, log_w, k, v, kk, a = map(lambda x: rearrange(x, 'b t (h d) -> b t h d', h=self.num_heads), (r, log_w, k, v, kk, a))
+        r, log_w, k, a = map(lambda x: rearrange(x, 'b t (h d) -> b t h d', d=self.head_dim), (r, log_w, k, a))
+        v = rearrange(v, 'b t (h d) -> b t h d', d=self.head_v_dim)
 
         recurrent_state = last_state['recurrent_state'] if last_state is not None else None
 

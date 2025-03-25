@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# Copyright (c) 2023-2024, Songlin Yang, Yu Zhang
+# Copyright (c) 2023-2025, Songlin Yang, Yu Zhang
 
 # code adapted from
 # https://triton-lang.org/main/getting-started/tutorials/03-matrix-multiplication.html
@@ -10,7 +10,7 @@ import torch
 import triton
 import triton.language as tl
 
-from fla.ops.utils.fastmath import exp
+from fla.ops.utils.exp import exp
 from fla.utils import input_guard, use_cuda_graph
 
 

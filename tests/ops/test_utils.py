@@ -213,7 +213,7 @@ def test_mean_pooling(
     head_first: bool
 ):
     torch.manual_seed(42)
-    x = torch.randn(B, H, T, D, dtype=dtype).cuda() if head_first else torch.randn(B, T, H, D, dtype=dtype).cuda()
+    x = torch.randn(B, H, T, D, dtype=dtype).to(device) if head_first else torch.randn(B, T, H, D, dtype=dtype).to(device)
     x.requires_grad = True
     if head_first:
         ref = torch.cat([x[:, :, i:i+C].float().mean(2, True) for i in range(0, T, C)], 2).to(dtype)
@@ -250,9 +250,9 @@ def test_mean_pooling_varlen(
         torch.tensor([0], dtype=torch.long),
         torch.arange(1, T)[torch.randperm(T - 1)[:B-1]],
         torch.tensor([T], dtype=torch.long)
-    ], 0).cuda().sort()[0]
+    ], 0).to(device).sort()[0]
 
-    x = torch.randn(1, T, H, D, dtype=dtype).cuda().requires_grad_(True)
+    x = torch.randn(1, T, H, D, dtype=dtype).to(device).requires_grad_(True)
     ref = torch.cat([
         torch.cat([x[:, i:min(end, i+C), :].float().mean(1, True) for i in range(start, end, C)], 1)
         for start, end in zip(offsets[:-1], offsets[1:])

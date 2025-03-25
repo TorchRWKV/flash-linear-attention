@@ -12,17 +12,18 @@ from fla.utils import is_triton_shared_mem_enough, use_cuda_graph
 
 
 @triton.heuristics({
+    'USE_G': lambda args: args['g'] is not None,
     'USE_INITIAL_STATE': lambda args: args['h0'] is not None,
     'STORE_FINAL_STATE': lambda args: args['ht'] is not None,
     'USE_OFFSETS': lambda args: args['offsets'] is not None,
-    'USE_G': lambda args: args['g'] is not None
 })
 @triton.autotune(
     configs=[
-        triton.Config({}, num_warps=num_warps)
+        triton.Config({}, num_warps=num_warps, num_stages=num_stages)
         for num_warps in [2, 4, 8, 16]
+        for num_stages in [2, 3, 4]
     ],
-    key=['BT', 'BK', 'BV', 'USE_G'],
+    key=['H', 'K', 'V', 'BT', 'BK', 'BV', 'USE_G'],
     use_cuda_graph=use_cuda_graph,
 )
 @triton.jit(do_not_specialize=['T'])
@@ -46,11 +47,11 @@ def chunk_gated_delta_rule_fwd_kernel_h(
     BK: tl.constexpr,
     BV: tl.constexpr,
     NT: tl.constexpr,
+    USE_G: tl.constexpr,
     USE_INITIAL_STATE: tl.constexpr,
     STORE_FINAL_STATE: tl.constexpr,
     USE_OFFSETS: tl.constexpr,
     HEAD_FIRST: tl.constexpr,
-    USE_G: tl.constexpr
 ):
     i_k, i_v, i_nh = tl.program_id(0), tl.program_id(1), tl.program_id(2)
     i_n, i_h = i_nh // H, i_nh % H
@@ -122,15 +123,16 @@ def chunk_gated_delta_rule_fwd_kernel_h(
 
 
 @triton.heuristics({
-    'USE_FINAL_STATE_GRADIENT': lambda args: args['dht'] is not None,
+    'USE_G': lambda args: args['g'] is not None,
     'USE_INITIAL_STATE': lambda args: args['dh0'] is not None,
+    'USE_FINAL_STATE_GRADIENT': lambda args: args['dht'] is not None,
     'USE_OFFSETS': lambda args: args['offsets'] is not None,
-    'USE_G': lambda args: args['g'] is not None
 })
 @triton.autotune(
     configs=[
-        triton.Config({}, num_warps=num_warps)
+        triton.Config({}, num_warps=num_warps, num_stages=num_stages)
         for num_warps in [2, 4, 8, 16]
+        for num_stages in [2, 3, 4]
     ],
     key=['BT', 'BK', 'BV', 'USE_G'],
     use_cuda_graph=use_cuda_graph,
@@ -158,11 +160,11 @@ def chunk_gated_delta_rule_bwd_kernel_dhu(
     BC: tl.constexpr,
     BK: tl.constexpr,
     BV: tl.constexpr,
-    USE_FINAL_STATE_GRADIENT: tl.constexpr,
+    USE_G: tl.constexpr,
     USE_INITIAL_STATE: tl.constexpr,
+    USE_FINAL_STATE_GRADIENT: tl.constexpr,
     USE_OFFSETS: tl.constexpr,
-    HEAD_FIRST: tl.constexpr,
-    USE_G: tl.constexpr
+    HEAD_FIRST: tl.constexpr
 ):
     i_k, i_v, i_nh = tl.program_id(0), tl.program_id(1), tl.program_id(2)
     i_n, i_h = i_nh // H, i_nh % H

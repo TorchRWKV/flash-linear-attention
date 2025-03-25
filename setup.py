@@ -141,6 +141,9 @@ def check_conflicts():
         if 'fla' in installed_packages and 'rwkv-fla' not in installed_packages:  # 精确匹配包名
             print("Error: fla package is already installed. Please uninstall it first with 'pip uninstall fla'")
             sys.exit(1)
+        if 'flash-linear-attention' in installed_packages and 'rwkv-fla' not in installed_packages:  # 精确匹配包名
+            print("Error: fla package is already installed. Please uninstall it first with 'pip uninstall flash-linear-attention'")
+            sys.exit(1)
     except Exception:
         pass
 

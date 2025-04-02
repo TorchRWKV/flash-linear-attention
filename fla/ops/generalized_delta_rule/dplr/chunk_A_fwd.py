@@ -236,7 +236,7 @@ def chunk_dplr_fwd_A_kernel_intra_sub_intra(
     tl.store(p_bg, b_bg.to(p_bg.dtype.element_ty, fp_downcast_rounding="rtne"), boundary_check=(0, 1))
     tl.store(p_ag, b_ag.to(p_ag.dtype.element_ty, fp_downcast_rounding="rtne"), boundary_check=(0, 1))
     tl.store(p_kg, b_kg.to(p_kg.dtype.element_ty, fp_downcast_rounding="rtne"), boundary_check=(0, 1))
-    b_qg, b_kg, b_ag, b_bg = None, None, None, None
+
     tl.debug_barrier()
 
     b_q = b_q.to(b_k.dtype)

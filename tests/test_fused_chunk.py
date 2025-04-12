@@ -3,7 +3,6 @@
 import torch
 import triton
 import triton.language as tl
-from fla.utils import device_torch_lib
 
 
 @triton.jit
@@ -110,7 +109,7 @@ if __name__ == '__main__':
     v = torch.randn((B, H, T, D), dtype=dtype, device=device)
 
     ref = AttentionFunction.apply(q, k, v)
-    infos = device_torch_lib.get_device_properties(q)
+    infos = torch.cuda.get_device_properties(q)
 
     def fmt(x):
         if isinstance(x, (float, torch.Tensor)):

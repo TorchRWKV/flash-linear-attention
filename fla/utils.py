@@ -3,6 +3,7 @@
 import contextlib
 import functools
 import os
+from enum import Enum
 from functools import lru_cache
 from typing import Any, Callable, Dict, Literal, Optional, Tuple
 
@@ -157,17 +158,19 @@ device = get_available_device() if get_available_device() != 'hip' else 'cuda'
 device_torch_lib = getattr(torch, device)
 device_platform = _check_platform()
 
+is_amd = (device_platform == 'amd')
 is_intel = (device_platform == 'intel')
 is_nvidia = (device_platform == 'nvidia')
-is_amd = (device_platform == 'amd')
-is_intel_a770 = (is_intel and 'Intel(R) Arc(TM) A' in torch.xpu.get_device_name(0))
+is_intel_alchemist = (is_intel and 'Intel(R) Arc(TM) A' in torch.xpu.get_device_name(0))
+is_nvidia_hopper = (is_nvidia and ('NVIDIA H' in torch.cuda.get_device_name(0) or torch.cuda.get_device_capability()[0] >= 9))
 use_cuda_graph = (is_nvidia and os.environ.get('FLA_USE_CUDA_GRAPH', '0') == '1')
 
 # Nvidia Ampere or newer, haven't check AMD and intel yet.
 is_tf32_supported = (is_nvidia and torch.cuda.get_device_capability(0)[0] >= 8)
+is_gather_supported = hasattr(triton.language, 'gather')
 
 
-def get_all_max_shared_memory():
+def get_all_max_shared_mem():
     try:
         return [
             triton.runtime.driver.active.utils.get_device_properties(i)['max_shared_mem']
@@ -178,17 +181,28 @@ def get_all_max_shared_memory():
         return [-1]
 
 
+class Backend(Enum):
+    ADA = 101376       # RTX 4090
+    AMPERE = 166912    # A100
+    HOPPER = 232448    # H100
+    DEFAULT = 102400   # Default
+
+    @classmethod
+    def get_shared_memory(cls, arch: str) -> int:
+        try:
+            return cls[arch.upper()].value
+        except KeyError:
+            return cls.DEFAULT.value
+
+
 @lru_cache(maxsize=None)
-def is_triton_shared_mem_enough(max_shared_mem: int = 102400, tensor_idx: int = 0) -> bool:
+def check_shared_mem(arch: str = "none", tensor_idx: int = 0) -> bool:
     try:
-        device_shared_mem_list = get_all_max_shared_memory()
+        device_shared_mem_list = get_all_max_shared_mem()
         max_shared_memory = device_shared_mem_list[tensor_idx]
-        return max_shared_memory >= max_shared_mem
+        return max_shared_memory >= Backend.get_shared_memory(arch)
     except Exception:
         return False
-
-
-device_capacity = is_triton_shared_mem_enough()
 
 
 if check_pytorch_version('2.4'):

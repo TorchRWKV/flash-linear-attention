@@ -30,20 +30,17 @@ def chunk_rwkv7(
     """
     Args:
         r (torch.Tensor):
-            r of shape `[B, H, T, K]` if `head_first=True` else `[B, T, H, K]`.
-        k (torch.Tensor):
-            k of shape `[B, H, T, K]` if `head_first=True` else `[B, T, H, K]`.
-        v (torch.Tensor):
-            v of shape `[B, H, T, V]` if `head_first=True` else `[B, T, H, V]`.
-        a (torch.Tensor):
-            a of shape `[B, H, T, K]` if `head_first=True` else `[B, T, H, K]`.
-        b (torch.Tensor):
-            b of shape `[B, H, T, K]` if `head_first=True` else `[B, T, H, K]`.
+            r of shape `[B, T, H, K]` if `head_first=False` else `[B, H, T, K]`.
         w (torch.Tensor):
-            decay of shape `[B, H, T, K]` if `head_first=True` else `[B, T, H, K]`, kernel
-            will apply log_w = -torch.exp(w)
-        log_w (torch.Tensor):
-            log decay of shape `[B, H, T, K]` if `head_first=True` else `[B, T, H, K]`.
+            log decay of shape `[B, T, H, K]` if `head_first=False` else `[B, H, T, K]`.
+        k (torch.Tensor):
+            k of shape `[B, T, H, K]` if `head_first=False` else `[B, H, T, K]`.
+        v (torch.Tensor):
+            v of shape `[B, T, H, V]` if `head_first=False` else `[B, H, T, V]`.
+        a (torch.Tensor):
+            a of shape `[B, T, H, K]` if `head_first=False` else `[B, H, T, K]`.
+        b (torch.Tensor):
+            b of shape `[B, T, H, K]` if `head_first=False` else `[B, H, T, K]`.
         scale (float):
             scale of the attention.
         initial_state (Optional[torch.Tensor]):
@@ -57,8 +54,8 @@ def chunk_rwkv7(
             consistent with the FlashAttention API.
         head_first (bool):
             whether to use head first. Recommended to be False to avoid extra transposes.
+            Default: `False`.
     """
-
     if w is not None:
         log_w = cal_log_w(w)
     else:

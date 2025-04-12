@@ -14,7 +14,6 @@ from einops import rearrange
 
 from fla.modules import FusedRMSNormGated, ShortConvolution
 from fla.modules.fused_norm_gate import rms_norm_swish_gate_linear
-from fla.ops.common.utils import prepare_position_ids, prepare_sequence_ids
 from fla.ops.gla import chunk_gla, fused_recurrent_gla
 
 if TYPE_CHECKING:
@@ -113,33 +112,33 @@ class LightNetAttention(nn.Module):
         if past_key_values is not None and len(past_key_values) > self.layer_idx:
             last_state = past_key_values[self.layer_idx]
 
-        cu_seqlens, position_ids, seq_idx = kwargs.get('cu_seqlens', None), kwargs.get('position_ids', None), None
+        cu_seqlens = kwargs.get('cu_seqlens', None)
         if self.use_short_conv:
             conv_state_q, conv_state_k, conv_state_v = None, None, None
             if last_state is not None:
                 conv_state_q, conv_state_k, conv_state_v = last_state['conv_state']
             conv_mask = attention_mask[:, -hidden_states.shape[1]:] if attention_mask is not None else None
-            if cu_seqlens is not None:
-                if position_ids is not None:
-                    seq_idx = prepare_sequence_ids(position_ids)
-                else:
-                    seq_idx = prepare_sequence_ids(prepare_position_ids(cu_seqlens))
-                seq_idx = seq_idx.to(torch.int32).unsqueeze(0)
-            q, conv_state_q = self.q_conv1d(x=self.q_proj(hidden_states),
-                                            mask=conv_mask,
-                                            cache=conv_state_q,
-                                            output_final_state=use_cache,
-                                            seq_idx=seq_idx)
-            k, conv_state_k = self.k_conv1d(x=self.k_proj(hidden_states),
-                                            mask=conv_mask,
-                                            cache=conv_state_k,
-                                            output_final_state=use_cache,
-                                            seq_idx=seq_idx)
-            v, conv_state_v = self.v_conv1d(x=self.v_proj(hidden_states),
-                                            mask=conv_mask,
-                                            cache=conv_state_v,
-                                            output_final_state=use_cache,
-                                            seq_idx=seq_idx)
+            q, conv_state_q = self.q_conv1d(
+                x=self.q_proj(hidden_states),
+                mask=conv_mask,
+                cache=conv_state_q,
+                output_final_state=use_cache,
+                cu_seqlens=cu_seqlens
+            )
+            k, conv_state_k = self.k_conv1d(
+                x=self.k_proj(hidden_states),
+                mask=conv_mask,
+                cache=conv_state_k,
+                output_final_state=use_cache,
+                cu_seqlens=cu_seqlens
+            )
+            v, conv_state_v = self.v_conv1d(
+                x=self.v_proj(hidden_states),
+                mask=conv_mask,
+                cache=conv_state_v,
+                output_final_state=use_cache,
+                cu_seqlens=cu_seqlens
+            )
         else:
             q = self.q_proj(hidden_states)
             k = self.k_proj(hidden_states)
@@ -154,6 +153,9 @@ class LightNetAttention(nn.Module):
         v = rearrange(v, '... (h d) -> ... h d', d=self.head_i_dim)
         # TODO: this 2 steps took huge amount of time, which should be optimized
         z = k.float().logcumsumexp(1)
+
+        if cu_seqlens is not None:
+            raise NotImplementedError("LightNet does not support variable-length sequences for now.")
         k, g = torch.exp(k - z).to(k.dtype), (torch.cat((z[:, :1], z[:, :-1]), 1) - z).to(k.dtype)
 
         recurrent_state = last_state['recurrent_state'] if last_state is not None else None
@@ -166,7 +168,6 @@ class LightNetAttention(nn.Module):
                 initial_state=recurrent_state,
                 output_final_state=use_cache,
                 cu_seqlens=cu_seqlens,
-                head_first=False
             )
         elif mode == 'chunk':
             o, recurrent_state = chunk_gla(
@@ -177,7 +178,6 @@ class LightNetAttention(nn.Module):
                 initial_state=recurrent_state,
                 output_final_state=use_cache,
                 cu_seqlens=cu_seqlens,
-                head_first=False
             )
         else:
             raise NotImplementedError(f"Not supported mode `{mode}`.")

@@ -7,7 +7,7 @@ import torch
 import triton
 import triton.language as tl
 
-from fla.utils import use_cuda_graph
+from fla.ops.utils.op import exp
 
 
 @triton.autotune(
@@ -19,8 +19,7 @@ from fla.utils import use_cuda_graph
         triton.Config({}, num_warps=16),
         triton.Config({}, num_warps=32)
     ],
-    key=['D'],
-    use_cuda_graph=use_cuda_graph,
+    key=['D']
 )
 @triton.jit
 def softmax_fwd_kernel(
@@ -35,7 +34,7 @@ def softmax_fwd_kernel(
 
     b_x = tl.load(x + i_n * D + o_d, mask=m_d, other=-float('inf'))
     b_m = tl.max(b_x, 0)
-    b_x = tl.exp(b_x - b_m)
+    b_x = exp(b_x - b_m)
     b_p = b_x / tl.sum(b_x, 0)
 
     tl.store(p + i_n * D + o_d, b_p.to(p.dtype.element_ty), mask=m_d)
@@ -50,8 +49,7 @@ def softmax_fwd_kernel(
         triton.Config({}, num_warps=16),
         triton.Config({}, num_warps=32)
     ],
-    key=['D'],
-    use_cuda_graph=use_cuda_graph,
+    key=['D']
 )
 @triton.jit
 def softmax_bwd_kernel(

@@ -12,7 +12,7 @@ import torch.nn.functional as F
 import triton
 import triton.language as tl
 
-from fla.utils import get_multiprocessor_count, input_guard, use_cuda_graph
+from fla.utils import get_multiprocessor_count, input_guard
 
 
 @triton.autotune(
@@ -22,7 +22,6 @@ from fla.utils import get_multiprocessor_count, input_guard, use_cuda_graph
         for num_stages in [2, 3, 4]
     ],
     key=['N', 'HAS_RESIDUAL', 'STORE_RESIDUAL_OUT', 'IS_RMS_NORM', 'HAS_BIAS'],
-    use_cuda_graph=use_cuda_graph,
 )
 @triton.jit
 def layer_norm_gated_fwd_kernel(
@@ -166,7 +165,6 @@ def layer_norm_gated_fwd(
         for num_stages in [2, 3, 4]
     ],
     key=['N', 'HAS_DRESIDUAL', 'STORE_DRESIDUAL', 'IS_RMS_NORM', 'HAS_BIAS'],
-    use_cuda_graph=use_cuda_graph,
 )
 @triton.jit
 def layer_norm_gated_bwd_kernel(
@@ -493,8 +491,8 @@ class LayerNormGatedLinearFunction(torch.autograd.Function):
         y, mean, rstd, residual_out = layer_norm_gated_fwd(
             x=x,
             g=g,
-            norm_weight=norm_weight,
-            norm_bias=norm_bias,
+            weight=norm_weight,
+            bias=norm_bias,
             eps=eps,
             residual=residual,
             residual_dtype=residual_dtype,

@@ -9,7 +9,6 @@ from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 import fla  # noqa
-from fla.utils import device, device_torch_lib
 
 
 def sizeof_fmt(num, suffix='B'):
@@ -33,6 +32,7 @@ if __name__ == "__main__":
     parser.add_argument("--compile", action='store_true')
     args = parser.parse_args()
 
+    device = "cuda"
     dtype = torch.bfloat16
     torch.manual_seed(0)
 
@@ -66,7 +66,7 @@ if __name__ == "__main__":
     input_ids = tokens.input_ids.to(device=device)[:, :args.length].contiguous()
     max_length = input_ids.shape[1] + args.maxlen
 
-    device_torch_lib.synchronize()
+    torch.cuda.synchronize()
     start = time.time()
     with torch.inference_mode():
         text = model.generate(
@@ -80,10 +80,10 @@ if __name__ == "__main__":
             top_p=args.topp,
             repetition_penalty=args.repetition_penalty
         )
-    device_torch_lib.synchronize()
+    torch.cuda.synchronize()
     elapsed = time.time() - start
     print(f"Prompt:\n{tokenizer.batch_decode(input_ids, skip_special_tokens=True)[0].strip()}\n")
     print(f"Generated:\n{tokenizer.batch_decode(text, skip_special_tokens=True)[0].strip()}\n")
     print(f"Prompt length: {len(input_ids[0])}, generation length: {len(text[0]) - len(input_ids[0])}")
     print(f"Total prompt processing + decoding time: {elapsed * 1000:.0f}ms")
-    print(f"Max memory used: {sizeof_fmt(device_torch_lib.max_memory_allocated())}")
+    print(f"Max memory used: {sizeof_fmt(torch.cuda.max_memory_allocated())}")

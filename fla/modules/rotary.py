@@ -1,7 +1,5 @@
 # -*- coding: utf-8 -*-
-
-# Copyright (c) 2023, Tri Dao.
-# https://github.com/Dao-AILab/flash-attention/blob/main/flash_attn/ops/triton/rotary.py
+# Copyright (c) 2023-2025, Songlin Yang, Yu Zhang
 
 from typing import Optional, Tuple, Union
 
@@ -11,7 +9,8 @@ import triton
 import triton.language as tl
 from einops import rearrange, repeat
 
-from fla.utils import get_multiprocessor_count, input_guard, use_cuda_graph
+from fla.ops.common.utils import prepare_chunk_indices
+from fla.utils import get_multiprocessor_count, input_guard
 
 
 def rotate_half(x, interleaved=False):
@@ -38,7 +37,6 @@ def rotary_embedding_ref(x, cos, sin, interleaved=False):
         for num_stages in [2, 3, 4]
     ],
     key=['B', 'H', 'D', 'INTERLEAVED'],
-    use_cuda_graph=use_cuda_graph,
 )
 @triton.jit
 def rotary_embedding_kernel(
@@ -47,8 +45,8 @@ def rotary_embedding_kernel(
     sin,
     y,
     cu_seqlens,
-    seq_offsets,  # this could be int or a pointer
-    # Matrix dimensions
+    chunk_indices,
+    seq_offsets,
     B: tl.constexpr,
     T: tl.constexpr,
     H: tl.constexpr,
@@ -64,14 +62,16 @@ def rotary_embedding_kernel(
 ):
     i_t, i_b, i_h = tl.program_id(0), tl.program_id(1), tl.program_id(2)
 
-    if not IS_VARLEN:
-        x = x + i_b * T*H*D + i_h * D
-        y = y + i_b * T*H*D + i_h * D
-    else:
-        bos, eos = tl.load(cu_seqlens + i_b), tl.load(cu_seqlens + i_b + 1)
+    if IS_VARLEN:
+        i_n, i_t = tl.load(chunk_indices + i_t * 2).to(tl.int32), tl.load(chunk_indices + i_t * 2 + 1).to(tl.int32)
+        bos, eos = tl.load(cu_seqlens + i_n), tl.load(cu_seqlens + i_n + 1)
         T = eos - bos
         x = x + bos * H*D + i_h * D
         y = y + bos * H*D + i_h * D
+    else:
+        i_n = i_b
+        x = x + i_n * T*H*D + i_h * D
+        y = y + i_n * T*H*D + i_h * D
 
     if i_t * BT >= T:
         return
@@ -80,7 +80,7 @@ def rotary_embedding_kernel(
     if not IS_SEQLEN_OFFSETS_TENSOR:
         o_cs = o_t + seq_offsets
     else:
-        o_cs = o_t + tl.load(seq_offsets + i_b)
+        o_cs = o_t + tl.load(seq_offsets + i_n)
 
     if not INTERLEAVED:
         # Load the 1st and 2nd halves of x, do calculation, then store to 1st and 2nd halves of out
@@ -88,7 +88,7 @@ def rotary_embedding_kernel(
         p_x = x + o_t[:, None] * H*D + o_r[None, :]
         p_cos = cos + (o_cs[:, None] * R + o_r[None, :])
         p_sin = sin + (o_cs[:, None] * R + o_r[None, :])
-        mask = (o_t[:, None] < T) & (o_r[None, :] < R)
+        mask = (o_t[:, None] >= 0) & (o_t[:, None] < T) & (o_r[None, :] < R)
 
         b_cos = tl.load(p_cos, mask=mask, other=1.0).to(tl.float32)
         b_sin = tl.load(p_sin, mask=mask, other=0.0).to(tl.float32)
@@ -116,7 +116,7 @@ def rotary_embedding_kernel(
         p_x1 = x + o_t[:, None] * H*D + o_d_swap[None, :]
         p_cos = cos + (o_cs[:, None] * R + o_d_repeat[None, :])
         p_sin = sin + (o_cs[:, None] * R + o_d_repeat[None, :])
-        mask = (o_cs[:, None] < TR) & (o_d_repeat[None, :] < R)
+        mask = (o_cs[:, None] >= 0) & (o_cs[:, None] < TR) & (o_d_repeat[None, :] < R)
 
         b_cos = tl.load(p_cos, mask=mask, other=1.0).to(tl.float32)
         b_sin = tl.load(p_sin, mask=mask, other=0.0).to(tl.float32)
@@ -137,7 +137,6 @@ def rotary_embedding_fwdbwd(
     sin: torch.Tensor,
     seqlen_offsets: Union[int, torch.Tensor] = 0,
     cu_seqlens: Optional[torch.Tensor] = None,
-    max_seqlen: Optional[int] = None,
     interleaved: bool = False,
     inplace: bool = False,
     conjugate: bool = False
@@ -147,9 +146,8 @@ def rotary_embedding_fwdbwd(
         x: [B, T, H, D].
         cos: [TR, R / 2]
         sin: [TR, R / 2]
-        seqlen_offsets: integer or integer tensor of size (N,)
-        cu_seqlens: (N + 1,) or None
-        max_seqlen: int
+        seqlen_offsets: integer or integer tensor of size [N]
+        cu_seqlens: [N + 1,] or None
 
     Returns:
         y: [B, T, H, D]
@@ -157,13 +155,8 @@ def rotary_embedding_fwdbwd(
     is_varlen = cu_seqlens is not None
 
     B, T, H, D = x.shape
-    if not is_varlen:
-        N = B
-    else:
-        assert max_seqlen is not None, "If cu_seqlens is passed in, then max_seqlen must be passed"
-        N, T = cu_seqlens.shape[0] - 1, max_seqlen
+    N = B if not is_varlen else cu_seqlens.shape[0] - 1
     TR, R = cos.shape
-    assert sin.shape == cos.shape
     R2 = R * 2
 
     assert D <= 256, "Only support D <= 256"
@@ -184,14 +177,17 @@ def rotary_embedding_fwdbwd(
 
     BD = triton.next_power_of_2(R2)
     BT = min(128, triton.next_power_of_2(triton.cdiv(T, get_multiprocessor_count(x.device.index))))
+    chunk_indices = prepare_chunk_indices(cu_seqlens, BT) if is_varlen else None
+    NT = len(chunk_indices) if is_varlen else triton.cdiv(T, BT)
 
-    def grid(meta): return (triton.cdiv(T, meta['BT']), N, H)  # noqa
+    grid = (NT, B, H)
     rotary_embedding_kernel[grid](
         x,
         cos,
         sin,
         y,
         cu_seqlens,
+        chunk_indices,
         seqlen_offsets,
         B=B,
         T=T,
@@ -222,7 +218,6 @@ class RotaryEmbeddingFunction(torch.autograd.Function):
         inplace=False,
         seqlen_offsets: Union[int, torch.Tensor] = 0,
         cu_seqlens: Optional[torch.Tensor] = None,
-        max_seqlen: Optional[int] = None,
     ):
         y = rotary_embedding_fwdbwd(
             x,
@@ -230,7 +225,6 @@ class RotaryEmbeddingFunction(torch.autograd.Function):
             sin,
             seqlen_offsets=seqlen_offsets,
             cu_seqlens=cu_seqlens,
-            max_seqlen=max_seqlen,
             interleaved=interleaved,
             inplace=inplace,
         )
@@ -243,7 +237,6 @@ class RotaryEmbeddingFunction(torch.autograd.Function):
             ctx.seqlen_offsets = None
         ctx.interleaved = interleaved
         ctx.inplace = inplace
-        ctx.max_seqlen = max_seqlen
         return y if not inplace else x
 
     @staticmethod
@@ -264,7 +257,6 @@ class RotaryEmbeddingFunction(torch.autograd.Function):
             sin,
             seqlen_offsets=seqlen_offsets,
             cu_seqlens=cu_seqlens,
-            max_seqlen=ctx.max_seqlen,
             interleaved=ctx.interleaved,
             inplace=ctx.inplace,
             conjugate=True,
@@ -279,8 +271,7 @@ def rotary_embedding(
     interleaved=False,
     inplace=False,
     seqlen_offsets: Union[int, torch.Tensor] = 0,
-    cu_seqlens: Optional[torch.Tensor] = None,
-    max_seqlen: Optional[int] = None,
+    cu_seqlens: Optional[torch.Tensor] = None
 ):
     """
     Args:
@@ -294,7 +285,6 @@ def rotary_embedding(
             Each sequence in x is shifted by this amount.
             Most commonly used in inference when we have KV cache.
         cu_seqlens: [N + 1,] or None
-        max_seqlen: int
 
     Returns:
         out: [B, T, H, D]
@@ -306,8 +296,7 @@ def rotary_embedding(
         interleaved,
         inplace,
         seqlen_offsets,
-        cu_seqlens,
-        max_seqlen
+        cu_seqlens
     )
 
 
@@ -459,11 +448,10 @@ class RotaryEmbedding(nn.Module):
         q: [B, T, H, D]
         k: [B, T, H, D]
         seqlen_offset:
-            (N,) or int. Each sequence in x is shifted by this amount.
+            [N] or int.
+            Each sequence in x is shifted by this amount.
             Most commonly used in inference when we have KV cache.
-            If it's a tensor of shape (N,), then to update the cos / sin cache, one
-            should pass in max_seqlen, which will update the cos / sin cache up to that length.
-        cu_seqlens: (N + 1,) or None
+        cu_seqlens: [N + 1] or None
         max_seqlen: int
         """
         if max_seqlen is not None:
@@ -478,7 +466,6 @@ class RotaryEmbedding(nn.Module):
                 interleaved=self.interleaved,
                 seqlen_offsets=seqlen_offset,
                 cu_seqlens=cu_seqlens,
-                max_seqlen=max_seqlen
             )
             k = rotary_embedding(
                 k,
@@ -487,7 +474,6 @@ class RotaryEmbedding(nn.Module):
                 interleaved=self.interleaved,
                 seqlen_offsets=seqlen_offset,
                 cu_seqlens=cu_seqlens,
-                max_seqlen=max_seqlen
             )
 
         else:
@@ -498,7 +484,6 @@ class RotaryEmbedding(nn.Module):
                 interleaved=self.interleaved,
                 seqlen_offsets=seqlen_offset,
                 cu_seqlens=cu_seqlens,
-                max_seqlen=max_seqlen
             )
             k = rotary_embedding(
                 k,
@@ -507,7 +492,6 @@ class RotaryEmbedding(nn.Module):
                 interleaved=self.interleaved,
                 seqlen_offsets=seqlen_offset,
                 cu_seqlens=cu_seqlens,
-                max_seqlen=max_seqlen
             )
 
         return q, k

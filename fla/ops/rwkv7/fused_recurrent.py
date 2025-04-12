@@ -9,7 +9,7 @@ import triton.language as tl
 
 from fla.ops.generalized_delta_rule import fused_recurrent_dplr_delta_rule
 from fla.utils import input_guard, use_cuda_graph
-from fla.ops.utils.exp import exp
+from fla.ops.utils.op import exp
 
 
 @triton.heuristics({

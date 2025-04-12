@@ -4,8 +4,7 @@ import torch
 import triton
 import triton.language as tl
 
-from fla.utils import (autocast_custom_bwd, autocast_custom_fwd,
-                       check_pytorch_version, input_guard, use_cuda_graph)
+from fla.utils import autocast_custom_bwd, autocast_custom_fwd, check_pytorch_version, input_guard, use_cuda_graph
 
 logger = logging.getLogger(__name__)
 
@@ -230,13 +229,6 @@ def rwkv_mix_bwd_kenel(
     )
 
 
-def channel_mixing_rwkv7_torch(x, x_prev, x_k, key_weight, value_weight):
-    k1 = rwkv_mix_torch(x, x_prev, x_k)
-    k1_K = k1 @ key_weight
-    k = rwkv_relu_and_square_torch(k1_K)
-    return k @ value_weight, x[-1, :]
-
-
 @torch.compile(fullgraph=True)
 def compute_x_k_grad(dk1, x, x_prev):
     """
@@ -322,3 +314,10 @@ def channel_mixing_rwkv7(x: torch.Tensor, x_prev: torch.Tensor, x_k: torch.Tenso
     assert x.dim() == 3
 
     return Rwkv7ChannelMixing.apply(x, x_prev, x_k, key_weight, value_weight, inplace), x[-1, :]
+
+
+def channel_mixing_rwkv7_torch(x, x_prev, x_k, key_weight, value_weight):
+    k1 = rwkv_mix_torch(x, x_prev, x_k)
+    k1_K = k1 @ key_weight
+    k = rwkv_relu_and_square_torch(k1_K)
+    return k @ value_weight, x[-1, :]

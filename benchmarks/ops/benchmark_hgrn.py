@@ -4,7 +4,6 @@ import torch
 import triton
 
 from fla.ops.hgrn import chunk_hgrn, fused_recurrent_hgrn
-from fla.utils import device
 
 
 @triton.testing.perf_report(

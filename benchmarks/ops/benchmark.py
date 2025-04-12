@@ -3,7 +3,6 @@
 
 import torch
 import torch.utils.benchmark as benchmark
-from fla.utils import device_torch_lib
 
 
 def benchmark_forward(
@@ -257,13 +256,13 @@ def pytorch_profiler(
 
 
 def benchmark_memory(fn, *inputs, desc="", verbose=True, **kwinputs):
-    device_torch_lib.empty_cache()
-    device_torch_lib.reset_peak_memory_stats()
-    device_torch_lib.synchronize()
+    torch.cuda.empty_cache()
+    torch.cuda.reset_peak_memory_stats()
+    torch.cuda.synchronize()
     fn(*inputs, **kwinputs)
-    device_torch_lib.synchronize()
-    mem = device_torch_lib.max_memory_allocated() / ((2**20) * 1000)
+    torch.cuda.synchronize()
+    mem = torch.cuda.max_memory_allocated() / ((2**20) * 1000)
     if verbose:
         print(f"{desc} max memory: {mem}GB")
-    device_torch_lib.empty_cache()
+    torch.cuda.empty_cache()
     return mem

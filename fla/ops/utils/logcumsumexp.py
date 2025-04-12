@@ -4,7 +4,7 @@
 import triton
 import triton.language as tl
 
-from fla.utils import use_cuda_graph
+from fla.ops.utils.op import exp, log
 
 
 @triton.autotune(
@@ -13,8 +13,7 @@ from fla.utils import use_cuda_graph
         for BT in [16, 32, 64]
         for num_warps in [2, 4, 8]
     ],
-    key=['S'],
-    use_cuda_graph=use_cuda_graph,
+    key=['S']
 )
 @triton.jit(do_not_specialize=['T'])
 def logcumsumexp_fwd_kernel(
@@ -38,12 +37,10 @@ def logcumsumexp_fwd_kernel(
         b_s = tl.load(p_s, boundary_check=(0, 1)).to(tl.float32)
         # [S,]
         b_mc = tl.max(b_s, 0)
-        # workaround for compiler bugs
-        if i_t > 0:
-            b_mc = tl.maximum(b_mp, b_mc)
-        b_zp = b_zp * tl.exp(b_mp - b_mc)
+        b_mc = tl.maximum(b_mp, b_mc)
+        b_zp = b_zp * exp(b_mp - b_mc)
         # [BT, S]
-        b_s = tl.exp(b_s - b_mc)
+        b_s = exp(b_s - b_mc)
         b_z = tl.dot(m_s, b_s, allow_tf32=False) + b_zp
         # [S,]
         b_zc = tl.max(b_z, 0)
@@ -51,5 +48,5 @@ def logcumsumexp_fwd_kernel(
         b_zp = b_zc
         # [BT, BS]
         # small eps to prevent underflows
-        b_z = tl.log(tl.where(b_z != 0, b_z, 1e-20)) + b_mc
+        b_z = log(tl.where(b_z != 0, b_z, 1e-20)) + b_mc
         tl.store(p_z, b_z.to(p_z.dtype.element_ty), boundary_check=(0, 1))

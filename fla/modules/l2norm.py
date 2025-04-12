@@ -7,7 +7,7 @@ import torch
 import triton
 import triton.language as tl
 
-from fla.utils import input_guard, use_cuda_graph
+from fla.utils import input_guard
 
 
 @triton.autotune(
@@ -15,8 +15,7 @@ from fla.utils import input_guard, use_cuda_graph
         triton.Config({}, num_warps=num_warps)
         for num_warps in [1, 2, 4, 8, 16, 32]
     ],
-    key=["N"],
-    use_cuda_graph=use_cuda_graph,
+    key=['N']
 )
 @triton.jit
 def l2norm_fwd_kernel(

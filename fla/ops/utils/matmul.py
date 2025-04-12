@@ -10,8 +10,8 @@ import torch
 import triton
 import triton.language as tl
 
-from fla.ops.utils.exp import exp
-from fla.utils import input_guard, use_cuda_graph
+from fla.ops.utils.op import exp
+from fla.utils import input_guard
 
 
 # `triton.jit`'ed functions can be auto-tuned by using the `triton.autotune` decorator, which consumes:
@@ -43,8 +43,7 @@ from fla.utils import input_guard, use_cuda_graph
         # triton.Config({'BM': 64, 'BK': 64, 'BN': 128, 'G': 4}, num_stages=4, num_warps=4),
         # triton.Config({'BM': 128, 'BK': 64, 'BN': 32, 'G': 4}, num_stages=4, num_warps=4)
     ],
-    key=['M', 'N', 'K'],
-    use_cuda_graph=use_cuda_graph,
+    key=['M', 'N', 'K']
 )
 @triton.jit
 def matmul_kernel(

@@ -3,7 +3,13 @@
 from fla.models.abc import ABCConfig, ABCForCausalLM, ABCModel
 from fla.models.bitnet import BitNetConfig, BitNetForCausalLM, BitNetModel
 from fla.models.delta_net import DeltaNetConfig, DeltaNetForCausalLM, DeltaNetModel
+from fla.models.forgetting_transformer import (
+    ForgettingTransformerConfig,
+    ForgettingTransformerForCausalLM,
+    ForgettingTransformerModel
+)
 from fla.models.gated_deltanet import GatedDeltaNetConfig, GatedDeltaNetForCausalLM, GatedDeltaNetModel
+from fla.models.gated_deltaproduct import GatedDeltaProductConfig, GatedDeltaProductForCausalLM, GatedDeltaProductModel
 from fla.models.gla import GLAConfig, GLAForCausalLM, GLAModel
 from fla.models.gsa import GSAConfig, GSAForCausalLM, GSAModel
 from fla.models.hgrn import HGRNConfig, HGRNForCausalLM, HGRNModel
@@ -23,6 +29,7 @@ __all__ = [
     'ABCConfig', 'ABCForCausalLM', 'ABCModel',
     'BitNetConfig', 'BitNetForCausalLM', 'BitNetModel',
     'DeltaNetConfig', 'DeltaNetForCausalLM', 'DeltaNetModel',
+    'ForgettingTransformerConfig', 'ForgettingTransformerForCausalLM', 'ForgettingTransformerModel',
     'GatedDeltaNetConfig', 'GatedDeltaNetForCausalLM', 'GatedDeltaNetModel',
     'GLAConfig', 'GLAForCausalLM', 'GLAModel',
     'GSAConfig', 'GSAForCausalLM', 'GSAModel',
@@ -37,5 +44,6 @@ __all__ = [
     'RWKV6Config', 'RWKV6ForCausalLM', 'RWKV6Model',
     'RWKV7Config', 'RWKV7ForCausalLM', 'RWKV7Model',
     'SambaConfig', 'SambaForCausalLM', 'SambaModel',
-    'TransformerConfig', 'TransformerForCausalLM', 'TransformerModel'
+    'TransformerConfig', 'TransformerForCausalLM', 'TransformerModel',
+    'GatedDeltaProductConfig', 'GatedDeltaProductForCausalLM', 'GatedDeltaProductModel',
 ]

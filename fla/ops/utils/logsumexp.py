@@ -7,7 +7,7 @@ import torch
 import triton
 import triton.language as tl
 
-from fla.utils import use_cuda_graph
+from fla.ops.utils.op import exp, log
 
 
 @triton.heuristics({
@@ -18,8 +18,7 @@ from fla.utils import use_cuda_graph
         triton.Config({}, num_warps=num_warps)
         for num_warps in [1, 2, 4, 8, 16, 32]
     ],
-    key=['D'],
-    use_cuda_graph=use_cuda_graph,
+    key=['D']
 )
 @triton.jit
 def logsumexp_fwd_kernel(
@@ -38,7 +37,7 @@ def logsumexp_fwd_kernel(
     if HAS_SCALE:
         b_x = b_x * scale
     b_m = tl.max(b_x, 0)
-    b_z = tl.log(tl.sum(tl.exp(b_x - b_m), 0)) + b_m
+    b_z = log(tl.sum(exp(b_x - b_m), 0)) + b_m
     tl.store(z + i_n * tl.cdiv(D, B) + i_d, b_z)
 
 

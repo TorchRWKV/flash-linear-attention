@@ -7,11 +7,13 @@ import torch
 import triton
 import triton.language as tl
 
-from fla.ops.common.utils import prepare_chunk_indices
+from fla.ops.utils import prepare_chunk_indices
+from fla.ops.utils.op import safe_exp
 
 
 @triton.heuristics({
-    'IS_VARLEN': lambda args: args['cu_seqlens'] is not None
+    'IS_VARLEN': lambda args: args['cu_seqlens'] is not None,
+    'USE_G': lambda args: args['g_cumsum'] is not None
 })
 @triton.autotune(
     configs=[
@@ -26,7 +28,9 @@ from fla.ops.common.utils import prepare_chunk_indices
 def chunk_scaled_dot_kkt_fwd_kernel(
     k,
     beta,
+    g_cumsum,
     A,
+    Ag,
     cu_seqlens,
     chunk_indices,
     T,
@@ -35,6 +39,7 @@ def chunk_scaled_dot_kkt_fwd_kernel(
     BT: tl.constexpr,
     BK: tl.constexpr,
     IS_VARLEN: tl.constexpr,
+    USE_G: tl.constexpr,
 ):
     i_t, i_bh = tl.program_id(0), tl.program_id(1)
     i_b, i_h = i_bh // H, i_bh % H
@@ -60,11 +65,20 @@ def chunk_scaled_dot_kkt_fwd_kernel(
     p_A = tl.make_block_ptr(A + (bos*H + i_h) * BT, (T, BT), (BT*H, 1), (i_t * BT, 0), (BT, BT), (1, 0))
     tl.store(p_A, b_A.to(p_A.dtype.element_ty), boundary_check=(0, 1))
 
+    if USE_G:
+        p_g = tl.make_block_ptr(g_cumsum + bos*H + i_h, (T,), (H,), (i_t * BT,), (BT,), (0,))
+        b_g = tl.load(p_g, boundary_check=(0,))
+        b_g_diff = b_g[:, None] - b_g[None, :]
+        b_Ag = b_A * safe_exp(b_g_diff)
+        p_Ag = tl.make_block_ptr(Ag + (bos*H + i_h) * BT, (T, BT), (BT*H, 1), (i_t * BT, 0), (BT, BT), (1, 0))
+        tl.store(p_Ag, b_Ag.to(p_Ag.dtype.element_ty), boundary_check=(0, 1))
+
 
 def chunk_scaled_dot_kkt_fwd(
     k: torch.Tensor,
     beta: torch.Tensor,
-    cu_seqlens: Optional[torch.LongTensor],
+    g_cumsum: Optional[torch.Tensor] = None,
+    cu_seqlens: Optional[torch.LongTensor] = None,
     chunk_size: int = 64,
     output_dtype: torch.dtype = torch.float32
 ) -> torch.Tensor:
@@ -76,6 +90,9 @@ def chunk_scaled_dot_kkt_fwd(
             The key tensor of shape `[B, T, H, K]`.
         beta (torch.Tensor):
             The beta tensor of shape `[B, T, H]`.
+        g_cumsum (torch.Tensor):
+            The cumulative sum of the gate tensor of shape `[B, T, H]`.
+            Default: None
         cu_seqlens (torch.LongTensor):
             The cumulative sequence lengths of the input tensor.
             Default: None
@@ -92,10 +109,13 @@ def chunk_scaled_dot_kkt_fwd(
     chunk_indices = prepare_chunk_indices(cu_seqlens, BT) if cu_seqlens is not None else None
     NT = triton.cdiv(T, BT) if cu_seqlens is None else len(chunk_indices)
     A = torch.empty(B, T, H, BT, device=k.device, dtype=output_dtype)
+    Ag = torch.empty(B, T, H, BT, device=k.device, dtype=output_dtype) if g_cumsum is not None else None
     chunk_scaled_dot_kkt_fwd_kernel[(NT, B * H)](
         k=k,
         beta=beta,
+        g_cumsum=g_cumsum,
         A=A,
+        Ag=Ag,
         cu_seqlens=cu_seqlens,
         chunk_indices=chunk_indices,
         T=T,
@@ -103,4 +123,4 @@ def chunk_scaled_dot_kkt_fwd(
         K=K,
         BT=BT,
     )
-    return A
+    return A, Ag

@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 # Copyright (c) 2024, Songlin Yang, Yu Zhang
 
-import warnings
 from typing import Optional, Tuple
 
 import torch
@@ -90,7 +89,7 @@ def fused_recurrent_gla(
         >>> assert ht.allclose(ht_var)
     """
     if head_first:
-        warnings.warn(
+        raise DeprecationWarning(
             "head_first is deprecated and will be removed in a future version. "
             "Please use head_first=False for now instead."
         )
@@ -100,7 +99,7 @@ def fused_recurrent_gla(
         if gv is not None:
             gv = rearrange(gv, 'b h t ... -> b t h ...')
     if not head_first and q.shape[1] < q.shape[2]:
-        warnings.warn(
+        raise DeprecationWarning(
             f"Input tensor shape suggests potential format mismatch: seq_len ({q.shape[1]}) < num_heads ({q.shape[2]}). "
             "This may indicate the inputs were passed in head-first format [B, H, T, ...] "
             "when head_first=False was specified. "

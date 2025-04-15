@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 # Copyright (c) 2023-2025, Songlin Yang, Yu Zhang, Yuqi Pan
 
-import warnings
 from typing import Optional, Tuple
 
 import torch
@@ -11,7 +10,7 @@ import triton.language as tl
 from einops import rearrange
 
 from fla.modules.layernorm import group_norm
-from fla.ops.common.utils import prepare_chunk_indices, prepare_chunk_offsets
+from fla.ops.utils import prepare_chunk_indices, prepare_chunk_offsets
 from fla.utils import autocast_custom_bwd, autocast_custom_fwd, input_guard
 
 
@@ -1399,13 +1398,13 @@ def chunk_ttt_linear(
     if isinstance(eta, float):
         eta = torch.full_like(q[:, :, :, :1], eta)
     if head_first:
-        warnings.warn(
+        raise DeprecationWarning(
             "head_first is deprecated and will be removed in a future version. "
             "Please use head_first=False for now instead."
         )
         q, k, v, eta = map(lambda x: rearrange(x, 'b h t ... -> b t h ...'), (q, k, v, eta))
     if not head_first and q.shape[1] < q.shape[2]:
-        warnings.warn(
+        raise DeprecationWarning(
             f"Input tensor shape suggests potential format mismatch: seq_len ({q.shape[1]}) < num_heads ({q.shape[2]}). "
             "This may indicate the inputs were passed in head-first format [B, H, T, ...] "
             "when head_first=False was specified. "

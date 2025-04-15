@@ -1,18 +1,17 @@
 # -*- coding: utf-8 -*-
 # Copyright (c) 2023-2025, Songlin Yang, Yu Zhang
 
-import warnings
 from typing import Optional
 
 import torch
-import triton
 from einops import rearrange
 
 from fla.modules.l2norm import l2norm_bwd, l2norm_fwd
 from fla.ops.common.chunk_delta_h import chunk_gated_delta_rule_bwd_dhu, chunk_gated_delta_rule_fwd_h
 from fla.ops.common.chunk_o import chunk_bwd_dqkwg, chunk_bwd_dv_local, chunk_fwd_o
-from fla.ops.gated_delta_rule.wy_fast import bwd_prepare_wy_repr, fwd_prepare_wy_repr, fwd_recompute_w_u
-from fla.ops.utils import chunk_local_cumsum
+from fla.ops.common.chunk_scaled_dot_kkt import chunk_scaled_dot_kkt_fwd
+from fla.ops.gated_delta_rule.wy_fast import prepare_wy_repr_bwd, recompute_w_u_fwd
+from fla.ops.utils import chunk_local_cumsum, solve_tril
 from fla.utils import autocast_custom_bwd, autocast_custom_fwd, input_guard
 
 
@@ -25,20 +24,35 @@ def chunk_gated_delta_rule_fwd(
     scale: float,
     initial_state: torch.Tensor,
     output_final_state: bool,
-    cu_seqlens: Optional[torch.LongTensor] = None,
-    chunk_size: int = 64
+    cu_seqlens: Optional[torch.LongTensor] = None
 ):
-    g = chunk_local_cumsum(g, chunk_size=chunk_size, cu_seqlens=cu_seqlens)
+    g = chunk_local_cumsum(g, chunk_size=64, cu_seqlens=cu_seqlens)
     # obtain WY representation. u is actually the new v.
-    w, u, Aw, Au = fwd_prepare_wy_repr(
+    Aw, Au = chunk_scaled_dot_kkt_fwd(
+        k=k,
+        beta=beta,
+        g_cumsum=g,
+        cu_seqlens=cu_seqlens,
+        output_dtype=torch.float32
+    )
+    Aw = solve_tril(
+        A=Aw,
+        cu_seqlens=cu_seqlens,
+        output_dtype=k.dtype
+    )
+    Au = solve_tril(
+        A=Au,
+        cu_seqlens=cu_seqlens,
+        output_dtype=k.dtype
+    )
+    w, u = recompute_w_u_fwd(
         k=k,
         v=v,
         beta=beta,
-        g=g,
+        Aw=Aw,
+        Au=Au,
         cu_seqlens=cu_seqlens,
-        chunk_size=chunk_size
     )
-
     h, v_new, final_state = chunk_gated_delta_rule_fwd_h(
         k=k,
         w=w,
@@ -47,10 +61,7 @@ def chunk_gated_delta_rule_fwd(
         initial_state=initial_state,
         output_final_state=output_final_state,
         cu_seqlens=cu_seqlens,
-        chunk_size=chunk_size
     )
-
-    # obtain output
     o = chunk_fwd_o(
         q=q,
         k=k,
@@ -59,7 +70,6 @@ def chunk_gated_delta_rule_fwd(
         g=g,
         scale=scale,
         cu_seqlens=cu_seqlens,
-        chunk_size=chunk_size
     )
     return g, o, Aw, Au, final_state
 
@@ -77,18 +87,14 @@ def chunk_gated_delta_rule_bwd(
     do: torch.Tensor,
     dht: torch.Tensor,
     cu_seqlens: Optional[torch.LongTensor] = None,
-    chunk_size: int = 64
 ):
-    T = q.shape[1]
-    BT = min(chunk_size, max(triton.next_power_of_2(T), 16))
-    w, u = fwd_recompute_w_u(
+    w, u = recompute_w_u_fwd(
         k=k,
         v=v,
         beta=beta,
         Aw=Aw,
         Au=Au,
         cu_seqlens=cu_seqlens,
-        chunk_size=BT
     )
     h, v_new, _ = chunk_gated_delta_rule_fwd_h(
         k=k,
@@ -98,7 +104,6 @@ def chunk_gated_delta_rule_bwd(
         initial_state=initial_state,
         output_final_state=False,
         cu_seqlens=cu_seqlens,
-        chunk_size=BT
     )
     dv = chunk_bwd_dv_local(
         q=q,
@@ -107,7 +112,6 @@ def chunk_gated_delta_rule_bwd(
         do=do,
         scale=scale,
         cu_seqlens=cu_seqlens,
-        chunk_size=BT
     )
     dh, dh0, dv = chunk_gated_delta_rule_bwd_dhu(
         q=q,
@@ -120,8 +124,8 @@ def chunk_gated_delta_rule_bwd(
         dv=dv,
         scale=scale,
         cu_seqlens=cu_seqlens,
-        chunk_size=BT
     )
+
     dq, dk, dw, dg = chunk_bwd_dqkwg(
         q=q,
         k=k,
@@ -134,9 +138,8 @@ def chunk_gated_delta_rule_bwd(
         dh=dh,
         scale=scale,
         cu_seqlens=cu_seqlens,
-        chunk_size=BT
     )
-    dk2, dv, db, dg2 = bwd_prepare_wy_repr(
+    dk2, dv, db, dg2 = prepare_wy_repr_bwd(
         k=k,
         v=v,
         beta=beta,
@@ -146,12 +149,11 @@ def chunk_gated_delta_rule_bwd(
         dw=dw,
         du=dv,
         cu_seqlens=cu_seqlens,
-        chunk_size=BT
     )
     dk.add_(dk2)
     dg.add_(dg2)
     assert dg.dtype == torch.float32, "dg should be fp32"
-    dg = chunk_local_cumsum(dg, chunk_size=chunk_size, reverse=True, cu_seqlens=cu_seqlens)
+    dg = chunk_local_cumsum(dg, chunk_size=64, reverse=True, cu_seqlens=cu_seqlens)
     return dq, dk, dv, db, dg, dh0
 
 
@@ -173,7 +175,6 @@ class ChunkGatedDeltaRuleFunction(torch.autograd.Function):
         cu_seqlens: Optional[torch.LongTensor] = None,
         use_qk_l2norm_in_kernel: bool = False
     ):
-        chunk_size = 64
         q_orig = q
         k_orig = k
 
@@ -191,10 +192,8 @@ class ChunkGatedDeltaRuleFunction(torch.autograd.Function):
             initial_state=initial_state,
             output_final_state=output_final_state,
             cu_seqlens=cu_seqlens,
-            chunk_size=chunk_size,
         )
         ctx.save_for_backward(q_orig, k_orig, v, g, beta, Aw, Au, initial_state, cu_seqlens)
-        ctx.chunk_size = chunk_size
         ctx.scale = scale
         ctx.use_qk_l2norm_in_kernel = use_qk_l2norm_in_kernel
         return o.to(q.dtype), final_state
@@ -224,7 +223,6 @@ class ChunkGatedDeltaRuleFunction(torch.autograd.Function):
             do=do,
             dht=dht,
             cu_seqlens=cu_seqlens,
-            chunk_size=ctx.chunk_size
         )
         if ctx.use_qk_l2norm_in_kernel:
             dq = l2norm_bwd(q_orig, dq)
@@ -314,13 +312,13 @@ def chunk_gated_delta_rule(
     assert len(beta.shape) == 3, "beta must be of shape [B, T, H] if head_first=False, or [B, H, T] otherwise."
 
     if head_first:
-        warnings.warn(
+        raise DeprecationWarning(
             "head_first is deprecated and will be removed in a future version. "
             "Please use head_first=False for now instead."
         )
         q, k, v, beta, g = map(lambda x: rearrange(x, 'b h t ... -> b t h ...'), (q, k, v, beta, g))
     if not head_first and q.shape[1] < q.shape[2]:
-        warnings.warn(
+        raise DeprecationWarning(
             f"Input tensor shape suggests potential format mismatch: seq_len ({q.shape[1]}) < num_heads ({q.shape[2]}). "
             "This may indicate the inputs were passed in head-first format [B, H, T, ...] "
             "when head_first=False was specified. "

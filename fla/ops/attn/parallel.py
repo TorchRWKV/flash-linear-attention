@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 # Copyright (c) 2023-2025, Songlin Yang, Yu Zhang
 
-import warnings
 from typing import Optional
 
 import torch
@@ -9,7 +8,7 @@ import triton
 import triton.language as tl
 from einops import rearrange, reduce
 
-from fla.ops.common.utils import prepare_chunk_indices
+from fla.ops.utils import prepare_chunk_indices
 from fla.ops.utils.cumsum import chunk_global_cumsum
 from fla.ops.utils.op import exp, log, safe_exp
 from fla.utils import autocast_custom_bwd, autocast_custom_fwd, check_shared_mem, contiguous
@@ -713,7 +712,7 @@ def parallel_attn(
             Outputs of shape `[B, T, HQ, V]` if `head_first=False` else `[B, HQ, T, V]`.
     """
     if head_first:
-        warnings.warn(
+        raise DeprecationWarning(
             "head_first is deprecated and will be removed in a future version. "
             "Please use head_first=False for now instead."
         )
@@ -721,7 +720,7 @@ def parallel_attn(
         if g is not None:
             g = rearrange(g, 'b h t ... -> b t h ...')
     if not head_first and q.shape[1] < q.shape[2]:
-        warnings.warn(
+        raise DeprecationWarning(
             f"Input tensor shape suggests potential format mismatch: seq_len ({q.shape[1]}) < num_heads ({q.shape[2]}). "
             "This may indicate the inputs were passed in head-first format [B, H, T, ...] "
             "when head_first=False was specified. "

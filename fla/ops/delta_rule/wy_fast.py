@@ -8,7 +8,7 @@ import triton
 import triton.language as tl
 
 from fla.ops.common.chunk_scaled_dot_kkt import chunk_scaled_dot_kkt_fwd
-from fla.ops.common.utils import prepare_chunk_indices
+from fla.ops.utils import prepare_chunk_indices
 from fla.ops.utils.solve_tril import solve_tril
 from fla.utils import check_shared_mem, is_nvidia_hopper
 
@@ -27,7 +27,7 @@ NUM_WARPS = [2, 4] if is_nvidia_hopper else [2, 4, 8]
     key=['H', 'K', 'V', 'BT', 'BK', 'BV', 'IS_VARLEN'],
 )
 @triton.jit(do_not_specialize=['T'])
-def fwd_recompute_w_u_kernel(
+def recompute_w_u_fwd_kernel(
     k,
     v,
     beta,
@@ -88,7 +88,7 @@ def fwd_recompute_w_u_kernel(
     key=['H', 'K', 'V', 'BT', 'BK', 'BV', 'IS_VARLEN'],
 )
 @triton.jit(do_not_specialize=['T'])
-def bwd_prepare_wy_repr_kernel(
+def prepare_wy_repr_bwd_kernel(
     k,
     v,
     beta,
@@ -177,47 +177,44 @@ def bwd_prepare_wy_repr_kernel(
     tl.store(p_dbeta, b_dbeta.to(p_dbeta.dtype.element_ty), boundary_check=(0,))
 
 
-def fwd_prepare_wy_repr(
+def prepare_wy_repr_fwd(
     k: torch.Tensor,
     v: torch.Tensor,
     beta: torch.Tensor,
     cu_seqlens: Optional[torch.LongTensor],
-    chunk_size: int = 64
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    A = chunk_scaled_dot_kkt_fwd(
+    A, _ = chunk_scaled_dot_kkt_fwd(
         k=k,
         beta=beta,
+        g_cumsum=None,
         cu_seqlens=cu_seqlens,
-        chunk_size=chunk_size,
-        output_dtype=torch.float32
+        chunk_size=64,
+        output_dtype=torch.float32,
     )
     A = solve_tril(
         A=A,
         cu_seqlens=cu_seqlens,
         output_dtype=k.dtype
     )
-
-    w, u = fwd_recompute_w_u(
+    w, u = recompute_w_u_fwd(
         k=k,
         v=v,
         beta=beta,
         A=A,
         cu_seqlens=cu_seqlens,
-        chunk_size=chunk_size
     )
     return w, u, A
 
 
-def fwd_recompute_w_u(
+def recompute_w_u_fwd(
     k: torch.Tensor,
     v: torch.Tensor,
     beta: torch.Tensor,
     A: torch.Tensor,
     cu_seqlens: Optional[torch.LongTensor],
-    chunk_size: int
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     B, T, H, K, V = *k.shape, v.shape[-1]
-    BT = min(chunk_size, max(triton.next_power_of_2(T), 16))
+    BT = 64
     CONST_TILING = 64 if check_shared_mem() else 32
     BK = min(triton.next_power_of_2(K), CONST_TILING)
     BV = min(triton.next_power_of_2(V), CONST_TILING)
@@ -227,7 +224,7 @@ def fwd_recompute_w_u(
 
     u = torch.empty_like(v)
     w = torch.empty_like(k)
-    fwd_recompute_w_u_kernel[(NT, B*H)](
+    recompute_w_u_fwd_kernel[(NT, B*H)](
         k,
         v,
         beta,
@@ -247,18 +244,17 @@ def fwd_recompute_w_u(
     return w, u
 
 
-def bwd_prepare_wy_repr(
+def prepare_wy_repr_bwd(
     k: torch.Tensor,
     v: torch.Tensor,
     beta: torch.Tensor,
     A: torch.Tensor,
     dw: torch.Tensor,
     du: torch.Tensor,
-    cu_seqlens: Optional[torch.LongTensor],
-    chunk_size: int
+    cu_seqlens: Optional[torch.LongTensor]
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     B, T, H, K, V = *k.shape, v.shape[-1]
-    BT = min(chunk_size, max(triton.next_power_of_2(T), 16))
+    BT = A.shape[-1]
     CONST_TILING = 64 if check_shared_mem() else 32
     BK = min(triton.next_power_of_2(K), CONST_TILING)
     BV = min(triton.next_power_of_2(V), CONST_TILING)
@@ -269,7 +265,7 @@ def bwd_prepare_wy_repr(
     dk = torch.empty_like(k)
     dv = torch.empty_like(v)
     dbeta = torch.empty_like(beta)
-    bwd_prepare_wy_repr_kernel[(NT, B * H)](
+    prepare_wy_repr_bwd_kernel[(NT, B * H)](
         k,
         v,
         beta,
@@ -290,3 +286,10 @@ def bwd_prepare_wy_repr(
         BV=BV,
     )
     return dk, dv, dbeta
+
+
+fwd_prepare_wy_repr = prepare_wy_repr_fwd
+
+bwd_prepare_wy_repr = prepare_wy_repr_bwd
+
+fwd_recompute_w_u = recompute_w_u_fwd

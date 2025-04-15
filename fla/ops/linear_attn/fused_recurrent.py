@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 # Copyright (c) 2023-2025, Songlin Yang, Yu Zhang
 
-import warnings
 from typing import Optional, Tuple
 
 import torch
@@ -249,13 +248,13 @@ def fused_recurrent_linear_attn(
     if scale is None:
         scale = q.shape[-1] ** -0.5
     if head_first:
-        warnings.warn(
+        raise DeprecationWarning(
             "head_first is deprecated and will be removed in a future version. "
             "Please use head_first=False for now instead."
         )
     if not head_first:
         if q.shape[1] < q.shape[2]:
-            warnings.warn(
+            raise DeprecationWarning(
                 f"Input tensor shape suggests potential format mismatch: seq_len ({q.shape[1]}) < num_heads ({q.shape[2]}). "
                 "This may indicate the inputs were passed in head-first format [B, H, T, ...] "
                 "when head_first=False was specified. "

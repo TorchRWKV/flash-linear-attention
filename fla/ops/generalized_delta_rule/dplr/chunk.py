@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 # Copyright (c) 2023-2025, Songlin Yang, Yu Zhang
 
-import warnings
 from typing import Optional
 
 import torch
@@ -15,7 +14,7 @@ from fla.ops.generalized_delta_rule.dplr.chunk_h_fwd import chunk_dplr_fwd_h
 from fla.ops.generalized_delta_rule.dplr.chunk_o_bwd import chunk_dplr_bwd_dAu, chunk_dplr_bwd_dv, chunk_dplr_bwd_o
 from fla.ops.generalized_delta_rule.dplr.chunk_o_fwd import chunk_dplr_fwd_o
 from fla.ops.generalized_delta_rule.dplr.wy_fast_bwd import chunk_dplr_bwd_wy
-from fla.ops.generalized_delta_rule.dplr.wy_fast_fwd import fwd_prepare_wy_repr
+from fla.ops.generalized_delta_rule.dplr.wy_fast_fwd import prepare_wy_repr_fwd
 from fla.ops.rwkv6.chunk import chunk_rwkv6_fwd_cumsum
 from fla.utils import autocast_custom_bwd, autocast_custom_fwd, input_guard
 
@@ -52,7 +51,7 @@ def chunk_dplr_fwd(
 
     # A_ab, A_ak, gi, ge torch.float32
     # A_qk, A_qb, qg, kg, ag, bg, dtype=q.dtype, eg: bf16
-    w, u, _ = fwd_prepare_wy_repr(
+    w, u, _ = prepare_wy_repr_fwd(
         ag=ag,
         A_ab=A_ab,
         A_ak=A_ak,
@@ -155,7 +154,7 @@ class ChunkDPLRDeltaRuleFunction(torch.autograd.Function):
             cu_seqlens=cu_seqlens,
             chunk_size=BT,
         )
-        w, u, A_ab_inv = fwd_prepare_wy_repr(
+        w, u, A_ab_inv = prepare_wy_repr_fwd(
             ag=ag,
             A_ab=A_ab,
             A_ak=A_ak,
@@ -318,20 +317,20 @@ def chunk_dplr_delta_rule(
             Final state of shape `[N, H, K, V]` if `output_final_state=True` else `None`.
     """
     if head_first:
-        warnings.warn(
+        raise DeprecationWarning(
             "head_first is deprecated and will be removed in a future version. "
             "Please use head_first=False for now instead."
         )
         q, k, v, a, b, gk = map(lambda x: rearrange(x, 'b h t ... -> b t h ...'), (q, k, v, a, b, gk))
     if not head_first and q.shape[1] < q.shape[2]:
-        warnings.warn(
+        raise DeprecationWarning(
             f"Input tensor shape suggests potential format mismatch: seq_len ({q.shape[1]}) < num_heads ({q.shape[2]}). "
             "This may indicate the inputs were passed in head-first format [B, H, T, ...] "
             "when head_first=False was specified. "
             "Please verify your input tensor format matches the expected shape [B, T, H, ...]."
         )
     if q.dtype == torch.float32:
-        warnings.warn(
+        raise DeprecationWarning(
             """ChunkDeltaRuleFunction does not support float32. Please use bfloat16.
             If you want to use float32, please solve the issue by yourself."""
         )

@@ -7,7 +7,7 @@ import torch
 import triton
 import triton.language as tl
 
-from fla.ops.common.utils import prepare_chunk_indices
+from fla.ops.utils import prepare_chunk_indices
 from fla.ops.utils.op import exp, safe_exp
 from fla.utils import check_shared_mem, is_nvidia_hopper
 

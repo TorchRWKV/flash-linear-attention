@@ -399,7 +399,7 @@ class RWKV7Model(RWKV7PreTrainedModel):
         )
 
 
-class RWKV7ForCausalLM(RWKV7Model, GenerationMixin):
+class RWKV7ForCausalLM(RWKV7PreTrainedModel, GenerationMixin):
 
     _tied_weights_keys = ["lm_head.weight"]
 

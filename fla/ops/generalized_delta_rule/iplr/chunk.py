@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 # Copyright (c) 2023-2025, Songlin Yang, Yu Zhang
 
-import warnings
 from typing import Optional, Tuple
 
 import torch
@@ -9,8 +8,8 @@ import triton
 import triton.language as tl
 from einops import rearrange
 
-from fla.ops.common.utils import prepare_chunk_indices, prepare_chunk_offsets
-from fla.ops.generalized_delta_rule.iplr.wy_fast import fwd_prepare_wy_repr
+from fla.ops.generalized_delta_rule.iplr.wy_fast import prepare_wy_repr_fwd
+from fla.ops.utils import prepare_chunk_indices, prepare_chunk_offsets
 from fla.utils import autocast_custom_bwd, autocast_custom_fwd, check_shared_mem, input_guard, use_cuda_graph
 
 BKV_LIST = [64, 128] if check_shared_mem() else [32, 64]
@@ -330,7 +329,7 @@ def chunk_generalized_iplr_delta_rule_fwd(
 ):
     T = q.shape[1]
     BT = min(chunk_size, max(triton.next_power_of_2(T), 16))
-    w, u, _ = fwd_prepare_wy_repr(
+    w, u, _ = prepare_wy_repr_fwd(
         a=a,
         b=b,
         k=k,
@@ -462,13 +461,13 @@ def chunk_iplr_delta_rule(
     assert q.dtype != torch.float32, "ChunkDeltaRuleFunction does not support float32. Please use bfloat16."
 
     if head_first:
-        warnings.warn(
+        raise DeprecationWarning(
             "head_first is deprecated and will be removed in a future version. "
             "Please use head_first=False for now instead."
         )
         q, k, v, a, b = map(lambda x: rearrange(x, 'b h t ... -> b t h ...'), (q, k, v, a, b))
     if not head_first and q.shape[1] < q.shape[2]:
-        warnings.warn(
+        raise DeprecationWarning(
             f"Input tensor shape suggests potential format mismatch: seq_len ({q.shape[1]}) < num_heads ({q.shape[2]}). "
             "This may indicate the inputs were passed in head-first format [B, H, T, ...] "
             "when head_first=False was specified. "

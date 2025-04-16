@@ -46,11 +46,6 @@ def naive_nsa(
     """
     if scale is None:
         scale = k.shape[-1] ** -0.5
-    if cu_seqlens is not None:
-        if head_first:
-            raise RuntimeError(
-                "Sequences with variable lengths are not supported for head-first mode"
-            )
     if head_first:
         q, k, v, block_indices = map(lambda x: rearrange(x, 'b h t ... -> b t h ...'), (q, k, v, block_indices))
 

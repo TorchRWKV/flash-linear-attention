@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 # Copyright (c) 2023-2025, Songlin Yang, Yu Zhang
 
+import warnings
 from typing import Optional
 
 import torch
@@ -54,7 +55,7 @@ def parallel_forgetting_attn(
         )
         q, k, v, g = map(lambda x: rearrange(x, 'b h t ... -> b t h ...'), (q, k, v, g))
     if not head_first and q.shape[1] < q.shape[2]:
-        raise DeprecationWarning(
+        warnings.warn(
             f"Input tensor shape suggests potential format mismatch: seq_len ({q.shape[1]}) < num_heads ({q.shape[2]}). "
             "This may indicate the inputs were passed in head-first format [B, H, T, ...] "
             "when head_first=False was specified. "

@@ -32,8 +32,7 @@ def l2norm_fwd_kernel(
     cols = tl.arange(0, BLOCK_N)
     mask = cols < N
     x = tl.load(X + cols, mask=mask, other=0.0).to(tl.float32)
-    xbar = tl.where(mask, x, 0.0)
-    var = tl.sum(xbar * xbar, axis=0)
+    var = tl.sum(x * x, axis=0)
     rstd = 1 / tl.sqrt(var + eps)
     # tl.store(Rstd + i_m, rstd)
     # Normalize and apply linear transformation
@@ -67,16 +66,71 @@ def l2norm_bwd_kernel(
     cols = tl.arange(0, BLOCK_N)
     mask = cols < N
     x = tl.load(X + cols, mask=mask, other=0.0).to(tl.float32)
-    x = tl.where(mask, x, 0.0)
     var = tl.sum(x * x)
     rstd = 1 / tl.sqrt(var + eps)
-    # tl.store(Rstd + i_m, rstd)
-    # Normalize and apply linear transformation
-    # y = x * rstd
     dy = tl.load(DY + cols, mask=mask, other=0.0).to(tl.float32)
-    dy = tl.where(mask, dy, 0.0)
     dx = dy * rstd - tl.sum(dy * x) * (1 / (var+eps)) * rstd * x
     tl.store(DX + cols, dx, mask=mask)
+
+
+@triton.autotune(
+    configs=[
+        triton.Config({'BM': BM}, num_warps=num_warps)
+        for num_warps in [1, 2, 4, 8, 16]
+        for BM in [32, 64, 128]
+    ],
+    key=['N', 'autotune_aux']
+)
+@triton.jit
+def l2norm_fwd_kernel_small_N(
+    X,
+    Y,
+    eps,
+    autotune_aux: tl.constexpr,
+    BN: tl.constexpr,
+    BM: tl.constexpr,
+    M: tl.constexpr,
+    N: tl.constexpr,
+):
+    i_m = tl.program_id(0)
+    p_X = tl.make_block_ptr(X, (M, N), (N, 1), (i_m * BM, 0), (BM, BN), (1, 0))
+    b_X = tl.load(p_X, boundary_check=(0, 1)).to(tl.float32)
+    var = tl.sum(b_X * b_X, axis=1)
+    b_y = b_X / tl.sqrt(var + eps)[:, None]
+    p_Y = tl.make_block_ptr(Y, (M, N), (N, 1), (i_m * BM, 0), (BM, BN), (1, 0))
+    tl.store(p_Y, b_y.to(p_Y.dtype.element_ty), boundary_check=(0, 1))
+
+
+@triton.autotune(
+    configs=[
+        triton.Config({'BM': BM}, num_warps=num_warps)
+        for num_warps in [1, 2, 4, 8, 16]
+        for BM in [32, 64, 128]
+    ],
+    key=['N', 'autotune_aux']
+)
+@triton.jit
+def l2norm_bwd_kernel_small_N(
+    X,
+    DY,
+    DX,
+    eps,
+    BN: tl.constexpr,
+    BM: tl.constexpr,
+    M: tl.constexpr,
+    N: tl.constexpr,
+    autotune_aux: tl.constexpr,
+):
+    i_m = tl.program_id(0)
+    p_X = tl.make_block_ptr(X, (M, N), (N, 1), (i_m * BM, 0), (BM, BN), (1, 0))
+    p_DY = tl.make_block_ptr(DY, (M, N), (N, 1), (i_m * BM, 0), (BM, BN), (1, 0))
+    p_DX = tl.make_block_ptr(DX, (M, N), (N, 1), (i_m * BM, 0), (BM, BN), (1, 0))
+    b_X = tl.load(p_X, boundary_check=(0, 1)).to(tl.float32)
+    b_DY = tl.load(p_DY, boundary_check=(0, 1)).to(tl.float32)
+    var = tl.sum(b_X * b_X, axis=1)[:, None]
+    rstd = 1 / tl.sqrt(var + eps)
+    dx = b_DY * rstd - tl.sum(b_DY * b_X, axis=1)[:, None] / (var+eps) * rstd * b_X
+    tl.store(p_DX, dx.to(p_DX.dtype.element_ty), boundary_check=(0, 1))
 
 
 def l2norm_fwd(
@@ -85,7 +139,7 @@ def l2norm_fwd(
     output_dtype: Optional[torch.dtype] = None
 ):
     x_shape_og = x.shape
-    x = x.reshape(-1, x.shape[-1])
+    x = x.view(-1, x.shape[-1])
     # allocate output
     if output_dtype is None:
         y = torch.empty_like(x)
@@ -99,16 +153,30 @@ def l2norm_fwd(
     MAX_FUSED_SIZE = 65536 // x.element_size()
     BLOCK_N = min(MAX_FUSED_SIZE, triton.next_power_of_2(N))
     if N > BLOCK_N:
-        raise RuntimeError("This layer norm doesn't support feature dim >= 64KB.")
-    # heuristics for number of warps
-    l2norm_fwd_kernel[(M,)](
-        x,
-        y,
-        N,
-        eps,
-        BLOCK_N,
-    )
-    return y.reshape(x_shape_og)
+        raise RuntimeError("This layer doesn't support feature dim >= 64KB.")
+
+    if N <= 512:
+        autotune_aux = triton.cdiv(M, 2048)
+        def grid(meta): return (triton.cdiv(M, meta['BM']), )
+        l2norm_fwd_kernel_small_N[grid](
+            x,
+            y,
+            eps,
+            BN=BLOCK_N,
+            M=M,
+            N=N,
+            autotune_aux=autotune_aux
+        )
+    else:
+        l2norm_fwd_kernel[(M,)](
+            x,
+            y,
+            N,
+            eps,
+            BLOCK_N,
+        )
+
+    return y.view(x_shape_og)
 
 
 def l2norm_bwd(
@@ -117,8 +185,8 @@ def l2norm_bwd(
     eps: float = 1e-5
 ):
     x_shape_og = x.shape
-    x = x.reshape(-1, dy.shape[-1])
-    dy = dy.reshape(-1, dy.shape[-1])
+    x = x.view(-1, dy.shape[-1])
+    dy = dy.view(-1, dy.shape[-1])
     if dy.stride(-1) != 1:
         dy = dy.contiguous()
     assert dy.shape == x.shape
@@ -133,15 +201,31 @@ def l2norm_bwd(
     if N > BLOCK_N:
         raise RuntimeError("This layer norm doesn't support feature dim >= 64KB.")
     # heuristics for number of warps
-    l2norm_bwd_kernel[(M,)](
-        x,
-        dy,
-        dx,
-        N,
-        eps,
-        BLOCK_N,
-    )
-    return dx.reshape(x_shape_og)
+
+    if N <= 512:
+        autotune_aux = triton.cdiv(M, 2048)
+        def grid(meta): return (triton.cdiv(M, meta['BM']), )
+        l2norm_bwd_kernel_small_N[grid](
+            X=x,
+            DY=dy,
+            DX=dx,
+            eps=eps,
+            BN=BLOCK_N,
+            M=M,
+            N=N,
+            autotune_aux=autotune_aux
+        )
+    else:
+        l2norm_bwd_kernel[(M,)](
+            x,
+            dy,
+            dx,
+            N,
+            eps,
+            BLOCK_N,
+        )
+
+    return dx.view(x_shape_og)
 
 
 class L2NormFunction(torch.autograd.Function):

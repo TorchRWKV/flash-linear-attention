@@ -45,8 +45,8 @@ def prepare_position_ids(cu_seqlens: torch.LongTensor) -> torch.LongTensor:
 
 
 @tensor_cache
-def prepare_sequence_ids(position_ids: torch.LongTensor) -> torch.LongTensor:
-    return position_ids.eq(0).cumsum(0) - 1
+def prepare_sequence_ids(cu_seqlens: torch.LongTensor) -> torch.LongTensor:
+    return prepare_position_ids(cu_seqlens).eq(0).cumsum(0) - 1
 
 
 @tensor_cache

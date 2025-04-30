@@ -2,10 +2,10 @@ import torch
 import torch.nn as nn
 import triton
 
-from fla.modules.token_shift import fused_token_shift
+from fla.modules.token_shift import token_shift
 
 
-def token_shift(x):
+def token_shift_ref(x):
     shifted = nn.functional.pad(x, (0, 0, 1, -1))
     delta = shifted - x
     return delta
@@ -43,15 +43,15 @@ def benchmark(T, provider):
     quantiles = [0.5, 0.2, 0.8]
     results = 0, 0, 0
     if provider.startswith('naive_token_shift'):
-        results = triton.testing.do_bench(lambda: token_shift(x), quantiles=quantiles)
+        results = triton.testing.do_bench(lambda: token_shift_ref(x), quantiles=quantiles)
     if provider.startswith('fused_token_shift'):
-        results = triton.testing.do_bench(lambda: fused_token_shift(x), quantiles=quantiles)
+        results = triton.testing.do_bench(lambda: token_shift(x), quantiles=quantiles)
     if provider.startswith('naive_token_shift_bwd'):
         grad_output = torch.randn_like(x)
-        results = triton.testing.do_bench(lambda: token_shift(x).backward(grad_output), quantiles=quantiles)
+        results = triton.testing.do_bench(lambda: token_shift_ref(x).backward(grad_output), quantiles=quantiles)
     if provider.startswith('fused_token_shift_bwd'):
         grad_output = torch.randn_like(x)
-        results = triton.testing.do_bench(lambda: fused_token_shift(x).backward(grad_output), quantiles=quantiles)
+        results = triton.testing.do_bench(lambda: token_shift(x).backward(grad_output), quantiles=quantiles)
     return results
 
 

@@ -21,7 +21,7 @@ from fla.models.rwkv6.configuration_rwkv6 import RWKV6Config
 from fla.models.utils import Cache
 from fla.modules import FusedCrossEntropyLoss, FusedLinearCrossEntropyLoss, LayerNorm
 from fla.modules.activations import ACT2FN
-from fla.modules.token_shift import fused_token_shift
+from fla.modules.token_shift import token_shift
 
 if TYPE_CHECKING:
     from transformers.processing_utils import Unpack
@@ -78,7 +78,7 @@ class RWKV6FeedForward(nn.Module):
             delta = shifted - x
         else:
             cu_seqlens = kwargs.get('cu_seqlens', None)
-            delta = fused_token_shift(x, cu_seqlens)
+            delta = token_shift(x, cu_seqlens)
         key = self.act_fn(self.key(x, delta))
         value = self.value(key)
         receptance = self.receptance(x, delta)

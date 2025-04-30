@@ -14,7 +14,7 @@ from einops import rearrange
 
 from fla.modules import GroupNorm
 from fla.modules.activations import ACT2FN
-from fla.modules.token_shift import fused_token_shift
+from fla.modules.token_shift import token_shift
 from fla.ops.rwkv6 import chunk_rwkv6, fused_recurrent_rwkv6
 
 if TYPE_CHECKING:
@@ -129,7 +129,7 @@ class RWKV6Attention(nn.Module):
             shifted = last_state['conv_state'].unsqueeze(1)
             delta = shifted - hidden_states
         elif last_state is None:
-            delta = fused_token_shift(hidden_states, cu_seqlens)
+            delta = token_shift(hidden_states, cu_seqlens)
         else:
             shifted = self.time_shift(hidden_states)
             shifted[:, 0] = last_state['conv_state']
@@ -314,7 +314,7 @@ class LerpLinear(nn.Module):
     def forward(self, x: torch.Tensor, delta: Optional[torch.Tensor] = None,
                 cu_seqlens: Optional[torch.Tensor] = None) -> torch.Tensor:
         if delta is None:
-            delta = fused_token_shift(x, cu_seqlens)
+            delta = token_shift(x, cu_seqlens)
         return self.linear(x + delta * self.mu)
 
 
@@ -349,5 +349,5 @@ class DDLerpLinear(nn.Module):
                 delta: Optional[torch.Tensor] = None,
                 cu_seqlens: Optional[torch.Tensor] = None) -> torch.Tensor:
         if delta is None:
-            delta = fused_token_shift(x, cu_seqlens)
+            delta = token_shift(x, cu_seqlens)
         return self.linear(x + delta * mu)

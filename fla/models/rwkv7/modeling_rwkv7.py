@@ -21,7 +21,7 @@ from fla.models.rwkv7.configuration_rwkv7 import RWKV7Config
 from fla.models.utils import Cache
 from fla.modules import FusedCrossEntropyLoss, FusedLinearCrossEntropyLoss, LayerNorm
 from fla.modules.activations import ACT2FN
-from fla.modules.token_shift import fused_token_shift
+from fla.modules.token_shift import token_shift
 
 if TYPE_CHECKING:
     from transformers.processing_utils import Unpack
@@ -93,7 +93,7 @@ class RWKV7FeedForward(nn.Module):
             delta = shifted - x
         else:
             cu_seqlens = kwargs.get('cu_seqlens', None)
-            delta = fused_token_shift(x, cu_seqlens)
+            delta = token_shift(x, cu_seqlens)
         if state is not None:
             # no need to update the offset twice
             state.update(ffn_state=x[:, -1], layer_idx=self.layer_idx, offset=0)

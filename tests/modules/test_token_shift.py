@@ -1,8 +1,8 @@
 import pytest
 import torch
 
-from fla.modules.token_shift import fused_token_shift, token_shift_forward_pytorch
-from fla.utils import device
+from fla.modules.token_shift import token_shift, token_shift_ref
+from fla.utils import assert_close, device
 
 
 @pytest.mark.parametrize(
@@ -25,41 +25,22 @@ def test_token_shift(test_case, batch_size, seq_len, hidden_size, cu_seqlens, dt
     torch.manual_seed(42)
 
     # Create test tensors
-    x_pytorch = torch.randn(batch_size, seq_len, hidden_size, device=device).to(dtype).requires_grad_(True)
-    x_triton = x_pytorch.clone().detach().requires_grad_(True)
+    x = torch.randn(batch_size, seq_len, hidden_size, device=device).to(dtype).requires_grad_(True)
+    dy = torch.randn_like(x)
 
-    # Convert cu_seqlens to tensor if provided
     cu_seqlens_tensor = None
     if cu_seqlens is not None:
         cu_seqlens_tensor = torch.tensor(cu_seqlens, dtype=torch.int32, device=device)
 
     # Forward pass
-    out_pytorch = token_shift_forward_pytorch(x_pytorch, cu_seqlens_tensor)
-    out_triton = fused_token_shift(x_triton, cu_seqlens_tensor)
+    ref = token_shift_ref(x, cu_seqlens_tensor)
+    tri = token_shift(x, cu_seqlens_tensor)
 
-    # Check forward results - use higher tolerance for lower precision dtypes
-    rtol = 1e-5 if dtype == torch.float32 else 1e-3
-    atol = 1e-5 if dtype == torch.float32 else 1e-3
+    ref.backward(dy)
+    ref_dx, x.grad = x.grad, None
 
-    torch.testing.assert_close(
-        out_pytorch, out_triton,
-        rtol=rtol, atol=atol,
-        msg=f"Forward pass failed for {test_case}"
-    )
+    tri.backward(dy)
+    tri_dx, x.grad = x.grad, None
 
-    # Backward pass - create a dummy gradient
-    grad_output = torch.randn_like(out_pytorch)
-
-    # Compute gradients
-    out_pytorch.backward(grad_output)
-    out_triton.backward(grad_output)
-
-    # Check backward results
-    torch.testing.assert_close(
-        x_pytorch.grad, x_triton.grad,
-        rtol=rtol, atol=atol,
-        msg=f"Backward pass failed for {test_case}"
-    )
-
-    # Print result for debugging
-    print(f"Test case '{test_case}' PASSED")
+    assert_close(' x', ref, tri, 1e-3)
+    assert_close('dx', ref_dx, tri_dx, 1e-3)

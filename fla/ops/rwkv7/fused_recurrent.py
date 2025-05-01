@@ -414,6 +414,8 @@ def fused_recurrent_rwkv7(
             cu_seqlens=cu_seqlens,
             head_first=head_first
         )
+    else:
+        raise ValueError("Either `w` or `log_w` must be provided.")
 
 
 def fused_mul_recurrent_rwkv7(
@@ -508,5 +510,3 @@ def fused_mul_recurrent_rwkv7(
     if head_first:
         o = rearrange(o, 'b t h ... -> b h t ...')
     return o, final_state
-    else:
-        raise ValueError("Either `w` or `log_w` must be provided.")

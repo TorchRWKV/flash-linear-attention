@@ -179,7 +179,7 @@ class GroupNormRef(nn.Module):
         for num_warps in [1, 2, 4, 8, 16, 32]
         for num_stages in [2, 3, 4]
     ],
-    key=['D', 'NB', 'HAS_RESIDUAL', 'STORE_RESIDUAL_OUT', 'IS_RMS_NORM', 'HAS_BIAS'],
+    key=['D', 'NB', 'HAS_RESIDUAL', 'STORE_RESIDUAL_OUT', 'IS_RMS_NORM'],
 )
 @triton.jit
 def layer_norm_fwd_kernel(
@@ -253,7 +253,7 @@ def layer_norm_fwd_kernel(
         for num_warps in [1, 2, 4, 8, 16, 32]
         for num_stages in [2, 3, 4]
     ],
-    key=['D', 'HAS_RESIDUAL', 'STORE_RESIDUAL_OUT', 'IS_RMS_NORM', 'HAS_BIAS'],
+    key=['D', 'HAS_RESIDUAL', 'STORE_RESIDUAL_OUT', 'IS_RMS_NORM'],
 )
 @triton.jit
 def layer_norm_fwd_kernel1(
@@ -326,7 +326,7 @@ def layer_norm_fwd_kernel1(
         for num_warps in [1, 2, 4, 8, 16, 32]
         for num_stages in [2, 3, 4]
     ],
-    key=['D', 'NB', 'HAS_DRESIDUAL', 'STORE_DRESIDUAL', 'IS_RMS_NORM', 'HAS_BIAS'],
+    key=['D', 'NB', 'HAS_DRESIDUAL', 'STORE_DRESIDUAL', 'IS_RMS_NORM'],
 )
 @triton.jit
 def layer_norm_bwd_kernel(
@@ -436,7 +436,7 @@ def layer_norm_bwd_kernel(
         for num_warps in [1, 2, 4, 8, 16, 32]
         for num_stages in [2, 3, 4]
     ],
-    key=['D', 'HAS_DRESIDUAL', 'STORE_DRESIDUAL', 'IS_RMS_NORM', 'HAS_BIAS'],
+    key=['D', 'HAS_DRESIDUAL', 'STORE_DRESIDUAL', 'IS_RMS_NORM'],
 )
 @triton.jit
 def layer_norm_bwd_kernel1(

@@ -57,7 +57,8 @@ This repo aims at providing a collection of efficient Triton-based implementatio
 ## News
 - **$\texttt{[2025-04]}$:** 🎉 Add DeltaProduct implementation to `fla` ([paper](https://arxiv.org/abs/2502.10297)).
 - **$\texttt{[2025-04]}$:** 🎉 Add FoX implementation to `fla` ([paper](https://arxiv.org/abs/2503.02130)).
-- **$\texttt{[2025-03]}$:** We have changed the default `initializer_range` to the magic 🐳 0.006, leading to great improvements across all models. (Caveat: This std init range may be less robust when using a larger learning rate compared to 0.02. It is recommended to tune both initializer_range and learning rate together during actual training.)
+- **$\texttt{[2025-03]}$:** ~~We have changed the default 
+`initializer_range` to the magic 🐳 0.006~~ The `initializer_range` was rolled back to the default value of 0.02. For actual training, we recommend trying both. 
 - **$\texttt{[2025-02]}$:** 🐳 Add NSA implementations to `fla`. See kernels [here](fla/ops/nsa).
 - **$\texttt{[2025-01]}$:** 🔥 We are migrating to `torchtitan`-based training framework. Check out the [flame](https://github.com/fla-org/flame) repo for more details.
 - **$\texttt{[2025-01]}$:** 🎉 Add RWKV7 implementations (both kernels and models) to `fla`.

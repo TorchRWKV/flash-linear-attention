@@ -121,15 +121,15 @@ def convert(
         if shape1 == [1, 1, config.hidden_size]:
             weight.squeeze_()
 
-        # fix: fusing x_[rwkvag] to x_x
-        if fla_name.endswith('attn.x_x'):
-            model_dict[fla_name].data['rwkvag'.find(name[-1])].copy_(weight)
-            if fla_name in model_names:
-                model_names.remove(fla_name)
+        if "attn.x_" in fla_name:
+            assert model_dict[fla_name].shape[2:] == weight.shape, \
+                f"Shape mismatch for {fla_name}: model_dict={model_dict[fla_name].shape}, weight={weight.shape}"
         else:
-            assert model_dict[fla_name].shape == weight.shape
-            model_dict[fla_name].data.copy_(weight)
-            model_names.remove(fla_name)
+            assert model_dict[fla_name].shape == weight.shape, \
+                f"Shape mismatch for {fla_name}: model_dict={model_dict[fla_name].shape}, weight={weight.shape}"
+
+        model_dict[fla_name].data.copy_(weight)
+        model_names.remove(fla_name)
 
     print("uninitialized parameters: ", model_names)
     for n in model_names:

@@ -284,7 +284,7 @@ class NativeRecurrentRWKV7Function(torch.autograd.Function):
 
 
 def native_recurrent_rwkv7(
-    q: torch.Tensor,
+    r: torch.Tensor,
     k: torch.Tensor,
     v: torch.Tensor,
     a: torch.Tensor,
@@ -333,7 +333,7 @@ def native_recurrent_rwkv7(
     assert log_w is None
     assert w is not None
     if scale == -1.0:
-        scale = q.shape[-1] ** -0.5
-    o, final_state = NativeRecurrentRWKV7Function.apply(q, k, v, w, a, b, scale, initial_state)
+        scale = r.shape[-1] ** -0.5
+    o, final_state = NativeRecurrentRWKV7Function.apply(r, k, v, w, a, b, scale, initial_state)
 
     return o, final_state

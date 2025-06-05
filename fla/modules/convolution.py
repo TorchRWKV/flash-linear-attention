@@ -522,6 +522,7 @@ class ShortConvolution(nn.Conv1d):
     def forward(
         self,
         x: torch.Tensor,
+        residual: Optional[torch.Tensor] = None,
         mask: Optional[torch.Tensor] = None,
         cache: Optional[torch.Tensor] = None,
         output_final_state: bool = False,
@@ -531,8 +532,9 @@ class ShortConvolution(nn.Conv1d):
         """
         Args:
             x (`torch.Tensor`):
-                Tensor of shape `[B, T, D]`.
-                If `seq_idx` is provided, `B` must be 1.
+                Tensor of shape `[B, T, D]`. `B` must be 1 if `seq_idx` is provided.
+            residual (`Optional[torch.Tensor]`):
+                Residual tensor of shape `[B, T, D]`. Default: `None`.
             mask (`Optional[torch.Tensor]`):
                 Attention mask dealing with padded positions.
             cache (`Optional[torch.Tensor]`):
@@ -558,7 +560,7 @@ class ShortConvolution(nn.Conv1d):
             cache = x.new_zeros(N, D, W)
         # during the decoding phase, we assume the batch is composed of sequences of length 1
         if cache is not None and B * T == N:
-            return self.step(x, cache, cu_seqlens)
+            return self.step(x, residual, cache, cu_seqlens)
 
         if cache is not None:
             if cu_seqlens is not None:
@@ -571,6 +573,7 @@ class ShortConvolution(nn.Conv1d):
                 x=x,
                 weight=rearrange(self.weight, "d 1 w -> d w"),
                 bias=self.bias,
+                residual=residual,
                 activation=self.activation,
                 cu_seqlens=cu_seqlens,
             )
@@ -587,7 +590,7 @@ class ShortConvolution(nn.Conv1d):
             seq_idx = kwargs.get('seq_idx', None)
             if cu_seqlens is not None and seq_idx is None:
                 seq_idx = prepare_sequence_ids(cu_seqlens).to(torch.int32).unsqueeze(0)
-            x = causal_conv1d_fn(
+            y = causal_conv1d_fn(
                 x=x,
                 weight=rearrange(self.weight, "d 1 w -> d w"),
                 bias=self.bias,
@@ -597,21 +600,25 @@ class ShortConvolution(nn.Conv1d):
         else:
             if cu_seqlens is not None:
                 raise ValueError("`cu_seqlens` is not supported for the naive Pytorch version")
-            x = self._conv_forward(x, self.weight, self.bias)[..., :x.shape[-1]]
+            y = self._conv_forward(x, self.weight, self.bias)[..., :x.shape[-1]]
             if self.activation is not None:
-                x = ACT2FN[self.activation](x)
-        return rearrange(x, "b d t -> b t d"), cache
+                y = ACT2FN[self.activation](x)
+        y = rearrange(y, 'b d t -> b t d')
+        if residual is not None:
+            y = y + residual
+        return y, cache
 
     def step(
         self,
         x: torch.Tensor,
+        residual: torch.Tensor,
         cache: torch.Tensor,
         cu_seqlens: Optional[torch.LongTensor] = None
     ):
         shape = x.shape
         x = x.squeeze(0) if cu_seqlens is not None else x.squeeze(1)
         if self.use_fast_conv1d:
-            x = causal_conv1d_update(
+            y = causal_conv1d_update(
                 x=x,
                 conv_state=cache,
                 weight=rearrange(self.weight, "d 1 w -> d w"),
@@ -623,12 +630,15 @@ class ShortConvolution(nn.Conv1d):
             # we follow the fast mode that updates the cache in-place
             cache.copy_(cache.roll(shifts=-1, dims=-1))
             cache[:, :, -1] = x
-            x = torch.sum(cache * rearrange(self.weight, "d 1 w -> d w"), dim=-1)
+            y = torch.sum(cache * rearrange(self.weight, "d 1 w -> d w"), dim=-1)
             if self.bias is not None:
-                x = x + self.bias
+                y = y + self.bias
             if self.activation is not None:
-                x = ACT2FN[self.activation](x).to(dtype=dtype)
-        return x.view(shape), cache
+                y = ACT2FN[self.activation](y).to(dtype=dtype)
+        y = y.view(shape)
+        if residual is not None:
+            y = y + residual
+        return y, cache
 
     @property
     def state_size(self) -> int:

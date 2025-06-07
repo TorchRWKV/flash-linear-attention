@@ -337,9 +337,7 @@ def fused_recurrent_rwkv7(
     initial_state: torch.Tensor = None,
     output_final_state: bool = True,
     cu_seqlens: Optional[torch.LongTensor] = None,
-    head_first: bool = False,
-
-) -> Tuple[torch.Tensor, torch.Tensor]:
+):
     """
     Args:
         r (torch.Tensor):
@@ -368,8 +366,6 @@ def fused_recurrent_rwkv7(
         cu_seqlens (torch.LongTensor):
             Cumulative sequence lengths of shape `[N+1]` used for variable-length training,
             consistent with the FlashAttention API.
-        head_first (bool):
-            whether to use head first. Recommended to be False to avoid extra transposes.
     """
     if w is not None:
         if cu_seqlens is not None:
@@ -424,7 +420,6 @@ def fused_mul_recurrent_rwkv7(
     output_final_state: bool = False,
     reverse: bool = False,
     cu_seqlens: Optional[torch.Tensor] = None,
-    head_first: bool = False,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     r"""
     This function computes the recurrence S_t = S_t @ (I + a_t b_t^T) + v_t k_t^T in a recurrent manner.
@@ -456,14 +451,7 @@ def fused_mul_recurrent_rwkv7(
         cu_seqlens (Optional[torch.Tensor]):
             Cumulative sequence lengths of shape `[N + 1]` used for variable-length training,
             consistent with the FlashAttention API.
-        head_first (Optional[bool]):
-            Whether the inputs are in the head-first format, which is not supported for variable-length inputs.
-            Default: `False`.
     """
-    assert head_first is False, DeprecationWarning(
-            "head_first is deprecated. "
-            "Please use head_first=False for now instead."
-        )
     if cu_seqlens is not None:
         if r.shape[0] != 1:
             raise ValueError(

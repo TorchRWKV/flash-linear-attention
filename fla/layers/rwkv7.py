@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import warnings
 from typing import TYPE_CHECKING, Optional, Tuple
 
 import torch
@@ -136,13 +135,6 @@ class RWKV7Attention(nn.Module):
             self.apply(self._initialize_weights)
         for name, module in self.named_modules():
             module._in_rwkv_module = True
-
-        warnings.warn(
-            "According to Bo, you are using a potentially buggy FLA implementation of RWKV. "
-            "If you plan to report any numbers based on this implementation, we strongly recommend "
-            "cross-checking with the official repo: https://github.com/BlinkDL/RWKV-LM. "
-            "Bo may disagree with results reported from this version."
-        )
 
     @torch.no_grad()
     @torch.compiler.disable

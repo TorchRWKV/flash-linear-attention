@@ -108,7 +108,7 @@ def chunk_mesa_net_h_kv_bwd_intra_kernel(
     b_dg_last *= exp(b_g_last)
     o_t = tl.arange(0, BT)
     b_m = tl.where(o_t[:, None] >= o_t[None, :], safe_exp(b_g[:, None] - b_g[None, :]), 0)
-    b_k = b_k * b_beta[:, None]
+    b_k = (b_k * b_beta[:, None]).to(b_k.dtype)
     b_s = tl.dot(b_q, tl.trans(b_k)) * b_m
 
     b_ds = tl.dot(b_do, tl.trans(b_v))
@@ -165,7 +165,6 @@ def chunk_mesa_net_h_kv_bwd_intra_fn(
     dv = torch.empty_like(v)
     dg = torch.empty_like(g)
     grid = (NT, B * H)
-
     chunk_mesa_net_h_kv_bwd_intra_kernel[grid](
         q_star=q_star,
         k=k,

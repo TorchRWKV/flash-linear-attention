@@ -122,6 +122,7 @@ class GatedDeltaProduct(nn.Module):
             self.q_conv1d = ShortConvolution(
                 hidden_size=self.key_dim,
                 kernel_size=conv_size,
+                bias=conv_bias,
                 activation="silu",
             )
             self.k_conv1ds = nn.ModuleList(
@@ -129,6 +130,7 @@ class GatedDeltaProduct(nn.Module):
                     ShortConvolution(
                         hidden_size=self.key_dim,
                         kernel_size=conv_size,
+                        bias=conv_bias,
                         activation="silu",
                     )
                     for _ in range(num_householder)
@@ -139,6 +141,7 @@ class GatedDeltaProduct(nn.Module):
                     ShortConvolution(
                         hidden_size=self.value_dim,
                         kernel_size=conv_size,
+                        bias=conv_bias,
                         activation="silu",
                     )
                     for _ in range(num_householder)

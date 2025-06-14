@@ -1,24 +1,26 @@
+# -*- coding: utf-8 -*-
+# Copyright (c) 2023-2025, Songlin Yang, Yu Zhang
+
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Dict, Optional, Tuple, Union
 import warnings
-
+from typing import TYPE_CHECKING, Dict, Optional, Tuple, Union
 
 import torch
 import torch.nn as nn
-import torch.utils.checkpoint
 import torch.nn.functional as F
+import torch.utils.checkpoint
 from einops import rearrange, repeat
 from transformers.utils import logging
 
-
 from fla.layers.utils import get_unpad_data, index_first_axis, pad_input, unpad_input
-from fla.modules import ShortConvolution, RMSNorm, RotaryEmbedding
+from fla.modules import RMSNorm, RotaryEmbedding, ShortConvolution
 from fla.modules.layernorm_gated import RMSNormGated
 from fla.ops.gla import chunk_gla, fused_chunk_gla, fused_recurrent_gla
 
 if TYPE_CHECKING:
     from transformers.processing_utils import Unpack
+
     from fla.models.utils import Cache
 
 try:
@@ -91,7 +93,12 @@ class RodimusAttention(nn.Module):
         self.down_proj = nn.Linear(self.d_inner, self.hidden_size, bias=False)
 
         if use_short_conv:
-            self.short_conv = ShortConvolution(self.d_inner, conv_size, bias=conv_bias, activation='silu')
+            self.short_conv = ShortConvolution(
+                hidden_size=self.d_inner,
+                kernel_size=conv_size,
+                bias=conv_bias,
+                activation='silu'
+            )
 
         self.residual_weight = nn.Parameter(torch.ones(
             (self.d_inner, ), dtype=torch.float32 if self.residual_in_fp32 else None), requires_grad=True)
@@ -218,7 +225,8 @@ class RodimusAttention(nn.Module):
             else:
                 rodimus_caches = (recurrent_state, conv_state if self.use_short_conv else None)
 
-        o = (o.transpose(1, 2).squeeze(1) + (shift_hidden_states.float() if self.residual_in_fp32 else shift_hidden_states) * self.residual_weight).to(o.dtype)
+        o = (o.transpose(1, 2).squeeze(1) + (shift_hidden_states.float()
+             if self.residual_in_fp32 else shift_hidden_states) * self.residual_weight).to(o.dtype)
 
         o = self.activation_norm(o, final_gate)
         o = self.down_proj(o)
@@ -339,7 +347,12 @@ class SlidingWindowSharedKeyAttention(nn.Module):
         k = repeat(k, "... h d -> ... (n h) d", n=self.num_heads)
         # Contains at least one padding token in the sequence
         if attention_mask is not None:
-            q, (k, v), indices_q, cu_seqlens, max_seq_lens = unpad_input(q, (k, v), attention_mask[:, -max(self.window_size, q_len):], q_len)
+            q, (k, v), indices_q, cu_seqlens, max_seq_lens = unpad_input(
+                q=q,
+                states=(k, v),
+                attention_mask=attention_mask[:, -max(self.window_size, q_len):],
+                q_len=q_len
+            )
             cu_seqlens_q, cu_seqlens_k = cu_seqlens
             max_seqlen_q, max_seqlen_k = max_seq_lens
             o = flash_attn_varlen_func(

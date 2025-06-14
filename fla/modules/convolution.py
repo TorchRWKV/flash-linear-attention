@@ -371,7 +371,7 @@ def causal_conv1d_update(
     *_, D = x.shape
     N = x.numel() // D
     W = weight.shape[1] if weight is not None else None
-    BD = 16
+    BD = 8
 
     y = torch.empty_like(x)
     # NOTE: autotuning is disabled as cache is updated in-place

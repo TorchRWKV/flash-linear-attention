@@ -56,9 +56,18 @@ class HGRNAttention(nn.Module):
 
         if use_short_conv:
             self.conv_size = conv_size
-            self.q_conv1d = ShortConvolution(self.input_dim, conv_size, activation=None)
-            self.f_conv1d = ShortConvolution(self.input_dim, conv_size, activation=None)
-            self.i_conv1d = ShortConvolution(self.input_dim, conv_size, activation=None)
+            self.f_conv1d = ShortConvolution(
+                hidden_size=self.input_dim,
+                kernel_size=conv_size,
+                bias=conv_bias,
+                activation=None,
+            )
+            self.i_conv1d = ShortConvolution(
+                hidden_size=self.input_dim,
+                kernel_size=conv_size,
+                bias=conv_bias,
+                activation=None,
+            )
 
         self.g_norm = FusedRMSNormGated(
             hidden_size=self.input_dim,

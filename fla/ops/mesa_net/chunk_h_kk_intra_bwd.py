@@ -107,7 +107,7 @@ def chunk_mesa_net_h_kk_bwd_intra_kernel(
     b_beta = tl.load(p_beta, boundary_check=(0,))
     p_k = tl.make_block_ptr(k, (T, K), (H*K, 1), (i_t * BT, 0), (BT, BK), (1, 0))
     b_v = tl.load(p_k, boundary_check=(0, 1))
-    b_k = b_v * b_beta[:, None]
+    b_k = (b_v * b_beta[:, None]).to(b_v.dtype)
     # calculation
 
     b_dg_last = tl.sum(b_h * b_dh)

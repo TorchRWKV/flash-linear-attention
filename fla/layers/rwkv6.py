@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import math
+import warnings
 from typing import TYPE_CHECKING, Optional, Tuple
 
 import torch
@@ -86,6 +87,13 @@ class RWKV6Attention(nn.Module):
             _init_weights = True
         if _init_weights:
             self.apply(self._initialize_weights)
+
+        warnings.warn(
+            "According to Bo, you are using a potentially buggy FLA implementation of RWKV. "
+            "If you plan to report any numbers based on this implementation, we strongly recommend "
+            "cross-checking with the official repo: https://github.com/BlinkDL/RWKV-LM. "
+            "Bo may disagree with results reported from this version."
+        )
 
     def _initialize_weights(self, module: nn.Module):
         if getattr(module, "_is_hf_initialized", False):

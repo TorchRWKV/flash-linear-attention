@@ -135,16 +135,19 @@ class DeltaNet(nn.Module):
             self.q_conv1d = ShortConvolution(
                 hidden_size=self.key_dim,
                 kernel_size=conv_size,
+                bias=conv_bias,
                 activation='silu' if qk_activation == 'silu' else None
             )
             self.k_conv1d = ShortConvolution(
                 hidden_size=self.key_dim,
                 kernel_size=conv_size,
+                bias=conv_bias,
                 activation='silu' if qk_activation == 'silu' else None
             )
             self.v_conv1d = ShortConvolution(
                 hidden_size=self.value_dim,
                 kernel_size=conv_size,
+                bias=conv_bias,
                 activation='silu'
             )
         else:

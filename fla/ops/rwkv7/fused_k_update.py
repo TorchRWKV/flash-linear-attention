@@ -138,7 +138,7 @@ class KUpdateFunction(torch.autograd.Function):
             k.numel(), k.shape[2]
         )
 
-        dka = dka = dka.sum(dim=(0, 1), keepdim=ctx.keep_dim)
+        dka = dka.sum(dim=(0, 1), keepdim=ctx.keep_dim)
 
         return dk, da, dka
 

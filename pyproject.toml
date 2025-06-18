@@ -1,0 +1,42 @@
+[project]
+name = "rwkv-fla"
+dynamic = ["version"]
+description = "Fast Triton-based implementations for RWKV"
+readme = "README.md"
+authors = [
+    { name = "Zhiyuan Li", email = "uniartisan2017@gmail.com"},
+    { name = "Songlin Yang", email = "yangsl66@mit.edu" },
+    { name = "Yu Zhang", email = "yzhang.cs@outlook.com" },
+]
+license = { file = "LICENSE" }
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+requires-python = ">=3.10"
+dependencies = [
+    "transformers>=4.45.0",
+    "datasets>=3.3.0",
+    "einops",
+    "ninja",
+]
+
+[project.optional-dependencies]
+conv1d = ["causal-conv1d>=1.4.0"]
+dev = ["pytest"]
+
+[project.urls]
+Homepage = "https://github.com/fla-org/flash-linear-attention"
+
+[build-system]
+requires = ["setuptools>=45", "wheel"]
+
+[tool.isort]
+line_length = 127
+multi_line_output = 3
+
+[tool.pytest.ini_options]
+log_cli = true
+log_cli_level = "INFO"

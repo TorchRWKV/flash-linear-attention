@@ -226,8 +226,8 @@ setup(
     ],
     python_requires='>=3.10',
     install_requires=[
-        'transformers',
-        'datasets',
+        "transformers>=4.45.0",
+        "datasets>=3.3.0",
         'einops',
         'ninja'
     ],

@@ -5,11 +5,11 @@ import torch
 import triton
 import triton.language as tl
 
+from fla.ops.mesa_net.chunk_h_kv_intra_bwd_separate import chunk_mesa_net_h_kv_bwd_intra_separate_fn
 from fla.ops.utils import prepare_chunk_indices
 from fla.ops.utils.op import exp, safe_exp
 from fla.utils import check_shared_mem, is_nvidia_hopper
 
-BKV_LIST = [64, 128] if check_shared_mem() else [32, 64]
 NUM_WARPS = [2, 4] if is_nvidia_hopper else [2, 4, 8]
 
 
@@ -153,6 +153,20 @@ def chunk_mesa_net_h_kv_bwd_intra_fn(
     cu_seqlens,
     chunk_size=64
 ):
+    # share memory is not large enough for a single fused kernel
+    if not check_shared_mem('ampere'):
+        return chunk_mesa_net_h_kv_bwd_intra_separate_fn(
+            q_star=q_star,
+            k=k,
+            v=v,
+            beta=beta,
+            h_kv=h_kv,
+            dh_kv=dh_kv,
+            g=g,
+            do=do,
+            cu_seqlens=cu_seqlens,
+            chunk_size=chunk_size
+        )
     B, T, H, K, V = *k.shape, v.shape[-1]
     BT = chunk_size
     chunk_indices = prepare_chunk_indices(cu_seqlens, BT) if cu_seqlens is not None else None
@@ -160,7 +174,7 @@ def chunk_mesa_net_h_kv_bwd_intra_fn(
 
     BK = triton.next_power_of_2(K)
     BV = triton.next_power_of_2(V)
-    dq = torch.empty_like(q_star)
+    dq = torch.empty_like(q_star, dtype=torch.float32)
     dk = torch.empty_like(k)
     dv = torch.empty_like(v)
     dg = torch.empty_like(g)

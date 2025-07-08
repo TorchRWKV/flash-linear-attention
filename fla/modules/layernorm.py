@@ -21,10 +21,15 @@ import triton
 import triton.language as tl
 from einops import rearrange
 from torch.distributed import DeviceMesh
-from torch.distributed.tensor import DTensor, Replicate, Shard, distribute_module
+from torch.distributed.tensor import Replicate, Shard, distribute_module
 from torch.distributed.tensor.parallel import ParallelStyle
 
 from fla.utils import get_multiprocessor_count, input_guard
+
+try:
+    from torch.distributed.tensor import DTensor
+except (ImportError, AttributeError):
+    DTensor = None
 
 
 def layer_norm_ref(
@@ -227,7 +232,7 @@ def layer_norm_fwd_kernel(
     else:
         b_xbar = tl.where(m_d[None, :], b_x, 0.0)
         b_var = tl.sum(b_xbar * b_xbar, axis=1) / D
-    b_rstd = 1 / tl.sqrt(b_var + eps)
+    b_rstd = 1 / (tl.sqrt(b_var + eps))
 
     p_rstd = tl.make_block_ptr(rstd, (T,), (1,), (i_t * BT,), (BT,), (0,))
     tl.store(p_rstd, b_rstd.to(p_rstd.dtype.element_ty), boundary_check=(0,))
@@ -298,7 +303,7 @@ def layer_norm_fwd_kernel1(
     else:
         b_xbar = tl.where(m_d, b_x, 0.0)
         b_var = tl.sum(b_xbar * b_xbar, axis=0) / D
-    b_rstd = 1 / tl.sqrt(b_var + eps)
+    b_rstd = 1 / (tl.sqrt(b_var + eps))
     tl.store(rstd + i_t, b_rstd)
 
     if HAS_WEIGHT:

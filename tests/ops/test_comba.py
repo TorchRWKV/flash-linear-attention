@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 
 import os
+from typing import List
 
 import pytest
 import torch
@@ -9,22 +10,7 @@ from einops import rearrange
 
 from fla.ops.comba import chunk_comba, fused_recurrent_comba
 from fla.ops.comba.utils import chunk_comba_cumsum_scalar_fwd
-from fla.utils import COMPILER_MODE, assert_close, device, is_intel_alchemist
-
-if COMPILER_MODE:
-    test_b_list = [1]
-    test_t_list = [4096]
-    test_t_varlen_list = test_t_list
-    test_d_list = [64, 128, 256]
-    test_gate_list = [1.0]
-else:
-    test_b_list = [2]
-    test_t_list = [1, 15, 63, 300]
-    test_t_varlen_list = [63, 286, 300, 512]
-    test_d_list = [64, 32, 100, 256]
-    test_gate_list = [1, 0.1, 10]
-test_h_list = [2]
-test_hv_list = [4]
+from fla.utils import assert_close, device, is_intel_alchemist
 
 
 def cumsum_comba_local_fwd_reference(s, reverse=False, chunk_size=128):
@@ -40,16 +26,24 @@ def cumsum_comba_local_fwd_reference(s, reverse=False, chunk_size=128):
     return o_0, o_1
 
 
-@pytest.mark.parametrize("B", [32])
-@pytest.mark.parametrize("T", [256, 1024, 2048])
-@pytest.mark.parametrize("H", [4])
-@pytest.mark.parametrize("dtype", [torch.float, torch.float16])
-@pytest.mark.parametrize("chunk_size", [32, 64])
-@pytest.mark.skipif(
-    os.getenv("SKIP_TEST_CHUNK_VARLEN") == "0",
-    reason="Skipping test because TEST_CHUNK_VARLEN is enabled"
+@pytest.mark.parametrize(
+    ('B', 'T', 'H', 'chunk_size', 'dtype'),
+    [
+        pytest.param(*test, id='B{}-T{}-H{}-chunk_size{}-{}'.format(*test))
+        for test in [
+            (32, 200, 4, 64, torch.float),
+            (32, 1000, 4, 64, torch.float),
+            (32, 2048, 8, 128, torch.float),
+        ]
+    ]
 )
-def test_cumsum_local_scalar_fwd(B, T, H, dtype, chunk_size):
+def test_cumsum_local_scalar_fwd(
+    B: int,
+    T: int,
+    H: int,
+    chunk_size: int,
+    dtype: torch.dtype,
+):
     s = torch.randn((B, T, H), dtype=dtype, device=device).requires_grad_()
     ref_0, ref_1 = cumsum_comba_local_fwd_reference(s, chunk_size=chunk_size)
     tri_0, tri_1 = chunk_comba_cumsum_scalar_fwd(s, chunk_size=chunk_size)
@@ -136,16 +130,21 @@ def chunk_comba_ref(
     return o, S
 
 
-@pytest.mark.parametrize('B', test_b_list)
-@pytest.mark.parametrize('T', test_t_list)
-@pytest.mark.parametrize('H', test_h_list)
-@pytest.mark.parametrize('D', test_d_list)
-@pytest.mark.parametrize('gate_logit_normalizer', test_gate_list)
-@pytest.mark.parametrize('scale', [1])
-@pytest.mark.parametrize('dtype', [torch.float32, torch.float16])
-@pytest.mark.skipif(
-    os.getenv('SKIP_TEST_CHUNK_VARLEN') == '0',
-    reason='Skipping test because TEST_CHUNK_VARLEN is enabled'
+@pytest.mark.parametrize(
+    ('B', 'T', 'H', 'D', 'scale', 'gate_logit_normalizer', 'dtype'),
+    [
+        pytest.param(*test, id="B{}-T{}-H{}-D{}-scale{}-gate_logit_normalizer{}-{}".format(*test))
+        for test in [
+            (1, 63, 1, 64, 1, 1, torch.float),
+            (2, 1024, 4, 60, 1, 1, torch.float),
+            (2, 1024, 8, 128, 1, 0.1, torch.float),
+            (2, 1024, 8, 128, 0.1, 1, torch.float),
+            (2, 1024, 8, 128, 1, 10, torch.float),
+            (4, 2048, 8, 64, 0.1, 1, torch.float),
+            (2, 1024, 8, 128, 1, 0.1, torch.float16),
+            (2, 1024, 8, 128, 1, 10, torch.float16),
+        ]
+    ]
 )
 def test_fused_recurrent(
     B: int,
@@ -153,8 +152,8 @@ def test_fused_recurrent(
     H: int,
     D: int,
     scale: float,
-    dtype: torch.dtype,
     gate_logit_normalizer: float,
+    dtype: torch.dtype,
 ):
     torch.manual_seed(42)
     q = F.normalize(torch.randn(B, T, H, D, dtype=torch.float32), p=2, dim=-1).to(dtype)
@@ -188,39 +187,47 @@ def test_fused_recurrent(
         initial_state=h0.clone(),
         output_final_state=True,
     )
-    assert_close('  o', ref, tri, 0.002)
-    assert_close(' ht', ref_ht, tri_ht, 0.002)
+    assert_close('o', ref, tri, 0.002)
+    assert_close('ht', ref_ht, tri_ht, 0.002)
 
 
-@pytest.mark.parametrize('B', test_b_list)
-@pytest.mark.parametrize('T', test_t_list)
-@pytest.mark.parametrize('H', test_h_list)
-@pytest.mark.parametrize('D', test_d_list)
-@pytest.mark.parametrize('gate_logit_normalizer', test_gate_list)
-@pytest.mark.parametrize('scale', [1, 0.1])
-@pytest.mark.parametrize('mask_p', [0, 0.5])
-@pytest.mark.parametrize('dtype', [torch.float16])
-@pytest.mark.skipif(
-    os.getenv('SKIP_TEST_CHUNK_VARLEN') == '0',
-    reason='Skipping test because TEST_CHUNK_VARLEN is enabled'
+@pytest.mark.parametrize(
+    ('B', 'T', 'H', 'D', 'scale', 'gate_logit_normalizer', 'mask_p', 'use_qk_l2norm_in_kernel', 'dtype'),
+    [
+        pytest.param(
+            *test,
+            id="B{}-T{}-H{}-D{}-scale{}-gate_logit_normalizer{}-mask_p{}-use_qk_l2norm_in_kernel{}-{}".format(*test)
+        )
+        for test in [
+            (1, 63, 1, 64, 1, 1, 0, False, torch.float16),
+            (2, 1000, 3, 60, 1, 1, 0, False, torch.float16),
+            (2, 1024, 3, 64, 0.1, 1, 0.5, False, torch.float16),
+            (2, 1024, 4, 100, 1, 0.1, 0, False, torch.float16),
+            (2, 1024, 4, 128, 0.1, 1, 0, True, torch.float16),
+            (2, 1024, 4, 128, 0.1, 1, 0.5, False, torch.float16),
+            (2, 1024, 4, 128, 0.1, 10, 0, False, torch.float16),
+            (4, 2048, 8, 64, 0.1, 1, 0, True, torch.float16)
+        ]
+    ]
 )
 def test_chunk(
     B: int,
     T: int,
     H: int,
     D: int,
-    dtype: torch.dtype,
     scale: float,
     gate_logit_normalizer: float,
     mask_p: float,
+    use_qk_l2norm_in_kernel: bool,
+    dtype: torch.dtype,
 ):
     if is_intel_alchemist and D > 128:
         pytest.skip(reason='chunk_gated_delta_rule is not supported on alchemist for D>128')
 
     q = torch.randn(B, T, H, D, dtype=dtype)
-    k = F.normalize(torch.randn(B, T, H, D, dtype=torch.float32), p=2, dim=-1).to(dtype)
+    k = torch.randn(B, T, H, D, dtype=dtype)
+    p = torch.randn(B, T, H, D, dtype=dtype)
     v = torch.randn(B, T, H, D, dtype=dtype)
-    p = F.normalize(torch.randn(B, T, H, D, dtype=torch.float32), p=2, dim=-1).to(dtype)
     beta = torch.rand(B, T, H, dtype=dtype).sigmoid()
     g = F.logsigmoid(torch.rand(B, T, H, dtype=torch.float32))
     g = g / gate_logit_normalizer
@@ -229,15 +236,16 @@ def test_chunk(
     q, k, v, p, beta, g, h0 = map(lambda x: x.cuda().requires_grad_(True), (q, k, v, p, beta, g, h0))
 
     tri, tri_ht = chunk_comba(
-        q=q.clone(),
-        k=k.clone(),
+        q=F.normalize(q.clone(), p=2, dim=-1) if not use_qk_l2norm_in_kernel else q.clone(),
+        k=F.normalize(k.clone(), p=2, dim=-1) if not use_qk_l2norm_in_kernel else k.clone(),
+        p=F.normalize(p.clone(), p=2, dim=-1) if not use_qk_l2norm_in_kernel else p.clone(),
         v=v.clone(),
-        p=p.clone(),
         g=g.clone(),
         beta=beta.clone(),
         scale=scale,
-        output_final_state=True,
         initial_state=h0.clone(),
+        output_final_state=True,
+        use_qk_l2norm_in_kernel=use_qk_l2norm_in_kernel,
     )
     do = torch.randn_like(v)
     dht = torch.randn_like(h0)
@@ -246,15 +254,15 @@ def test_chunk(
     q.grad = k.grad = v.grad = p.grad = beta.grad = g.grad = h0.grad = None
 
     ref, ref_ht = chunk_comba_ref(
-        q=q.clone(),
-        k=k.clone(),
+        q=F.normalize(q.clone(), p=2, dim=-1),
+        k=F.normalize(k.clone(), p=2, dim=-1),
+        p=F.normalize(p.clone(), p=2, dim=-1),
         v=v.clone(),
-        p=p.clone(),
         g=g.clone(),
         beta=beta.clone(),
         scale=scale,
-        output_final_state=True,
         initial_state=h0.clone(),
+        output_final_state=True,
     )
 
     ((ref * do).sum() + (ref_ht * dht).sum()).backward()
@@ -266,42 +274,42 @@ def test_chunk(
     assert_close(" dk", ref_dk, tri_dk, 0.008)
     assert_close(" dv", ref_dv, tri_dv, 0.005)
     assert_close(" dp", ref_dp, tri_dp, 0.008)
-    if gate_logit_normalizer >= 1 and ref_dg.norm() > 0.01:
-        assert_close(" dg", ref_dg, tri_dg, 0.02)
+    assert_close(" dg", ref_dg, tri_dg, 0.02)
     assert_close(" db", ref_dbeta, tri_dbeta, 0.005)
     assert_close("dh0", ref_dh0, tri_dh0, 0.008)
 
 
-@pytest.mark.parametrize('N', test_b_list)
-@pytest.mark.parametrize('T', test_t_varlen_list)
-@pytest.mark.parametrize('H', test_h_list)
-@pytest.mark.parametrize('D', test_d_list)
-@pytest.mark.parametrize('scale', [1, 0.1])
-@pytest.mark.parametrize('mask_p', [0, 0.5])
-@pytest.mark.parametrize('dtype', [torch.float16])
+@pytest.mark.parametrize(
+    ('H', 'D', 'mask_p', 'cu_seqlens', 'dtype'),
+    [
+        pytest.param(*test, id="H{}-D{}-mask_p{}-cu_seqlens{}-{}".format(*test))
+        for test in [
+            (4, 64, 0, [0, 15], torch.float16),
+            (4, 64, 0, [0, 256, 500, 1000], torch.float16),
+            (4, 64, 0.5, [0, 256, 500, 1000], torch.float16),
+            (4, 100, 0, [0, 15, 100, 300, 1200, 2000], torch.float16),
+        ]
+    ]
+)
 @pytest.mark.skipif(
     os.getenv('SKIP_TEST_CHUNK_VARLEN') == '1',
     reason='Skipping test_chunk_varlen because SKIP_TEST_CHUNK_VARLEN is set'
 )
 def test_chunk_varlen(
-    N: int,
-    T: int,
     H: int,
     D: int,
-    scale: float,
     mask_p: float,
+    cu_seqlens: List[int],
     dtype: torch.dtype,
 ):
     if is_intel_alchemist and D > 128:
         pytest.skip(reason='chunk_gated_delta_rule is not supported on alchemist for D>128')
     torch.manual_seed(42)
     os.environ['TRITON_F32_DEFAULT'] = 'ieee'
-    # randomly split the sequence into N segments
-    cu_seqlens = torch.cat([
-        torch.tensor([0], dtype=torch.long),
-        torch.arange(16, T)[torch.randperm(T - 16)[:N-1]],
-        torch.tensor([T], dtype=torch.long)
-    ], 0).to(device).sort()[0]
+
+    N = len(cu_seqlens) - 1
+    T = cu_seqlens[-1]
+    cu_seqlens = torch.tensor(cu_seqlens, dtype=torch.int32, device=device)
 
     q = torch.randn((1, T, H, D), dtype=dtype)
     k = F.normalize(torch.randn(1, T, H, D, dtype=torch.float32), p=2, dim=-1).to(dtype)
@@ -323,7 +331,6 @@ def test_chunk_varlen(
         p=p.clone(),
         beta=beta.clone(),
         g=g.clone(),
-        scale=scale,
         output_final_state=True,
         initial_state=h0.clone(),
         cu_seqlens=cu_seqlens,
@@ -342,7 +349,6 @@ def test_chunk_varlen(
             p=p[:, cu_seqlens[i]:cu_seqlens[i+1]],
             beta=beta[:, cu_seqlens[i]:cu_seqlens[i+1]],
             g=g[:, cu_seqlens[i]:cu_seqlens[i+1]],
-            scale=scale,
             initial_state=h0[i],
             output_final_state=True,
         )
@@ -354,11 +360,11 @@ def test_chunk_varlen(
     ((ref * do).sum() + (ref_ht * dht).sum()).backward(retain_graph=True)
     ref_dq, ref_dk, ref_dv, ref_dbeta, ref_dg, ref_dh0 = q.grad, k.grad, v.grad, beta.grad, g.grad, h0.grad
 
-    assert_close('  o', ref, tri, 0.005)
-    assert_close(' ht', ref_ht, tri_ht, 0.005)
-    assert_close(' dq', ref_dq, tri_dq, 0.007)
-    assert_close(' dk', ref_dk, tri_dk, 0.008)
-    assert_close(' dv', ref_dv, tri_dv, 0.007)
-    assert_close(' db', ref_dbeta, tri_dbeta, 0.015)
-    assert_close(' dg', ref_dg, tri_dg, 0.015)
+    assert_close('o', ref, tri, 0.005)
+    assert_close('ht', ref_ht, tri_ht, 0.005)
+    assert_close('dq', ref_dq, tri_dq, 0.007)
+    assert_close('dk', ref_dk, tri_dk, 0.008)
+    assert_close('dv', ref_dv, tri_dv, 0.007)
+    assert_close('db', ref_dbeta, tri_dbeta, 0.015)
+    assert_close('dg', ref_dg, tri_dg, 0.015)
     assert_close('dh0', ref_dh0, tri_dh0, 0.007)

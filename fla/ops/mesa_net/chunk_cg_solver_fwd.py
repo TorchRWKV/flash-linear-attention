@@ -9,7 +9,7 @@ import triton
 import triton.language as tl
 
 from fla.ops.utils import prepare_chunk_indices
-from fla.ops.utils.op import safe_exp
+from fla.ops.utils.op import exp
 
 
 @triton.jit()
@@ -68,6 +68,9 @@ def chunk_fwd_mesa_cg_dim64_kernel(
         i_tg = i_b * NT + i_t
         bos, eos = i_b * T, i_b * T + T
 
+    o_t = i_t * BT + tl.arange(0, BT)
+    m_t = o_t < T
+
     # offset calculation
     q += (bos * H + i_h) * K
     q_final += (bos * H + i_h) * K
@@ -97,8 +100,8 @@ def chunk_fwd_mesa_cg_dim64_kernel(
 
     b_lamb = tl.load(p_lamb, boundary_check=(0,)).to(tl.float32)
 
-    b_m = tl.where(tl.arange(0, BT)[:, None] >= tl.arange(0, BT)[None, :],
-                   safe_exp(b_g[:, None] - b_g[None, :]) * b_beta[None, :], 0)
+    b_m = exp(b_g[:, None] - b_g[None, :]) * b_beta[None, :]
+    b_m = tl.where((o_t[:, None] >= o_t[None, :]) & (m_t[:, None] & m_t[None, :]), b_m, 0)
     b_g_exp_q = tl.exp(b_g)[:, None]
 
     b_x = tl.zeros([BT, BK], dtype=tl.float32)
@@ -106,9 +109,8 @@ def chunk_fwd_mesa_cg_dim64_kernel(
     b_r = tl.zeros([BT, BK], dtype=tl.float32)
 
     b_x += b_q * 0.
-
-    b_r = b_q - chunk_update_once(b_x, b_k, b_k, b_m, b_g_exp_q, b_h, b_lamb)
-    b_p = b_r
+    b_r += b_q
+    b_p += b_r
     b_delta_old = tl.sum(b_r*b_r, axis=1)
     for i in range(max_CG_iteration):
         b_o = chunk_update_once(b_p, b_k, b_k, b_m, b_g_exp_q, b_h, b_lamb)

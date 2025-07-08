@@ -14,23 +14,14 @@ from torch.nn import functional as F
 
 from fla.layers.utils import get_unpad_data, index_first_axis, pad_input
 from fla.modules import FusedRMSNormGated, RMSNorm, ShortConvolution
-from fla.ops.delta_rule import chunk_delta_rule, fused_recurrent_delta_rule
-from fla.ops.gated_delta_rule import chunk_gated_delta_rule, fused_recurrent_gated_delta_rule
+from fla.ops.delta_rule import fused_recurrent_delta_rule
+from fla.ops.gated_delta_product import chunk_gated_delta_product
+from fla.ops.gated_delta_rule import fused_recurrent_gated_delta_rule
 
 if TYPE_CHECKING:
     from transformers.processing_utils import Unpack
 
     from fla.models.utils import Cache
-
-
-@torch.compile
-def elu_p1(x):
-    return (F.elu(x, 1., False) + 1.).to(x)
-
-
-@torch.compile
-def sum_norm(x):
-    return (x / x.sum(-1, keepdim=True)).to(x)
 
 
 class GatedDeltaProduct(nn.Module):
@@ -98,7 +89,7 @@ class GatedDeltaProduct(nn.Module):
                 f"expand_v={expand_v} does not produce an integer value when multiplied by head_dim={head_dim}. "
                 f"Resulting head_v_dim would be {head_dim * expand_v}, which is invalid for FusedRMSNormGated."
             )
-        assert mode in ['chunk', 'fused_recurrent'], f"Not suppoerted mode `{mode}`."
+        assert mode in ['chunk', 'fused_recurrent'], f"Not supported mode `{mode}`."
 
         self.q_proj = nn.Linear(hidden_size, self.key_dim, bias=False)
         self.k_proj = nn.Linear(hidden_size, self.key_dim * num_householder, bias=False)
@@ -238,43 +229,36 @@ class GatedDeltaProduct(nn.Module):
             beta = beta * 2.
 
         beta = rearrange(beta, '... l (n h) -> ... (l n) h', n=self.num_householder)
-
         if self.use_forget_gate:
             g = -self.A_log.float().exp() * F.softplus(self.a_proj(hidden_states).float() + self.dt_bias)
-            g_new = torch.zeros(g.shape[0], g.shape[1], self.num_householder, g.shape[2], device=g.device, dtype=torch.float32)
-            g_new[:, :, 0] = g
-            g = rearrange(g_new, '... l n h -> ... (l n) h')
-
-        q_new = q.new_zeros(q.shape[0], q.shape[1], self.num_householder, q.shape[2], q.shape[3])
-        q_new[:, :, -1] = q
-        q = rearrange(q_new, '... l n h d-> ... (l n) h d')
+        else:
+            g = None
 
         recurrent_state = last_state['recurrent_state'] if last_state is not None else None
         if mode == 'chunk':
-            if self.use_forget_gate:
-                o, recurrent_state = chunk_gated_delta_rule(
-                    q=q,
-                    k=k,
-                    v=v,
-                    g=g,
-                    beta=beta,
-                    initial_state=recurrent_state,
-                    output_final_state=use_cache,
-                    cu_seqlens=cu_seqlens * self.num_householder if cu_seqlens is not None else None,
-                    use_qk_l2norm_in_kernel=True
-                )
-            else:
-                o, recurrent_state = chunk_delta_rule(
-                    q=q,
-                    k=k,
-                    v=v,
-                    beta=beta,
-                    initial_state=recurrent_state,
-                    output_final_state=use_cache,
-                    cu_seqlens=cu_seqlens * self.num_householder if cu_seqlens is not None else None,
-                    use_qk_l2norm_in_kernel=True
-                )
+            o, recurrent_state = chunk_gated_delta_product(
+                q=q,
+                k=k,
+                v=v,
+                g=g,
+                beta=beta,
+                initial_state=recurrent_state,
+                output_final_state=use_cache,
+                cu_seqlens=cu_seqlens,
+                num_householder=self.num_householder,
+                use_qk_l2norm_in_kernel=True
+            )
+
         elif mode == 'fused_recurrent':
+            if self.use_forget_gate:
+                g_new = torch.zeros(g.shape[0], g.shape[1], self.num_householder,
+                                    g.shape[2], device=g.device, dtype=torch.float32)
+                g_new[:, :, 0] = g
+                g = rearrange(g_new, '... l n h -> ... (l n) h')
+
+            q_new = q.new_zeros(q.shape[0], q.shape[1], self.num_householder, q.shape[2], q.shape[3])
+            q_new[:, :, -1] = q
+            q = rearrange(q_new, '... l n h d-> ... (l n) h d')
             if self.use_forget_gate:
                 o, recurrent_state = fused_recurrent_gated_delta_rule(
                     q=q,
@@ -298,8 +282,7 @@ class GatedDeltaProduct(nn.Module):
                     cu_seqlens=cu_seqlens * self.num_householder if cu_seqlens is not None else None,
                     use_qk_l2norm_in_kernel=True
                 )
-        else:
-            raise NotImplementedError(f"Not supported mode `{mode}`.")
+            o = rearrange(o, '... (l n) h d -> ... l n h d', n=self.num_householder)[..., -1, :, :].contiguous()
 
         if past_key_values is not None:
             past_key_values.update(
@@ -308,8 +291,6 @@ class GatedDeltaProduct(nn.Module):
                 layer_idx=self.layer_idx,
                 offset=q_len
             )
-
-        o = rearrange(o, '... (l n) h d -> ... l n h d', n=self.num_householder)[..., -1, :, :].contiguous()
 
         if self.use_gate:
             g = rearrange(self.g_proj(hidden_states), '... (h d) -> ... h d', d=self.head_v_dim)

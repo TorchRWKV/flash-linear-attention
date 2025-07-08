@@ -229,7 +229,7 @@ setup(
         "transformers>=4.45.0",
         "datasets>=3.3.0",
         'einops',
-        'ninja'
+        'pytest'
     ],
     dependency_links=['https://download.pytorch.org/whl/nightly/'],
     extras_require={

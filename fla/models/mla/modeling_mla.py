@@ -8,69 +8,51 @@ from typing import TYPE_CHECKING, Dict, List, Optional, Tuple, Union
 
 import torch
 import torch.nn as nn
-import torch.utils.checkpoint
 from transformers.generation import GenerationMixin
 from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast
 from transformers.modeling_utils import PreTrainedModel
 from transformers.utils import logging
 from transformers.utils.deprecation import deprecate_kwarg
 
-from fla.layers.attn import Attention
-from fla.layers.comba import Comba
-from fla.models.comba.configuration_comba import CombaConfig
+from fla.layers.mla import MultiheadLatentAttention
+from fla.models.mla.configuration_mla import MLAConfig
 from fla.models.utils import Cache
 from fla.modules import FusedCrossEntropyLoss, FusedLinearCrossEntropyLoss
-from fla.modules import GatedMLP as CombaMLP
+from fla.modules import GatedMLP as MLAMLP
 from fla.modules import RMSNorm
 from fla.modules.l2warp import l2_warp
-
-try:
-    from torch.distributed.tensor import DTensor
-except (ImportError, AttributeError):
-    DTensor = None
 
 if TYPE_CHECKING:
     from transformers.processing_utils import Unpack
 
-
 logger = logging.get_logger(__name__)
 
 
-class CombaBlock(nn.Module):
-    def __init__(self, config: CombaConfig, layer_idx: int):
+class MLABlock(nn.Module):
+    def __init__(self, config: MLAConfig, layer_idx: int):
         super().__init__()
 
         self.config = config
         self.layer_idx = layer_idx
 
         self.attn_norm = (RMSNorm if config.fuse_norm else nn.RMSNorm)(config.hidden_size, eps=config.norm_eps)
-        if config.attn is not None and layer_idx in config.attn['layers']:
-            self.attn = Attention(
-                hidden_size=config.hidden_size,
-                num_heads=config.attn['num_heads'],
-                num_kv_heads=config.attn['num_kv_heads'],
-                qkv_bias=config.attn['qkv_bias'],
-                window_size=config.attn['window_size'],
-                rope_theta=config.attn['rope_theta'],
-                max_position_embeddings=config.max_position_embeddings,
-                layer_idx=layer_idx
-            )
-        else:
-            self.attn = Comba(
-                mode=config.attn_mode,
-                hidden_size=config.hidden_size,
-                expand_v=config.expand_v,
-                head_dim=config.head_dim,
-                num_heads=config.num_heads,
-                num_v_heads=config.num_v_heads,
-                use_output_gate=config.use_output_gate,
-                use_short_conv=config.use_short_conv,
-                conv_size=config.conv_size,
-                norm_eps=config.norm_eps,
-                layer_idx=layer_idx
-            )
+        self.attn = MultiheadLatentAttention(
+            hidden_size=config.hidden_size,
+            num_heads=config.num_heads,
+            q_lora_rank=config.q_lora_rank,
+            qk_rope_head_dim=config.qk_rope_head_dim,
+            kv_lora_rank=config.kv_lora_rank,
+            v_head_dim=config.v_head_dim,
+            qk_nope_head_dim=config.qk_nope_head_dim,
+            qk_head_dim=config.qk_head_dim,
+            window_size=config.window_size,
+            rope_theta=config.rope_theta,
+            max_position_embeddings=config.max_position_embeddings,
+            rope_scaling=config.rope_scaling,
+            layer_idx=layer_idx
+        )
         self.mlp_norm = (RMSNorm if config.fuse_norm else nn.RMSNorm)(config.hidden_size, eps=config.norm_eps)
-        self.mlp = CombaMLP(
+        self.mlp = MLAMLP(
             hidden_size=config.hidden_size,
             hidden_ratio=config.hidden_ratio,
             intermediate_size=config.intermediate_size,
@@ -111,12 +93,12 @@ class CombaBlock(nn.Module):
         return outputs
 
 
-class CombaPreTrainedModel(PreTrainedModel):
+class MLAPreTrainedModel(PreTrainedModel):
 
-    config_class = CombaConfig
+    config_class = MLAConfig
     base_model_prefix = 'model'
     supports_gradient_checkpointing = True
-    _no_split_modules = ['CombaBlock']
+    _no_split_modules = ['MLABlock']
     _supports_cache_class = True
 
     def __init__(self, *inputs, **kwargs):
@@ -128,40 +110,7 @@ class CombaPreTrainedModel(PreTrainedModel):
         prenorm_residual_strategy: Optional[str] = None,
         num_residuals_per_layer: int = 2,
     ):
-        if isinstance(module, Comba):
-
-            # --- A_log ---
-            A = torch.empty(module.num_v_heads, dtype=torch.float32).uniform_(0, 16)
-            with torch.no_grad():
-                if not isinstance(module.A_log, DTensor):
-                    module.A_log.copy_(torch.log(A))
-                else:
-                    logger.warning_once("`A_log` is a DTensor, skipping initialization")
-            module.A_log._no_weight_decay = True
-
-            # --- dt_bias ---
-            # hard coded for now
-            dt_min = 0.001
-            dt_max = 0.1
-            dt_init_floor = 1e-4
-            dt = torch.exp(
-                torch.rand(module.num_v_heads) * (math.log(dt_max) - math.log(dt_min))
-                + math.log(dt_min)
-            )
-            dt = torch.clamp(dt, min=dt_init_floor)
-            # Inverse of softplus: https://github.com/pytorch/pytorch/issues/72759
-            inv_dt = dt + torch.log(-torch.expm1(-dt))
-            with torch.no_grad():
-                if not isinstance(module.dt_bias, DTensor):
-                    module.dt_bias.copy_(inv_dt)
-                else:
-                    logger.warning_once("`dt_bias` is a DTensor, skipping initialization")
-            # Just to be explicit. Without this we already don't put wd on dt_bias because of the check
-            # name.endswith("bias") in param_grouping.py
-            module.dt_bias._no_weight_decay = True
-            module.dt_bias._no_reinit = True
-
-        elif isinstance(module, (nn.Linear, nn.Conv1d)):
+        if isinstance(module, (nn.Linear, nn.Conv1d)):
             # Slightly different from the TF version which uses truncated_normal for initialization
             # cf https://github.com/pytorch/pytorch/pull/5617
             nn.init.normal_(module.weight, mean=0.0, std=self.config.initializer_range)
@@ -199,15 +148,15 @@ class CombaPreTrainedModel(PreTrainedModel):
                     raise ValueError(f"Invalid prenorm_residual_strategy: {prenorm_residual_strategy}")
 
 
-class CombaModel(CombaPreTrainedModel):
+class MLAModel(MLAPreTrainedModel):
 
-    def __init__(self, config: CombaConfig):
+    def __init__(self, config: MLAConfig):
         super().__init__(config)
         self.padding_idx = config.pad_token_id
         self.vocab_size = config.vocab_size
 
         self.embeddings = nn.Embedding(config.vocab_size, config.hidden_size, self.padding_idx)
-        self.layers = nn.ModuleList([CombaBlock(config, layer_idx) for layer_idx in range(config.num_hidden_layers)])
+        self.layers = nn.ModuleList([MLABlock(config, layer_idx) for layer_idx in range(config.num_hidden_layers)])
         self.norm = (RMSNorm if config.fuse_norm else nn.RMSNorm)(config.hidden_size, eps=config.norm_eps)
 
         self.gradient_checkpointing = False
@@ -233,7 +182,7 @@ class CombaModel(CombaPreTrainedModel):
         **kwargs: Unpack[Dict]
     ) -> Union[Tuple, BaseModelOutputWithPast]:
         if output_attentions:
-            warnings.warn("`CombaModel` does not `output_attentions` now, setting it to `False`.")
+            warnings.warn("`MLAModel` does not `output_attentions` now, setting it to `False`.")
             output_attentions = False
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
@@ -302,13 +251,13 @@ class CombaModel(CombaPreTrainedModel):
         )
 
 
-class CombaForCausalLM(CombaPreTrainedModel, GenerationMixin):
+class MLAForCausalLM(MLAPreTrainedModel, GenerationMixin):
 
     _tied_weights_keys = ["lm_head.weight"]
 
-    def __init__(self, config):
+    def __init__(self, config: MLAConfig):
         super().__init__(config)
-        self.model = CombaModel(config)
+        self.model = MLAModel(config)
         self.vocab_size = config.vocab_size
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
         self.criterion = None

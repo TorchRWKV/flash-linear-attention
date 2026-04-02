@@ -302,7 +302,7 @@ class RWKV7Attention(nn.Module):
             # launching the triton kernel for just one token will actually be slower
             o, recurrent_state = chunk_rwkv7(
                 r=r,
-                w=w,
+                log_w=w,
                 k=k,
                 v=v,
                 a=-kk,
@@ -311,13 +311,11 @@ class RWKV7Attention(nn.Module):
                 initial_state=recurrent_state,
                 output_final_state=use_cache,
                 cu_seqlens=cu_seqlens,
-                safe_gate=True,
-                chunk_size=64,
             )
         else:
             o, recurrent_state = fused_mul_recurrent_rwkv7(
                 r=r,
-                w=w,
+                log_w=w,
                 k=k,
                 v=v,
                 kk=kk,

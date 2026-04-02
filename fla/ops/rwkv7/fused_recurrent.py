@@ -179,23 +179,22 @@ def fused_recurrent_rwkv7_fwd(
 
 def fused_recurrent_rwkv7(
     r: torch.Tensor,
-    w: torch.Tensor,
     k: torch.Tensor,
     v: torch.Tensor,
     a: torch.Tensor,
     b: torch.Tensor,
-    scale: float | None = None,
+    w: torch.Tensor = None,
+    log_w: torch.Tensor = None,
+    scale: float = None,
     initial_state: torch.Tensor = None,
     output_final_state: bool = True,
-    cu_seqlens: torch.LongTensor | None = None,
+    cu_seqlens: torch.LongTensor = None,
     head_first: bool = False,
 ):
     """
     Args:
         r (torch.Tensor):
             r of shape `[B, T, H, K]`.
-        w (torch.Tensor):
-            log decay of shape `[B, T, H, K]`.
         k (torch.Tensor):
             k of shape `[B, T, H, K]`.
         v (torch.Tensor):
@@ -204,6 +203,12 @@ def fused_recurrent_rwkv7(
             a of shape `[B, T, H, K]`.
         b (torch.Tensor):
             b of shape `[B, T, H, K]`.
+        w (Optional[torch.Tensor]):
+            Raw decay of shape `[B, T, H, K]`. Will be converted to log_w via `-exp(w)`.
+            Either `w` or `log_w` must be provided.
+        log_w (Optional[torch.Tensor]):
+            Pre-computed log decay of shape `[B, T, H, K]`.
+            Either `w` or `log_w` must be provided.
         scale (float):
             scale of the attention.
             If not provided, it will default to `1 / sqrt(K)`. Default: `None`.
@@ -221,22 +226,28 @@ def fused_recurrent_rwkv7(
     if head_first:
         raise DeprecationWarning(
             "head_first is deprecated and will be removed in a future version. "
-            "Please use head_first=False for now instead.",
+            "Please use head_first=False for now instead."
         )
     elif r.shape[1] < r.shape[2]:
         warnings.warn(
             f"Input tensor shape suggests potential format mismatch: seq_len ({r.shape[1]}) < num_heads ({r.shape[2]}). "
             "This may indicate the inputs were passed in head-first format [B, H, T, ...] "
             "when head_first=False was specified. "
-            "Please verify your input tensor format matches the expected shape [B, T, H, ...].",
+            "Please verify your input tensor format matches the expected shape [B, T, H, ...]."
         )
+    if w is not None:
+        from fla.ops.rwkv7.chunk import cal_log_w
+        log_w = cal_log_w(w)
+    else:
+        assert log_w is not None, "Either w or log_w must be provided!"
+
     return fused_recurrent_dplr_delta_rule(
         q=r,
         k=k,
         v=v,
         a=a,
         b=b,
-        gk=w,
+        gk=log_w,
         scale=scale,
         initial_state=initial_state,
         output_final_state=output_final_state,
@@ -246,16 +257,17 @@ def fused_recurrent_rwkv7(
 
 def fused_mul_recurrent_rwkv7(
     r: torch.Tensor,
-    w: torch.Tensor,
     k: torch.Tensor,
     v: torch.Tensor,
     kk: torch.Tensor,
     a: torch.Tensor,
-    scale: float | None = 1.0,
-    initial_state: torch.Tensor | None = None,
+    w: torch.Tensor = None,
+    log_w: torch.Tensor = None,
+    scale: float = 1.0,
+    initial_state: torch.Tensor = None,
     output_final_state: bool = False,
     reverse: bool = False,
-    cu_seqlens: torch.Tensor | None = None,
+    cu_seqlens: torch.Tensor = None,
     head_first: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     r"""
@@ -264,8 +276,6 @@ def fused_mul_recurrent_rwkv7(
     Args:
         r (torch.Tensor):
             queries of shape `[B, T, H, K]`.
-        w (torch.Tensor):
-            keys of shape `[B, T, H, K]`.
         k (torch.Tensor):
             values of shape `[B, T, H, V]`.
         v (torch.Tensor):
@@ -274,6 +284,12 @@ def fused_mul_recurrent_rwkv7(
             b of shape `[B, T, H, K]`.
         a (torch.Tensor):
             gk of shape `[B, T, H, K]`. decay term in log space!
+        w (Optional[torch.Tensor]):
+            Raw decay of shape `[B, T, H, K]`. Will be converted to log_w via `-exp(w)`.
+            Either `w` or `log_w` must be provided.
+        log_w (Optional[torch.Tensor]):
+            Pre-computed log decay of shape `[B, T, H, K]`.
+            Either `w` or `log_w` must be provided.
         scale (Optional[float]):
             Scale factor for the RetNet attention scores.
             If not provided, it will default to `1 / sqrt(K)`. Default: 1.
@@ -295,31 +311,37 @@ def fused_mul_recurrent_rwkv7(
     if head_first:
         raise DeprecationWarning(
             "head_first is deprecated and will be removed in a future version. "
-            "Please use head_first=False for now instead.",
+            "Please use head_first=False for now instead."
         )
     elif r.shape[1] < r.shape[2]:
         warnings.warn(
             f"Input tensor shape suggests potential format mismatch: seq_len ({r.shape[1]}) < num_heads ({r.shape[2]}). "
             "This may indicate the inputs were passed in head-first format [B, H, T, ...] "
             "when head_first=False was specified. "
-            "Please verify your input tensor format matches the expected shape [B, T, H, ...].",
+            "Please verify your input tensor format matches the expected shape [B, T, H, ...]."
         )
+    if w is not None:
+        from fla.ops.rwkv7.chunk import cal_log_w
+        log_w = cal_log_w(w)
+    else:
+        assert log_w is not None, "Either w or log_w must be provided!"
+
     if cu_seqlens is not None:
         if r.shape[0] != 1:
             raise ValueError(
                 f"The batch size is expected to be 1 rather than {r.shape[0]} when using `cu_seqlens`."
-                f"Please flatten variable-length inputs before processing.",
+                f"Please flatten variable-length inputs before processing."
             )
         if initial_state is not None and initial_state.shape[0] != len(cu_seqlens) - 1:
             raise ValueError(
                 f"The number of initial states is expected to be equal to the number of input sequences, "
-                f"i.e., {len(cu_seqlens) - 1} rather than {initial_state.shape[0]}.",
+                f"i.e., {len(cu_seqlens) - 1} rather than {initial_state.shape[0]}."
             )
     if scale is None:
         scale = r.shape[-1] ** -0.5
     o, final_state = fused_recurrent_rwkv7_fwd(
         r,
-        w,
+        log_w,
         k,
         v,
         kk,

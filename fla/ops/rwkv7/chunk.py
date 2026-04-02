@@ -1,8 +1,6 @@
-# -*- coding: utf-8 -*-
 # Copyright (c) 2023-2025, Songlin Yang, Yu Zhang
 
 import warnings
-from typing import Optional
 
 import torch
 
@@ -20,12 +18,12 @@ def chunk_rwkv7(
     v: torch.Tensor,
     a: torch.Tensor,
     b: torch.Tensor,
-    w: Optional[torch.Tensor] = None,
-    log_w: Optional[torch.Tensor] = None,
+    w: torch.Tensor | None = None,
+    log_w: torch.Tensor | None = None,
     scale: float = 1.0,
-    initial_state: Optional[torch.Tensor] = None,
+    initial_state: torch.Tensor | None = None,
     output_final_state: bool = True,
-    cu_seqlens: Optional[torch.LongTensor] = None,
+    cu_seqlens: torch.LongTensor | None = None,
     head_first: bool = False
 ):
     """

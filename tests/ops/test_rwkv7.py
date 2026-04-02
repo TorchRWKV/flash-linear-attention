@@ -7,6 +7,7 @@ import torch
 import torch.nn.functional as F
 
 from fla.ops.generalized_delta_rule.dplr.fused_recurrent import fused_recurrent_dplr_delta_rule
+from fla.ops.rwkv7 import chunk_rwkv7
 from fla.ops.rwkv7.channel_mixing import channel_mixing_rwkv7, channel_mixing_rwkv7_torch
 from fla.ops.rwkv7.fused_addcmul import fused_addcmul_rwkv7, torch_addcmul_rwkv7
 from fla.ops.rwkv7.fused_k_update import fused_k_rwkv7, k_update_ref
@@ -119,7 +120,7 @@ def test_fused_mul_recurrent_fwd(
 
     tri, tri_ht = fused_mul_recurrent_rwkv7(
         r=r.clone(),
-        w=w.clone(),
+        log_w=w.clone(),
         k=k.clone(),
         v=v.clone(),
         kk=kk.clone(),
@@ -299,3 +300,87 @@ def test_gate_output_correction(
     assert_close("drk", r_k_ref.grad, r_k_cus.grad, 0.002)
     assert_close("dv", v_ref.grad, v_cus.grad, 0.002)
     assert_close("dg", g_ref.grad, g_cus.grad, 0.002)
+
+
+@pytest.mark.parametrize("B", [2])
+@pytest.mark.parametrize("T", [64, 1024])
+@pytest.mark.parametrize("H", [2])
+@pytest.mark.parametrize("D", [64])
+@pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+@pytest.mark.parametrize("use_log_w", [True, False])
+@pytest.mark.skipif(
+    os.getenv("SKIP_TEST_CHUNK_VARLEN") == "0",
+    reason="Skipping test because TEST_CHUNK_VARLEN is enabled",
+)
+def test_chunk_rwkv7(
+    B: int,
+    T: int,
+    H: int,
+    D: int,
+    dtype: torch.dtype,
+    use_log_w: bool,
+):
+    """Test chunk_rwkv7 with both w= and log_w= interfaces."""
+    torch.manual_seed(42)
+    r = torch.randn(B, T, H, D, device=device, dtype=dtype).requires_grad_(True)
+    k = torch.randn(B, T, H, D, device=device, dtype=dtype).requires_grad_(True)
+    v = torch.randn(B, T, H, D, device=device, dtype=dtype).requires_grad_(True)
+    # w_raw in [-8, -1] to keep decay in safe range
+    w_raw = torch.empty(B, T, H, D, device=device).uniform_(-8, -1).to(dtype=dtype)
+    log_w = (-torch.exp(w_raw.float())).to(dtype=dtype)
+
+    kk = F.normalize(torch.randn(B, T, H, D, device=device, dtype=dtype), dim=-1)
+    a_scale = torch.empty(B, T, H, D, device=device).uniform_(0, 0.1).to(dtype=dtype)
+    a = -kk
+    b = kk * a_scale
+    h0 = torch.randn(B, H, D, D, device=device, dtype=torch.float)
+
+    # Reference: use chunk_dplr_delta_rule directly with log_w
+    from fla.ops.generalized_delta_rule import chunk_dplr_delta_rule
+    ref, ref_ht = chunk_dplr_delta_rule(
+        q=r.clone().detach().requires_grad_(True),
+        k=k.clone().detach().requires_grad_(True),
+        v=v.clone().detach().requires_grad_(True),
+        a=a.clone(),
+        b=b.clone(),
+        gk=log_w.clone(),
+        scale=1.0,
+        initial_state=h0.clone(),
+        output_final_state=True,
+        safe_gate=True,
+        chunk_size=64,
+    )
+
+    # Test: use chunk_rwkv7 with w= or log_w=
+    if use_log_w:
+        tri, tri_ht = chunk_rwkv7(
+            r=r.clone().detach().requires_grad_(True),
+            k=k.clone().detach().requires_grad_(True),
+            v=v.clone().detach().requires_grad_(True),
+            a=a.clone(),
+            b=b.clone(),
+            log_w=log_w.clone(),
+            scale=1.0,
+            initial_state=h0.clone(),
+            output_final_state=True,
+            safe_gate=True,
+            chunk_size=64,
+        )
+    else:
+        tri, tri_ht = chunk_rwkv7(
+            r=r.clone().detach().requires_grad_(True),
+            k=k.clone().detach().requires_grad_(True),
+            v=v.clone().detach().requires_grad_(True),
+            a=a.clone(),
+            b=b.clone(),
+            w=w_raw.clone(),
+            scale=1.0,
+            initial_state=h0.clone(),
+            output_final_state=True,
+            safe_gate=True,
+            chunk_size=64,
+        )
+
+    ratio = 1e-5 if dtype == torch.float32 else 0.005
+    assert_close("chunk_rwkv7 o", ref, tri, ratio=ratio)
+    assert_close("chunk_rwkv7 ht", ref_ht, tri_ht, ratio=ratio)

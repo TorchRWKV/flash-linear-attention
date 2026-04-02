@@ -311,6 +311,8 @@ class RWKV7Attention(nn.Module):
                 initial_state=recurrent_state,
                 output_final_state=use_cache,
                 cu_seqlens=cu_seqlens,
+                safe_gate=True,
+                chunk_size=64,
             )
         else:
             o, recurrent_state = fused_mul_recurrent_rwkv7(

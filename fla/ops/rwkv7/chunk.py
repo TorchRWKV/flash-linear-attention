@@ -24,7 +24,9 @@ def chunk_rwkv7(
     initial_state: torch.Tensor | None = None,
     output_final_state: bool = True,
     cu_seqlens: torch.LongTensor | None = None,
-    head_first: bool = False
+    head_first: bool = False,
+    safe_gate: bool = False,
+    chunk_size: int | None = None,
 ):
     """
     Args:
@@ -58,6 +60,12 @@ def chunk_rwkv7(
         head_first (Optional[bool]):
             Whether the inputs are in the head-first format. Default: `False`.
             This argument has been deprecated.
+        safe_gate (bool):
+            Whether the kernel can assume the input gate values `g` are in a safe range.
+            When `True`, the kernel can use M=16 TensorCore acceleration.
+            The safe range is approximately [-5, 0). Default: `False`.
+        chunk_size (Optional[int]):
+            Chunk size for the chunked computation. Default: `None`, which means 16.
     """
     if head_first:
         raise DeprecationWarning(
@@ -87,5 +95,7 @@ def chunk_rwkv7(
         initial_state=initial_state,
         output_final_state=output_final_state,
         cu_seqlens=cu_seqlens,
-        head_first=head_first
+        head_first=head_first,
+        safe_gate=safe_gate,
+        chunk_size=chunk_size,
     )
